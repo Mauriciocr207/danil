@@ -96,9 +96,16 @@ for (const status of [501, 503]) test(`/v1/workspaces ${status} keeps sign out a
   fetcher.__jsdomApp = true; globalThis.fetch = fetcher;
   const app = await open(t, 'listo', `workspaces-${status}`, {}, undefined, {}, { web: true });
   const gate = () => app.w.document.querySelector('[data-web-gate]');
-  await until(() => gate()?.querySelector('[role="alert"]') && gate()?.querySelector('[data-web-organization="org_B"]'));
+  if (status === 501) {
+    await until(() => gate()?.querySelector('[role="alert"]') && gate()?.querySelector('[data-web-organization="org_B"]'));
+    assert.ok(gate().querySelector('[data-web-organization="org_A"][aria-pressed="true"]'));
+  } else {
+    // 503 es transitorio en el primer montaje: se espera sin error fatal y se reintenta solo.
+    await until(() => gate()?.querySelector('[data-web-preparing]'));
+    assert.equal(gate().querySelector('[role="alert"]'), null);
+    await until(() => calls.filter(path => path === '/v1/workspaces').length >= 2);
+  }
   assert.ok(gate().querySelector('[data-web-sign-out]'), 'sign out stays visible');
-  assert.ok(gate().querySelector('[data-web-organization="org_A"][aria-pressed="true"]'));
   assert.equal(app.w.document.querySelector('[data-tira]'), null);
   assert.deepEqual(app.failures, []);
 });
@@ -128,6 +135,67 @@ test('machines 404 shows the cloud as unavailable, retries by itself and never f
   assert.deepEqual(app.failures, []);
 });
 
+test('a 403 on the first mount prepares and retries by itself until the membership arrives', async t => {
+  const calls = [];
+  let meCalls = 0;
+  const fetcher = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.origin === 'http://localhost' && url.pathname.includes('/assets/')) return new Response('');
+    calls.push(`${init?.method ?? 'GET'} ${url.pathname}`);
+    if (['/v1/capabilities', '/v1/identity/organizations', '/v1/machines'].includes(url.pathname)) return new Response(null, { status: 404 });
+    if (url.pathname === '/v1/identity/me') {
+      meCalls++;
+      if (meCalls === 1) return new Response(JSON.stringify({ code: 'forbidden' }), { status: 403, headers: { 'content-type': 'application/problem+json' } });
+      return Response.json({ id: 'user_A', name: 'Operator', workspace: '11', organizations: [] });
+    }
+    if (url.pathname === '/v1/workspaces') return Response.json({ items: [{ id: '11', org: 'org_A', name: 'Alpha', role: 'owner' }], next_cursor: null });
+    throw new Error(`Unexpected request ${url.pathname}`);
+  };
+  fetcher.__jsdomApp = true;
+  globalThis.fetch = fetcher;
+  const app = await open(t, 'listo', 'first-mount-403', {}, undefined, {}, { web: true, beforeImport(w) {
+    w.WebSocket = class { constructor() { throw new Error('No relay is approved'); } };
+    globalThis.WebSocket = w.WebSocket;
+  } });
+  const gate = () => app.w.document.querySelector('[data-web-gate]');
+  await until(() => gate()?.querySelector('[data-web-preparing]'));
+  assert.equal(gate().querySelector('[role="alert"]'), null, 'no fatal access error on the first mount');
+  assert.ok(gate().querySelector('[data-web-sign-out]'), 'sign out stays visible while preparing');
+  await until(() => app.w.document.querySelector('[data-tira]'));
+  assert.ok(meCalls >= 2, 'identity was read again without the person asking');
+  assert.equal(gate(), null);
+  assert.ok(calls.includes('GET /v1/identity/me'));
+  assert.deepEqual(app.failures, []);
+});
+
+test('an empty workspace list on the first mount prepares and mounts when the workspace arrives', async t => {
+  let listed = 0;
+  const fetcher = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.origin === 'http://localhost' && url.pathname.includes('/assets/')) return new Response('');
+    if (['/v1/capabilities', '/v1/identity/organizations', '/v1/machines'].includes(url.pathname)) return new Response(null, { status: 404 });
+    if (url.pathname === '/v1/identity/me') return Response.json({ id: 'user_A', name: 'Operator', workspace: '11', organizations: [] });
+    if (url.pathname === '/v1/workspaces') {
+      listed++;
+      return Response.json({ items: listed === 1 ? [] : [{ id: '11', org: 'org_A', name: 'Alpha', role: 'owner' }], next_cursor: null });
+    }
+    throw new Error(`Unexpected request ${url.pathname}`);
+  };
+  fetcher.__jsdomApp = true;
+  globalThis.fetch = fetcher;
+  const app = await open(t, 'listo', 'first-mount-empty', {}, undefined, {}, { web: true, beforeImport(w) {
+    w.WebSocket = class { constructor() { throw new Error('No relay is approved'); } };
+    globalThis.WebSocket = w.WebSocket;
+  } });
+  const gate = () => app.w.document.querySelector('[data-web-gate]');
+  await until(() => gate()?.querySelector('[data-web-preparing]'));
+  assert.equal(gate().querySelector('[role="alert"]'), null, 'the empty list is not fatal');
+  await until(() => app.w.document.querySelector('[data-tira]'));
+  assert.ok(listed >= 2);
+  assert.equal(gate(), null);
+  assert.deepEqual(app.failures, []);
+});
+
 for (const status of [401, 403, 503]) test(`identity HTTP ${status} stays distinct before mounting a machine`, async t => {
   const calls = [];
   const fetcher = async (input, init) => {
@@ -141,12 +209,18 @@ for (const status of [401, 403, 503]) test(`identity HTTP ${status} stays distin
   };
   fetcher.__jsdomApp = true; globalThis.fetch = fetcher;
   const app = await open(t, 'listo', `window-denied-${status}`, {}, undefined, { 'danil.web.previous.11.tasks': 'private' }, { web: true });
-  const selector = status === 401 ? 'a[href*="/v1/identity/login"]' : '[role="alert"]';
+  const selector = status === 401 ? 'a[href*="/v1/identity/login"]' : '[data-web-preparing]';
   await until(() => app.w.document.querySelector(selector));
   assert.equal(app.w.document.querySelector('[data-tira]'), null);
-  assert.deepEqual(calls, ['/v1/capabilities', '/v1/identity/me']);
+  assert.deepEqual(calls.slice(0, 2), ['/v1/capabilities', '/v1/identity/me']);
   assert.equal(app.w.localStorage.getItem('danil.web.previous.11.tasks'), status === 401 ? null : 'private');
-  if (status !== 401) assert.equal(app.w.document.querySelector('a[href*="/login"]'), null);
+  if (status === 401) assert.deepEqual(calls, ['/v1/capabilities', '/v1/identity/me']);
+  else {
+    // 403/503 en el primer montaje no son fatales: se prepara y se reintenta solo.
+    assert.equal(app.w.document.querySelector('[role="alert"]'), null);
+    assert.equal(app.w.document.querySelector('a[href*="/login"]'), null);
+    await until(() => calls.filter(path => path === '/v1/identity/me').length >= 2);
+  }
   assert.deepEqual(app.failures, []);
 });
 

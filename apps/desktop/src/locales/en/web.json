@@ -232,6 +232,7 @@
   "web.platform.active": "Active",
   "web.platform.sign_out": "Sign out",
   "web.platform.denied": "You do not have access to this resource.",
+  "web.platform.preparing": "Getting your space ready…",
   "web.platform.unavailable": "The request could not be completed. Try again.",
   "web.alpha.ai_assistance": "AI assistance",
   "web.alpha.ai_off": "AI off",

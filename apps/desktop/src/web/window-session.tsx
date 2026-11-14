@@ -24,6 +24,9 @@ import './phrases';
 declare const __DANIL_WEB_RELAY_ORIGINS__: string[];
 const FIRST_RETRY_MS = 1000;
 const POLL_MAX_MS = 30_000;
+/** Membresía y workspace pueden tardar minutos en llegar al central tras crear la organización. */
+const FIRST_MOUNT_ATTEMPTS = 8;
+const FIRST_MOUNT_TRANSIENT = [403, 404, 503];
 
 export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
   return createRoot(dispose => {
@@ -40,6 +43,7 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
     const [busy, setBusy] = createSignal(false);
     const [uncertain, setUncertain] = createSignal(false);
     const [error, setError] = createSignal('');
+    const [preparing, setPreparing] = createSignal(false);
     const [signedOut, setSignedOut] = createSignal(false);
     // Hasta que identity contesta, la ventana muestra la pantalla de entrada original esperando.
     const [identified, setIdentified] = createSignal(false);
@@ -50,6 +54,7 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
     let stopped = false;
     let cache: ReturnType<typeof sessionStorageScope> | undefined;
     let mountedBefore = false;
+    let firstMountAttempts = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let wait = FIRST_RETRY_MS;
     let refreshing = false;
@@ -64,6 +69,7 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
         <ToastStack><UpdateNotice /></ToastStack>
         <h1 class="m-0 font-display text-lead font-bold">{t('common.brand_name')}</h1>
         <Show when={busy()}><p role="status">{t('web.auth.waiting')}</p></Show>
+        <Show when={preparing()}><p role="status" data-web-preparing="">{t('web.platform.preparing')}</p></Show>
         <Show when={error()}><p role="alert">{t(error())}</p><Button disabled={busy()} onClick={() => void load()}>{t('web.computers.retry')}</Button></Show>
         <Show when={!signedOut() && !busy()}>
           <Show when={orgNeeded() || noWorkspace() || error()}>
@@ -87,6 +93,7 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
       setSignedOut(true);
       setRows([]);
       setActive(null);
+      setPreparing(false);
       setError('');
       gate();
     }
@@ -119,9 +126,18 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
       const listed = await api.workspaces().catch(() => [] as PlatformWorkspace[]);
       if (stopped || signedOut()) return;
       setRows(listed);
+      setPreparing(false);
       setError('');
       setNoWorkspace(true);
       gate();
+    }
+    /** Primer montaje: la membresía o el workspace aún no llegó; se espera en vez de enseñar un 403 fatal. */
+    function prepare() {
+      firstMountAttempts += 1;
+      setPreparing(true);
+      setError('');
+      gate();
+      later();
     }
     function later(delay = wait) {
       clearTimeout(timer);
@@ -154,7 +170,7 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
         later();
       }
     }
-    async function run(action: () => Promise<void>) {
+    async function run(action: () => Promise<void>, firstMountRetry = false) {
       if (busy() || stopped || signedOut()) return;
       setBusy(true);
       setError('');
@@ -162,8 +178,11 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
       catch (cause) {
         if (cause instanceof PlatformSessionError && cause.status === 401) expired();
         else if (cause instanceof PlatformSessionError && cause.code === 'workspace_selection_required') await withoutWorkspace();
+        else if (firstMountRetry && !mountedBefore && cause instanceof PlatformSessionError
+          && FIRST_MOUNT_TRANSIENT.includes(cause.status) && firstMountAttempts < FIRST_MOUNT_ATTEMPTS) prepare();
         else if (!stopped && !signedOut() && organizations.report(cause)) gate();
         else if (!stopped && !signedOut()) {
+          setPreparing(false);
           setError(cause instanceof PlatformSessionError && cause.status === 403 ? 'web.platform.denied' : 'web.platform.unavailable'); gate();
           if (!(cause instanceof PlatformSessionError) || [404, 408, 429, 501, 503].includes(cause.status)) later();
         }
@@ -191,16 +210,21 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
         // Con sesión: el selector se lee una vez y, si la ruta aún no existe, se reintenta solo.
         readOrganizations();
         if (person.workspace === null) { await withoutWorkspace(); return; }
-        const workspaces = permits('workspaces') ? await api.workspaces() : [];
+        const listed = permits('workspaces');
+        const workspaces = listed ? await api.workspaces() : [];
         if (stopped || signedOut()) return;
         setRows(workspaces);
         setActive(selection.active());
         cache = sessionStorageScope(localStorage, person.id, person.workspace ?? 'unselected');
+        if (workspaces.length === 0 && listed && firstMountAttempts < FIRST_MOUNT_ATTEMPTS) { prepare(); return; }
+        setPreparing(false);
         if (workspaces.length === 0) { gate(); later(); return; }
         setShellCacheScope({ mine: () => false, prefer: null });
         disposeGate?.();
         disposeGate = undefined;
         mountedBefore = true;
+        firstMountAttempts = 0;
+        setPreparing(false);
         windowApp = mountWindow({ machines, permits, relayOrigin: __DANIL_WEB_RELAY_ORIGINS__[0],
           profile: webAccountProfile(transport), onUnauthorized: expired,
           onUnavailable: () => { setError('web.platform.unavailable'); gate(); later(); },
@@ -211,7 +235,7 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
           others: () => [], open: () => {}, add: () => {}, remove: async () => {}, signOut: () => void logout(),
         } });
         later(FIRST_RETRY_MS);
-      });
+      }, true);
     }
     const close = () => { stopped = true; clearTimeout(timer); lifetime.abort(); windowApp?.close(); disposeGate?.(); dispose(); };
     window.addEventListener('pagehide', close, { once: true });
