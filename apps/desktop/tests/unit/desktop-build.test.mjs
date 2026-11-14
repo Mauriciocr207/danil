@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { ESCAPE, missingWorkTools } from "../../scripts/desktop-build.mjs";
+import { bundleEnvironment, ESCAPE, missingWorkTools } from "../../scripts/desktop-build.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "../../..");
 
@@ -119,4 +119,36 @@ test("the overlay work-tools.py writes is the one the build accepts", () => {
   } finally {
     l.done();
   }
+});
+
+test("an AppImage build gets linuxdeploy's environment, or does not start without patchelf", () => {
+  const l = lab();
+  try {
+    const bin = join(l.dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "patchelf"), "");
+    const linux = { platform: "linux", cwd: root };
+    const { env } = bundleEnvironment(["--config", "x.json"], { ...linux, env: { PATH: bin } });
+    assert.deepEqual(env, {
+      NO_STRIP: "1",
+      PATCHELF: join(root, "scripts/work-tools-patchelf.py"),
+      TERMINUS_REAL_PATCHELF: join(bin, "patchelf"),
+      TERMINUS_WORK_TOOLS_ROOT: join(root, "src-tauri/target/release/bundle/appimage/Danil.AppDir/usr/share/Danil/work-tools"),
+    });
+    const moved = bundleEnvironment([], { ...linux, env: { PATH: bin, CARGO_TARGET_DIR: "/t" } }).env;
+    assert.equal(moved.TERMINUS_WORK_TOOLS_ROOT, "/t/release/bundle/appimage/Danil.AppDir/usr/share/Danil/work-tools");
+    assert.match(bundleEnvironment([], { ...linux, env: { PATH: join(l.dir, "none") } }).error, /patchelf/);
+    assert.deepEqual(bundleEnvironment([], { platform: "win32", env: {} }).env, {});
+    assert.deepEqual(bundleEnvironment(["--debug"], { ...linux, env: {} }).env, {});
+  } finally {
+    l.done();
+  }
+});
+
+test("every build in publish.yml goes through desktop:build", () => {
+  const workflow = readFileSync(join(root, "../../.github/workflows/publish.yml"), "utf8");
+  const lines = workflow.split("\n").filter((line) => !line.trim().startsWith("#"));
+  const direct = lines.filter((line) => /\btauri(?:\.js)?\s+build\b|tauri-action/.test(line));
+  assert.deepEqual(direct, []);
+  assert.equal(lines.filter((line) => /pnpm desktop:build\b/.test(line)).length, 3);
 });

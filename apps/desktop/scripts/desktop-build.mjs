@@ -3,7 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -83,13 +83,43 @@ export function missingWorkTools(args, { platform = process.platform, env = proc
   return null;
 }
 
-function tauri(args) {
+/** Un ejecutable del PATH, o `null`. */
+function which(name, env) {
+  for (const dir of (env.PATH ?? "").split(delimiter)) {
+    if (dir && existsSync(join(dir, name))) return join(dir, name);
+  }
+  return null;
+}
+
+/**
+ * El entorno de linuxdeploy para un AppImage con herramientas: sin él las desnuda o
+ * reescribe sus ELF y el árbol deja de coincidir con su inventario.
+ */
+export function bundleEnvironment(args, { platform = process.platform, env = process.env, cwd = ROOT } = {}) {
+  if (args.includes("--debug") || args.includes("-d") || args.includes("--no-bundle")) return { env: {} };
+  if (env[ESCAPE] === "1" || platformOf(args, platform) !== "linux") return { env: {} };
+  const real = env.TERMINUS_REAL_PATCHELF || which("patchelf", env);
+  if (!real) return { error: "falta patchelf en el PATH: linuxdeploy lo necesita y work-tools-patchelf.py protege las herramientas con él." };
+  const target = env.CARGO_TARGET_DIR ? resolve(cwd, env.CARGO_TARGET_DIR) : join(cwd, "src-tauri/target");
+  const triple = values(args, "--target", "-t").at(-1);
+  const release = triple ? join(target, triple, "release") : join(target, "release");
+  return {
+    env: {
+      NO_STRIP: env.NO_STRIP || "1",
+      PATCHELF: env.PATCHELF || join(cwd, "scripts/work-tools-patchelf.py"),
+      TERMINUS_REAL_PATCHELF: real,
+      TERMINUS_WORK_TOOLS_ROOT: env.TERMINUS_WORK_TOOLS_ROOT || join(release, "bundle/appimage/Danil.AppDir/usr/share/Danil/work-tools"),
+    },
+  };
+}
+
+function tauri(args, env) {
   const require = createRequire(join(ROOT, "package.json"));
   const manifest = require.resolve("@tauri-apps/cli/package.json");
   const { bin } = JSON.parse(readFileSync(manifest, "utf8"));
   const entry = join(dirname(manifest), typeof bin === "string" ? bin : bin.tauri);
   // El `.js` con este node: en Windows `tauri.cmd` pasaría el JSON de `--config` por cmd.exe.
-  return spawnSync(process.execPath, [entry, "build", ...args], { cwd: ROOT, stdio: "inherit" });
+  return spawnSync(process.execPath, [entry, "build", ...args], { cwd: ROOT, env, stdio: "inherit" });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -100,8 +130,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     console.error(`Para un build de desarrollo que no se publica: ${ESCAPE}=1 pnpm desktop:build …`);
     process.exit(1);
   }
+  const bundle = bundleEnvironment(args);
+  if (bundle.error) {
+    console.error(`desktop:build: ${bundle.error}`);
+    process.exit(1);
+  }
   if (process.env[ESCAPE] === "1") console.warn(`desktop:build: ${ESCAPE}=1; este paquete no lleva herramientas y no se publica.`);
-  const result = tauri(args);
+  const result = tauri(args, { ...process.env, ...bundle.env });
   if (result.error) throw result.error;
   process.exit(result.status ?? 1);
 }
