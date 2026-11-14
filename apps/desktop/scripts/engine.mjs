@@ -245,11 +245,10 @@ function rpc(name, args = {}) {
 
 /**
  * macOS resolves the default keychain from HOME. With the lab HOME there is none
- * ("A default keychain could not be found"): the vault never opens, and a personal
- * workspace cannot keep secrets or decide the Free Router consent. The lab gets its
- * own throwaway keychain under HOME, without a password and without auto-lock; the
- * person's keychain and search list are left alone (`security` runs with the lab HOME).
- * Not `login.keychain-db`: macOS refuses an empty password for a keychain with that name.
+ * ("A default keychain could not be found"): the vault never opens and a personal
+ * workspace cannot keep secrets or decide the Free Router consent. The lab gets a
+ * throwaway keychain, with no password and no auto-lock; the person's keychain and
+ * search list stay untouched. Not `login.keychain-db`: macOS refuses an empty password.
  */
 function labKeychain() {
   if (process.platform !== "darwin") return;
