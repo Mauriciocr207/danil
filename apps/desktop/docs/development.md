@@ -324,6 +324,15 @@ so macOS and the AppImage use `bundle.macOS.files` and
 library the tools link into the image. Windows trees have no symlinks
 and use `resources`.
 
+`pnpm desktop:build` (`scripts/desktop-build.mjs`) refuses a release bundle
+unless a `--config` puts `work-tools/<target>` with its `manifest.json` in the
+package: 0.3.2 for Windows and Linux shipped without them, and on a machine
+without git the setup asked for a repair it could not do. Prepare the overlay
+with `python3 scripts/work-tools-release.py prepare --directory <dir>` and pass
+`--config <dir>/tauri.work-tools.json`. `--debug`, `--no-bundle` and
+`DANIL_BUILD_WITHOUT_WORK_TOOLS=1` (a development package that is never
+published) skip the check.
+
 `work-tools-smoke.py` runs the tree in place with a `PATH` without node, npm,
 pnpm, bun, python or git and without `PYTHONPYCACHEPREFIX`, then checks the
 tree still matches its inventory. `work-tools-runtime-smoke.py` does the same

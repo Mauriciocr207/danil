@@ -771,7 +771,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm exec tauri build --config src-tauri/tauri.linux.conf.json --config "$WORK_TOOLS_CONFIG"
+        run: pnpm desktop:build --config src-tauri/tauri.linux.conf.json --config "$WORK_TOOLS_CONFIG"
 
       - name: Verificar los recursos después del empaquetado
         shell: bash
