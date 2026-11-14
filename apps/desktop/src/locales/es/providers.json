@@ -27,6 +27,8 @@
   "providers.error.no_default_branch": "No pude saber cuál es la rama principal. Revisa que el repositorio tenga una rama principal configurada.",
   "providers.error.no_git": "No encontré git en esta computadora.",
   "providers.error.no_git_bundled": "No encontré git en esta computadora y el que traigo tampoco se pudo preparar.",
+  "providers.error.git_timed_out": "Git no contestó a tiempo. Puede ser un antivirus revisándolo; vuelve a intentarlo en un momento.",
+  "providers.error.git_bundled_broken": "El git que trae Danil no arrancó. Repáralo en Configuración → Estado del entorno.",
   "providers.error.no_pending_login": "No hay ninguna conexión a medias con {name}. Vuelve a empezar.",
   "providers.error.not_connected": "Todavía no has conectado {name}. Conéctalo aquí arriba y vuelve a intentar.",
   "providers.error.token_lost": "Hay que volver a conectar {name}: esta computadora ya no puede abrir su credencial guardada.",
