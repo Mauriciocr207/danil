@@ -1,8 +1,7 @@
-Danil 0.3.2 incorpora el acceso por navegador y la conexión a las máquinas de tu organización.
+Danil 0.3.3 repara la 0.3.2: el instalador vuelve a traer las herramientas incluidas, empezando por git.
 
-- **Iniciar sesión.** Entra desde el navegador del sistema y continúa en Danil. El perfil Local sigue disponible sin sesión.
-- **Organizaciones y workspaces.** Elige tu organización y sus workspaces desde el selector. Para usar otro correo, cierra sesión y vuelve a entrar.
-- **Máquinas.** Consulta su estado, enciéndelas y conéctate. Danil muestra «Conectando…» mientras la lista o el canal están pendientes.
-- **Servicios en preparación.** Las rutas del borde que todavía no están disponibles se manejan de forma recuperable. Los reintentos conservan la identidad de las operaciones y respetan la espera del servidor.
-
-El Router IA gratis con el motor nuevo se incorporará en el siguiente candidato.
+- **Instalación completa otra vez.** La 0.3.2 de Windows y Linux salió sin git, Python ni navegador incluidos. Instalar la 0.3.3 encima repone las herramientas.
+- **Git que no contesta.** El motor espera quince segundos al git incluido. Si no responde, Danil dice si tardó o si no arrancó, y cómo repararlo.
+- **Una sola entrada Danil.** El selector reúne Danil Credits y el Router IA gratis en una entrada. Su panel muestra el saldo y la opción de usar cada uno.
+- **Máquinas.** El nombre de la máquina ya no parpadea como «Conectando…» al arrancar. Una máquina que no responde no oculta la lista de las demás.
+- **Tareas y borradores.** Una tarea delegada abre en su máquina. Los borradores se conservan cuando una lectura falla.
