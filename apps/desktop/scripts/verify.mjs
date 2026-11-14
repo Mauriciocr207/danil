@@ -85,6 +85,8 @@ const steps = [
   ["Local checks run at low priority and fail open", process.execPath, ["--test", join(root, "tests/unit/priority.test.mjs")], root],
   ["Types are checked with tsgo, and with tsc when tsgo does not start", process.execPath, ["--test", join(root, "tests/unit/typescript-bin.test.mjs")], root],
   ["Installing the hooks keeps a foreign core.hooksPath", process.execPath, ["--test", join(root, "tests/unit/install-hooks.test.mjs")], root],
+  ["A release package cannot be built without the bundled tools", process.execPath, ["--test", join(root, "tests/unit/desktop-build.test.mjs")], root],
+  ["A release artifact without its bundled tools is not published", process.execPath, ["--test", join(root, "tests/unit/desktop-release-verify.test.mjs")], root],
   ["All code is reviewable", process.execPath, [join(root, "scripts/guards/reviewable.mjs")], root],
   [
     "A guard without git says so and does not kill the chain",

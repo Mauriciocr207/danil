@@ -324,6 +324,13 @@ so macOS and the AppImage use `bundle.macOS.files` and
 library the tools link into the image. Windows trees have no symlinks
 and use `resources`.
 
+`pnpm desktop:build` (`scripts/desktop-build.mjs`) refuses a release bundle
+unless a `--config` puts `work-tools/<target>` with its `manifest.json` in the
+package: 0.3.2 for Windows and Linux shipped without them. `--debug`,
+`--no-bundle` and `DANIL_BUILD_WITHOUT_WORK_TOOLS=1` (a development package
+that is never published) skip the check; the artifact gate in
+[Releases](#releases) is what keeps such a package from being published.
+
 `work-tools-smoke.py` runs the tree in place with a `PATH` without node, npm,
 pnpm, bun, python or git and without `PYTHONPYCACHEPREFIX`, then checks the
 tree still matches its inventory. `work-tools-runtime-smoke.py` does the same
@@ -335,30 +342,40 @@ needs a network on a Windows 10 without WebView2).
 
 ## Releases
 
-Maintainers publish with a version tag:
+GitHub Actions no longer run: `publish.yml` does not build or publish
+anything. Desktop releases are built and checked by hand on the VMs, following
+[docs/release/desktop-manual.md](https://github.com/danil-labs/terminus-workspace/blob/main/docs/release/desktop-manual.md)
+in terminus-workspace. Every publication, pre-release or release, needs the
+person's explicit confirmation of the version and its type.
 
 1. Bump the version in `package.json`, `src-tauri/Cargo.toml` and
    `src-tauri/tauri.conf.json` (`pnpm version:bump`), and update
    `release-notes/en.md` and `release-notes/es.md`.
-2. Merge to `main`, tag `v<version>` and push the tag.
+2. Prepare the tools with `python3 scripts/work-tools-release.py prepare
+   --directory <dir>`; on macOS sign them with `python3
+   scripts/work-tools-macos.py --directory <dir>/work-tools`.
+3. Build with `pnpm desktop:build --config <dir>/tauri.work-tools.json …`
+   (on Linux also `--config src-tauri/tauri.linux.conf.json`).
+   `scripts/desktop-build.mjs` refuses a bundle without the tools and, on
+   Linux, sets the linuxdeploy environment (`NO_STRIP`, `PATCHELF`,
+   `TERMINUS_REAL_PATCHELF`, `TERMINUS_WORK_TOOLS_ROOT`) or stops without
+   `patchelf`.
+4. Run `node scripts/desktop-release-verify.mjs <artifact>` on the final
+   `*_x64-setup.exe` (needs 7-Zip), `*.AppImage`, `Danil.app` or `.dmg`
+   (needs `APPLE_TEAM_ID`), on that artifact's platform. It requires
+   `work-tools/<target>` with a schema 2 manifest (both architectures for
+   the universal app), then runs `work-tools-release.py verify` and
+   `work-tools-runtime-smoke.py --browser --clone` against the packaged
+   engine. Nothing is uploaded from an artifact that did not pass it. The
+   browser phase needs a host where Chrome's sandbox starts (on Ubuntu 23.10+,
+   unprivileged user namespaces allowed).
 
-[`publish.yml`](../../../.github/workflows/publish.yml) builds, signs and publishes.
-It refuses to publish while `seldon-runtime.lock` is not pinned for every
-platform or the engine is not bundled (`bundle.externalBin`): an installed copy
-updated to a window without its engine would not open. To test a change to the
-workflow without publishing:
-
-```sh
-gh workflow run publish.yml -R danil-labs/danil --ref <branch> -f dry_run=true
-```
-
-A dry run spends no eSigner signatures: Windows builds without
-`signCommand` and its installed files are checked for presence, not for
-Authenticode. eSigner itself is only exercised by a real release.
-
-`node tests/release/publish.test.mjs` (macOS or Linux, needs Ruby and jq)
-runs the packaging steps of the workflow with fixtures and temporary signing
-keys.
+The release still refuses to ship while `seldon-runtime.lock` is not pinned for
+every platform or the engine is not bundled (`bundle.externalBin`): an
+installed copy updated to a window without its engine would not open.
+`publish.yml` stays as the reference of the signing and packaging steps;
+`node tests/release/publish.test.mjs` (macOS or Linux, needs Ruby and jq) runs
+them with fixtures and temporary signing keys.
 
 The identity of the installed app — updater public key, bundle identifier
 `ai.danil.terminus` and product name — is duplicated in `publish.yml` on

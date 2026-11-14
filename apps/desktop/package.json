@@ -14,7 +14,7 @@
     "verify": "node scripts/verify.mjs",
     "lint": "biome lint src scripts",
     "tauri": "tauri",
-    "desktop:build": "tauri build",
+    "desktop:build": "node scripts/desktop-build.mjs",
     "window:build": "tauri build --debug --no-bundle",
     "engine:download": "node scripts/engine.mjs download",
     "engine:sidecar": "node scripts/engine.mjs sidecar",
