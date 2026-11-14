@@ -27,6 +27,8 @@
   "providers.error.no_default_branch": "I couldn't tell which the main branch is. Check that the repository has a main branch configured.",
   "providers.error.no_git": "I couldn't find git on this computer.",
   "providers.error.no_git_bundled": "I couldn't find git on this computer and the one I bring couldn't be set up either.",
+  "providers.error.git_timed_out": "Git didn't answer in time. An antivirus may be scanning it; try again in a moment.",
+  "providers.error.git_bundled_broken": "The git that comes with Danil didn't start. Repair it in Settings → Environment status.",
   "providers.error.no_pending_login": "There's no half-finished connection with {name}. Start over.",
   "providers.error.not_connected": "You haven't connected {name} yet. Connect it up here and try again.",
   "providers.error.token_lost": "{name} needs to be connected again: this computer can no longer open its saved credential.",
