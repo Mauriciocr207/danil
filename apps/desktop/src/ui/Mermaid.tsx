@@ -60,6 +60,7 @@ export function MermaidDiagram(props: { definition: string }) {
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: "strict",
+        suppressErrorRendering: true,
         theme: "base",
         fontFamily: "var(--font-sans)",
         themeVariables: colores(),
