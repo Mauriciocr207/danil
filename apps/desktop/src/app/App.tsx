@@ -5,10 +5,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import ArrowLeft from "lucide-solid/icons/arrow-left";
 import Columns2 from "lucide-solid/icons/columns-2";
 import FolderOpen from "lucide-solid/icons/folder-open";
-import FolderPlus from "lucide-solid/icons/folder-plus";
-import PanelLeftClose from "lucide-solid/icons/panel-left-close";
-import PanelLeftOpen from "lucide-solid/icons/panel-left-open";
-import Search from "lucide-solid/icons/search";
 import {
   batch,
   createEffect,
@@ -98,7 +94,6 @@ const AgentProfile = retryableLazy(() => import("../features/projects/AgentProfi
 // El alta solo se abre sin workspace o al agregar otro: no entra en la carga inicial.
 const Onboarding = lazy(() => import("../features/onboarding/Onboarding"));
 const TaskLocation = lazy(() => import("../features/chat/TaskLocation"));
-const CustomizeMenu = lazy(() => import("../features/shell/SidebarFilter").then((m) => ({ default: m.CustomizeMenu })));
 const Screen = lazy(() => import("../features/screen/Screen"));
 // El aviso de licencia solo se baja si la flota lo pide (trae los textos de Danil).
 const MachinesLicense = lazy(() =>
@@ -162,8 +157,6 @@ import { recordarCarpetas } from "../lib/folderKinds";
 import { lista } from "../lib/format";
 import ColumnaLateral from "../features/shell/SideColumn";
 import { createSpaceNavigationOrder } from "../lib/space-navigation-order";
-import GitHubStar from "../features/shell/GitHubStar";
-import TitleBar from "../features/shell/TitleBar";
 import GlobalSearch, { type SearchFilter } from "../features/shell/GlobalSearch";
 import { flattenTasks } from "../features/shell/sidebarTasks";
 import AppTools from "../features/shell/AppTools";
@@ -303,13 +296,13 @@ import { LazyPart, retryableLazy } from "../ui/LazyPart";
 import { mergeGates } from "../features/chat/permissionGates";
 import { asleep, withLastAnswer } from "../features/machines/lastAnswer";
 import { unconfirmedOpen } from "../features/machines/unconfirmedOpen";
-import { Dialog, DialogContent, DialogTitle } from "../ui/Dialog";
 import { asFailure, claveDe, detalleDe, prosaDe } from "../ui/Failure";
 import { BotonConAtajo } from "../ui/Shortcut";
 import type { ActivityEvent } from "@terminus/protocol";
 import { Toast, ToastStack } from "../ui/Toast";
 import { apagarVistasDe, hayVistasDe, soltarVistasHuerfanas } from "../features/code/typst";
-import { DragOverlay } from "../features/tabs";
+import { DragOverlay, UnsavedCloseDialog } from "../features/tabs";
+import { TitleBarSection } from "../features/shell";
 
 // Lo que falla en el camino a la ventana y no en el comando: se vuelve a
 // preguntar en vez de pintarlo (`cli/service/mod.rs`, `para_la_ventana`).
@@ -8668,31 +8661,13 @@ export default function App() {
           onClose={() => setDeleteTarget(null)} />
       )}</Show>
 
-      {/* Cancelar va primero: es el que recibe el foco, y Enter por inercia no
-          puede tirar ni escribir nada. */}
       <Show when={cierreSinGuardar()}>{(c) => (
-        <Dialog open onOpenChange={(abierto) => { if (!abierto) setCierreSinGuardar(null); }}>
-          <DialogContent class="flex flex-col gap-3">
-            <DialogTitle class="text-sm font-semibold">{t("projects.tabs.unsaved.title")}</DialogTitle>
-            <p class="m-0 text-ui text-neutral-700">{t("projects.tabs.unsaved.body")}</p>
-            <ul class="m-0 flex max-h-[40vh] list-none flex-col overflow-y-auto p-0">
-              <For each={c().archivos}>{(ruta) => (
-                <li class="shrink-0 truncate font-mono text-caption text-neutral-500" title={ruta}>{ruta}</li>
-              )}</For>
-            </ul>
-            <div class="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setCierreSinGuardar(null)}>
-                {t("projects.tabs.unsaved.cancel")}
-              </Button>
-              <Button variant="secondary" size="sm" onClick={() => void resolverCierre("descartar")}>
-                {t("projects.tabs.unsaved.discard")}
-              </Button>
-              <Button size="sm" onClick={() => void resolverCierre("guardar")}>
-                {t("projects.tabs.unsaved.save")}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+        <UnsavedCloseDialog
+          files={c().archivos}
+          onCancel={() => setCierreSinGuardar(null)}
+          onDiscard={() => void resolverCierre("descartar")}
+          onSave={() => void resolverCierre("guardar")}
+        />
       )}</Show>
 
       {/* El traspaso de proveedor se confirma una vez y se guarda como
@@ -8740,71 +8715,29 @@ export default function App() {
 
         {/* Las dos columnas son hermanas de ancho propio y usan
             `ColumnaLateral`, que documenta sus límites. */}
-        <TitleBar
-          bordeDeLaBarra={sidebar.colapsado() ? null : bordeDeLaBarra()}
-          izquierda={<>
-            <BotonConAtajo
-              variant="ghost"
-              size="icon"
-              class="size-[30px] shrink-0 text-neutral-500"
-              onClick={sidebar.alternar}
-              aria-pressed={!sidebar.colapsado()}
-              aria-label={sidebar.colapsado() ? t("shell.sidebar.show") : t("shell.sidebar.hide")}
-              accion="sidebar"
-              etiqueta={sidebar.colapsado() ? t("shell.sidebar.show") : t("shell.sidebar.hide")}
-            >
-              <Show when={sidebar.colapsado()} fallback={<PanelLeftClose size={16} />}><PanelLeftOpen size={16} /></Show>
-            </BotonConAtajo>
-            <Show when={spaces().length > 0}>
-              <SpaceMenu
-                workspace={workspaceActual()?.name ?? ""}
-                spaces={spaces()}
-                activa={escritorio()}
-                proyectos={projectList()}
-                senal={(id) => senalDe(id)}
-                onElegir={cambiarEscritorio}
-                onCrear={createSpace}
-                onRenombrar={renameSpace}
-                onEliminar={(id) => setDeletingSpace(id)}
-              />
-            </Show>
-            {capabilities().sidebarExtra?.()}
-          </>}
-          finDeIzquierda={<>
-            <BotonConAtajo
-              variant="ghost"
-              size="icon"
-              class="size-[30px] shrink-0 text-neutral-500"
-              data-global-search-open=""
-              aria-expanded={buscando() !== null}
-              aria-label={t("search.open")}
-              accion="search"
-              etiqueta={t("search.open")}
-              onClick={() => setBuscando("all")}
-            >
-              <Search size={15} aria-hidden="true" />
-            </BotonConAtajo>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="size-[30px] shrink-0 text-neutral-500"
-              data-add-project=""
-              aria-label={t("projects.add.title")}
-              title={t("projects.add.title")}
-              onClick={() => setAnadiendoCarpeta(true)}
-            >
-              <FolderPlus size={15} aria-hidden="true" />
-            </Button>
-            <Show when={sidebarFilter()}>
-              <Suspense>
-                <CustomizeMenu
-                  filter={sidebarFilter()}
-                />
-              </Suspense>
-            </Show>
-          </>}
-          centro={tiraDeLaVentana()}
-          derecha={<GitHubStar />}
+        <TitleBarSection
+          border={bordeDeLaBarra()}
+          sidebarCollapsed={sidebar.colapsado()}
+          onToggleSidebar={sidebar.alternar}
+          spaceMenu={<Show when={spaces().length > 0}>
+            <SpaceMenu
+              workspace={workspaceActual()?.name ?? ""}
+              spaces={spaces()}
+              activa={escritorio()}
+              proyectos={projectList()}
+              senal={(id) => senalDe(id)}
+              onElegir={cambiarEscritorio}
+              onCrear={createSpace}
+              onRenombrar={renameSpace}
+              onEliminar={(id) => setDeletingSpace(id)}
+            />
+          </Show>}
+          sidebarExtra={capabilities().sidebarExtra?.()}
+          searchOpen={buscando() !== null}
+          onSearch={() => setBuscando("all")}
+          onAddProject={() => setAnadiendoCarpeta(true)}
+          filter={sidebarFilter()}
+          tabs={tiraDeLaVentana()}
         />
         <GlobalSearch
           open={buscando()}

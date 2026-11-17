@@ -10,8 +10,18 @@ import { walkFiles } from "./git.mjs";
 const slash = (path) => path.replaceAll("\\", "/");
 const increment = (map, key) => { map[key] = (map[key] ?? 0) + 1; };
 
+/** A feature entry may grow its named interface, but cannot own implementation. */
+export function publicInterfaceCode(path, source) {
+  if (!/^src\/features\/[^/]+\/index\.tsx?$/.test(path)) return null;
+  const facade = source.parseDiagnostics.length === 0 && source.statements.length > 0 && source.statements.every(node =>
+    ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)
+    && node.exportClause && ts.isNamedExports(node.exportClause) && node.exportClause.elements.length > 0,
+  );
+  return facade ? 0 : 1;
+}
+
 export async function inspectFront(root) {
-  const current = { dependencies: {}, solid: {}, lines: {}, effects: {}, events: {} };
+  const current = { dependencies: {}, solid: {}, lines: {}, effects: {}, events: {}, interfaceCode: {} };
   const cli = fileURLToPath(new URL("../../bin/dependency-cruiser.mjs", import.meta.resolve("dependency-cruiser")));
   const config = fileURLToPath(new URL("../dependency-cruiser.config.cjs", import.meta.url));
   let output;
@@ -41,6 +51,8 @@ export async function inspectFront(root) {
     const text = readFileSync(file, "utf8");
     current.lines[path] = text.split("\n").length - Number(text.endsWith("\n"));
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    const code = publicInterfaceCode(path, source);
+    if (code !== null) current.interfaceCode[path] = code;
     const visit = (node) => {
       if (path === "src/app/App.tsx" && ts.isCallExpression(node) && node.expression.getText(source) === "createEffect") increment(current.effects, path);
       if (ts.isNewExpression(node) && node.expression.getText(source) === "CustomEvent") {
@@ -58,7 +70,8 @@ export function regressions(current, baseline) {
   const failures = [];
   for (const category of Object.keys(current)) {
     for (const [key, value] of Object.entries(current[category])) {
-      const limit = baseline[category]?.[key] ?? (category === "lines" ? 399 : 0);
+      const facade = category === "lines" && current.interfaceCode?.[key] === 0;
+      const limit = category === "interfaceCode" ? 0 : facade ? 399 : baseline[category]?.[key] ?? (category === "lines" ? 399 : 0);
       if (value > limit) failures.push(`${category}: ${key}: ${value} > ${limit}`);
     }
   }

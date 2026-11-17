@@ -8,9 +8,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import ArrowDown from "lucide-solid/icons/arrow-down";
 import ArrowUp from "lucide-solid/icons/arrow-up";
-import Check from "lucide-solid/icons/check";
 import ChevronRight from "lucide-solid/icons/chevron-right";
-import Copy from "lucide-solid/icons/copy";
 import CornerDownLeft from "lucide-solid/icons/corner-down-left";
 import FileText from "lucide-solid/icons/file-text";
 import Maximize2 from "lucide-solid/icons/maximize-2";
@@ -64,7 +62,6 @@ import {
 import { base64De, copyText, imagenPegada } from "../../lib/clipboard";
 import { capabilities } from "../../lib/platform";
 import { atenderElCampo, enfocar, enfocarSiNadieEscribe } from "../../lib/focus";
-import { df } from "../../lib/format";
 import { t } from "../../lib/i18n";
 import { imagenInerte } from "../../lib/links";
 import { CarruselDeImagenes } from "../../ui/EnlargeableImage";
@@ -85,7 +82,6 @@ import type {
 import { AstroAvatar } from "../projects/AstroAvatar";
 import {
   type CatalogosDeModelos,
-  nombreDeModelo,
   modelBrand,
   type OpcionDeModelo,
   opcionesDeModelos,
@@ -177,6 +173,7 @@ import EstadoDelTurno from "./TurnStatus";
 import { WithMentions } from "./WithMentions";
 import { Spinner } from "../../ui/Spinner";
 import { Interrupcion, LineaDeSistema, TraspasoDeProveedor, SiguioTrasElCupo } from "./components/thread/SystemMarkers";
+import { HoraDelTurno, LineaDeProveedor, BotonCopiar, CambioDeContexto } from "./components/thread/MessageDecorations";
 
 // Chunk aparte: el bloque de razonamiento solo lo carga un turno que lo trae.
 const Reasoning = sharedLazy(() => import("./Reasoning"));
@@ -4288,112 +4285,6 @@ const FILAS_ANTES_DE_PEDIR = 8;
 
 const FILA_DEL_MENSAJE =
   "flex items-center gap-0.5 pt-1 opacity-0 transition-opacity group-hover/mensaje:opacity-100 group-focus-within/mensaje:opacity-100";
-
-function HoraDelTurno(props: { at?: number }) {
-  return (
-    <Show when={props.at}>
-      {(at) => (
-        <time
-          datetime={new Date(at()).toISOString()}
-          tabindex={0}
-          class="cursor-default rounded-sm px-1 text-caption leading-4 whitespace-nowrap text-neutral-500 outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-        >
-          {mostrarHoraDeTurno(at())}
-        </time>
-      )}
-    </Show>
-  );
-}
-
-/**
- * De dónde salió un turno —logo del agente y modelo—, tras la hora.
- *
- * **No se inventa el modelo con el que se contestaría hoy**: usa el que el
- * cierre observó en ese turno. El nombre del proveedor no se escribe —el logo
- * ya lo dice—; sin modelo solo queda el logo, con el nombre en el título.
- */
-function LineaDeProveedor(props: {
-  agent: string;
-  provider?: string;
-  /** El modelo observado en ese turno, no el elegido ahora. */
-  model?: string;
-  catalogo: AgentModels | null;
-  /** Cómo se llama el agente, para el título cuando no hay proveedor. */
-  agentLabel: string;
-}) {
-  // El nombre del proveedor no se escribe: el logo ya lo dice y el modelo va
-  // solo. Queda en el `title` para quien pase el cursor por encima.
-  const titulo = () => modelBrand(props.agent, props.model, props.catalogo) === "danil" ? t("surfaces.label.free") : props.provider ?? props.agentLabel;
-  return (
-    <span
-      class="flex items-center gap-1 whitespace-nowrap rounded-sm px-1 text-caption leading-4 text-neutral-500"
-      title={titulo()}
-      aria-label={t("chat.actions.provider")}
-      data-provider={props.provider}
-    >
-      <span class="flex size-3.5 shrink-0 items-center justify-center">
-        <MarcaAgente id={modelBrand(props.agent, props.model, props.catalogo)} size={12} />
-      </span>
-      <Show when={props.model}>
-        {(id) => (
-          <span class="max-w-[16rem] truncate" title={id()}>
-            {nombreDeModelo(id(), props.catalogo)}
-          </span>
-        )}
-      </Show>
-    </span>
-  );
-}
-
-function BotonCopiar(props: {
-  copiando: boolean;
-  copiado: boolean;
-  onCopiar: () => void;
-}) {
-  return (
-    <TooltipRoot openDelay={RETARDO_TOOLTIP} placement="top">
-      <TooltipTrigger
-        as={(p: object) => (
-          <Button
-            {...p}
-            type="button"
-            variant="ghost"
-            size="iconCompact"
-            class="text-neutral-500"
-            disabled={props.copiando}
-            aria-label={props.copiado ? t("chat.actions.copied") : t("chat.actions.copy")}
-            onClick={(e: MouseEvent) => {
-              (p as { onClick?: (e: MouseEvent) => void }).onClick?.(e);
-              props.onCopiar();
-            }}
-          >
-            <Show when={props.copiado} fallback={<Copy size={14} />}>
-              <Check size={14} />
-            </Show>
-          </Button>
-        )}
-      />
-      <TooltipContent class="whitespace-nowrap">
-        {props.copiado ? t("chat.actions.copied") : t("chat.actions.copy")}
-      </TooltipContent>
-    </TooltipRoot>
-  );
-}
-
-/** «27 ago, 11:12»; el año solo si no es el actual. */
-function mostrarHoraDeTurno(at: number, ahora: Date = new Date()) {
-  const fecha = new Date(at);
-  const mismoAnio = fecha.getFullYear() === ahora.getFullYear();
-  return df({
-    day: "numeric",
-    month: "short",
-    hour: "numeric",
-    minute: "2-digit",
-    ...(mismoAnio ? {} : { year: "numeric" }),
-  }).format(fecha);
-}
-
-
 /** Cuántas fuentes se llegan a ofrecer de una vez. */
 const TOPE_MENU = 60;
 
@@ -4420,48 +4311,6 @@ function filterMentionSources(fuentes: MentionSource[], consulta: string): Menti
     .sort((a, b) => a.p - b.p || a.f.ruta.length - b.f.ruta.length)
     .slice(0, TOPE_MENU)
     .map((x) => x.f);
-}
-
-/**
- * Qué material se empezó a ofrecer, en el punto del hilo donde pasó. No hay
- * contrapartida de salida: lo que el agente leyó sigue en la sesión
- * (`--resume`) y solo una sesión nueva lo retira.
- */
-function CambioDeContexto(props: {
-  cambio: { entraron: string[] };
-  catalogo: Source[];
-}) {
-  const Marca = (p: { id: string }) => {
-    const s = () => props.catalogo.find((f) => f.id === p.id);
-
-    return (
-      <span class="flex items-center gap-1">
-        <Show when={s()}>
-          {(f) => <MarcaFuente location={f().location} kind={f().kind} />}
-        </Show>
-        <span class="min-w-0 truncate">
-          {s() ? s()!.etiqueta : t("chat.context.gone_source")}
-        </span>
-      </span>
-    );
-  };
-
-  return (
-    <div class="flex items-center gap-2 text-caption text-neutral-500">
-      <span class="h-px flex-1 bg-border" />
-      <div class="flex min-w-0 flex-col gap-1">
-        <Show when={props.cambio.entraron.length}>
-          <div class="flex min-w-0 flex-wrap items-center gap-2">
-            <span class="font-semibold text-neutral-700">
-              {t("chat.context.added")}
-            </span>
-            <For each={props.cambio.entraron}>{(id) => <Marca id={id} />}</For>
-          </div>
-        </Show>
-      </div>
-      <span class="h-px flex-1 bg-border" />
-    </div>
-  );
 }
 
 /**
