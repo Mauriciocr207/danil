@@ -8,14 +8,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { boot, sleep } from "../helpers/jsdom-app.mjs";
 
-const pageWith = (entry) => `<!doctype html><html><head><script type="module" src="/terminus/assets/${entry}.js"></script></head></html>`;
+const base = `/${(process.env.TERMINUS_WEB_BASE ?? "terminus").replace(/^\/+|\/+$/g, "")}/`.replace("//", "/");
+const pageUrl = new URL(base, "http://localhost").href;
+const pageWith = (entry) => `<!doctype html><html><head><script type="module" src="${base}assets/${entry}.js"></script></head></html>`;
 
 async function open(t) {
   const own = globalThis.fetch;
   const page = { html: null };
   globalThis.fetch = async (input, init) => {
     const url = String(input?.url ?? input);
-    if (url.endsWith("/terminus/") && page.html) return new Response(page.html, { status: 200 });
+    if ((url === base || url === pageUrl) && page.html) return new Response(page.html, { status: 200 });
     if (url.endsWith("/v1/identity/me")) return Response.json({ id: "user_A", name: "Ana", workspace: "11", organizations: [] });
     if (url.endsWith("/v1/workspaces")) return Response.json({ items: [{ id: "11", org: "org_A", name: "Alpha", role: "owner" }], next_cursor: null });
     if (url.endsWith("/v1/compute/computers")) return new Response(null, { status: 503 });
@@ -49,7 +51,7 @@ test("a new build is offered, a gone chunk asks, and «Para después» keeps the
   await check();
   assert.equal(notice(), null, "the same build says nothing");
 
-  page.html = pageWith("bootstrap-new").replace("/terminus/assets/", "/elsewhere/");
+  page.html = pageWith("bootstrap-new").replace(`${base}assets/`, "/elsewhere/");
   await check();
   assert.equal(notice(), null, "another app's page, like the sign-in, is not an update");
 
