@@ -210,7 +210,7 @@ import {
 } from "../lib/panels";
 import { createPref, escribirPref, leerPref } from "../lib/prefs";
 import type { Frase } from "../lib/prose";
-import { editDraft, insertMention, insertRecipient, type Recipient, type RecipientCandidate, recipientCandidatesOf, type SenderTask, trimDraft } from "../lib/recipients";
+import { type Recipient, type RecipientCandidate, recipientCandidatesOf, type SenderTask, trimDraft } from "../lib/recipients";
 import { conservar, conservarEnOrden, conservarPorClave, sessionRefresh } from "../lib/sessionRefresh";
 import { readShellCache, shellCacheWriter } from "../lib/shellCache";
 import {
@@ -252,18 +252,15 @@ import {
   type TaskTab,
 } from "../lib/tabs";
 import {
-  adjuntosDevueltos,
-  adjuntosSinMandar,
   claveDeBorrador,
   esProvisional,
-  fuentesHeredadas,
   idProvisional,
   proyectoDeNuevaTarea,
   sameSources,
   tituloProvisional,
   unirFuentes,
 } from "../lib/taskDraft";
-import { editMentions, type PlaceCandidate, type TaskCandidate, type TaskMention, type TextEdit } from "../lib/taskMentions";
+import { editMentions, type PlaceCandidate, type TaskCandidate, type TaskMention } from "../lib/taskMentions";
 import { aplicarTemaDeTerminal } from "../lib/terminal-themes";
 import {
   type SessionUsage,
@@ -292,6 +289,7 @@ import { Toast, ToastStack } from "../ui/Toast";
 import { apagarVistasDe, hayVistasDe, soltarVistasHuerfanas } from "../features/code/typst";
 import { DragOverlay, UnsavedCloseDialog } from "../features/tabs";
 import { TitleBarSection } from "../features/shell";
+import { createDraftsStore } from "../features/drafts";
 
 // Lo que falla en el camino a la ventana y no en el comando: se vuelve a
 // preguntar en vez de pintarlo (`cli/service/mod.rs`, `para_la_ventana`).
@@ -874,7 +872,7 @@ export default function App() {
       );
       pedirFilasQueFaltan();
       fuera.forEach(soltarHilo);
-      fuera.forEach(soltarBorrador);
+      fuera.forEach(drafts.drop);
       for (const id of fuera) olvidarPestana(id);
       // Archivar (o borrar) la tarea de delante deja la conversación en
       // blanco: el panel pondría la pestaña vecina, y quien archiva acabó
@@ -952,7 +950,7 @@ export default function App() {
 
   /** Lo que la ventana guarda de una pestaña que ya no va a volver. */
   function soltarPestanaGuardada(id: string) {
-    soltarBorrador(id);
+    drafts.drop(id);
     olvidarPestana(id);
     if (!vivas().includes(id)) soltarHilo(id);
   }
@@ -1083,119 +1081,34 @@ export default function App() {
       }),
     );
 
-  // El borrador de cada conversación: lo escrito y lo puesto en la caja que
-  // todavía no ha viajado, por conversación y no de la app —cambiar de
-  // pestaña no se lleva lo que estabas escribiendo en otra—. La clave es el
-  // id de sesión, o el proyecto para la que aún no existe en disco. `archivos`
-  // vive aquí y no en `Chat.tsx`: bajarlo lo pierde al cambiar de pestaña.
-  type Borrador = {
-    input: string;
-    task_mentions?: TaskMention[];
-    /** A quién va dirigido lo escrito. Lista aparte: no es material del prompt. */
-    recipients?: Recipient[];
-    mentionHistory?: { text: string; task_mentions?: TaskMention[]; recipients?: Recipient[] }[];
-    mentionFuture?: { text: string; task_mentions?: TaskMention[]; recipients?: Recipient[] }[];
-    sourceIds: string[];
-    excludedSourceIds: string[];
-    archivos: string[];
-    configuration?: { agent: string; surface: string; model: string; effort: string; mode?: string };
-    /**
-     * El traspaso confirmado para ESTA tarea: de qué CLI a cuál, todavía sin
-     * consumir. Vive aquí y no en `configuration` para no convertirse en
-     * preferencia de las tareas nuevas. El `from` delata a otro cliente que
-     * cambió el CLI antes del envío.
-     */
-    provider?: HandoverPending;
-  };
-  const SIN_BORRADOR: Borrador = {
-    input: "",
-    sourceIds: [],
-    excludedSourceIds: [],
-    archivos: [],
-  };
-  const [borradores, setBorradores] = createSignal<Record<string, Borrador>>({});
   const claveDelHilo = () => sessionId() ?? "";
   const claveAbierta = () => claveDeBorrador(sessionId(), project(), hablandoCon()?.project === project() ? hablandoCon()?.name : null);
-  const editarBorrador = (clave: string, fn: (b: Borrador) => Borrador) =>
-    setBorradores((bs) => ({ ...bs, [clave]: fn(bs[clave] ?? SIN_BORRADOR) }));
-  const soltarBorrador = (clave: string) =>
-    setBorradores((bs) => {
-      if (!(clave in bs)) return bs;
-      const { [clave]: _, ...resto } = bs;
-      return resto;
-    });
-  const borrador = () => borradores()[claveAbierta()] ?? SIN_BORRADOR;
-  const input = () => borrador().input;
-  const setInput = (v: string, inputType?: string, edit?: TextEdit) =>
-    editarBorrador(claveAbierta(), (b) => {
-      const history = [...(b.mentionHistory ?? []), { text: b.input, task_mentions: b.task_mentions, recipients: b.recipients }].slice(-100);
-      const restored = inputType?.startsWith("history") ? [...history].reverse().find(h => h.text === v) : undefined;
-      // Las dos listas se mueven con el mismo gesto: una que se quedara atrás
-      // pintaría su etiqueta sobre otro trozo del texto.
-      const next = editDraft({ text: b.input, task_mentions: b.task_mentions, recipients: b.recipients }, v, edit);
-      return { ...b, input: v, task_mentions: restored?.task_mentions ?? next.task_mentions,
-        recipients: restored?.recipients ?? next.recipients, mentionHistory: history, mentionFuture: [] };
-    });
-  const navigateMentionHistory = (redo: boolean): boolean => {
-    const draft = borrador();
-    const history = draft.mentionHistory ?? [];
-    const future = draft.mentionFuture ?? [];
-    if (![...history, ...future, draft].some(item => item.task_mentions?.length || item.recipients?.length)) return false;
-    const next = (redo ? future : history).at(-1);
-    if (!next) return false;
-    const current = { text: draft.input, task_mentions: draft.task_mentions, recipients: draft.recipients };
-    editarBorrador(claveAbierta(), b => ({ ...b, input: next.text, task_mentions: next.task_mentions, recipients: next.recipients,
-      mentionHistory: redo ? [...history, current] : history.slice(0, -1),
-      mentionFuture: redo ? future.slice(0, -1) : [...future, current],
-    }));
-    return true;
-  };
-  const sourceIds = createMemo(() => borrador().sourceIds, undefined, {
-    equals: sameSources,
+  const drafts = createDraftsStore({
+    key: claveAbierta, workspace: workspaceActivo, generation: workspaceContext.generation,
+    project, projects: projectList, sources: taskSources,
+    prepareAttachments: async (paths, project) => {
+      const machine = paths.length ? pegadasEn.get(paths[0]) : undefined;
+      const routed = machine && paths.every(path => pegadasEn.get(path) === machine) ? enMaquina(machine) : undefined;
+      const workspace = workspaceActivo();
+      const options = { headers: { ...routed?.headers, ...(workspace ? { "x-terminus-workspace": workspace } : {}) } };
+      const prepared = await invoke<string[]>("prepare_attachments", { project, paths }, options);
+      if (machine) for (const path of prepared) adjuntosEn.set(path, machine);
+      return prepared;
+    },
   });
-  const excludedSourceIds = createMemo(() => borrador().excludedSourceIds, undefined, {
-    equals: sameSources,
-  });
-  const archivos = () => borrador().archivos;
-  const setArchivos = (v: string[]) =>
-    editarBorrador(claveAbierta(), (b) => ({ ...b, archivos: v }));
-  async function agregarArchivos(paths: string[]) {
-    const key = claveAbierta();
-    const workspace = workspaceActivo();
-    // Una imagen pegada ya está en la máquina del turno: su copia se prepara allá.
-    const machine = paths.length ? pegadasEn.get(paths[0]) : undefined;
-    const opciones = machine && paths.every((p) => pegadasEn.get(p) === machine) ? enMaquina(machine) : undefined;
-    const prepared = await invoke<string[]>("prepare_attachments", {
-      project: project(),
-      paths,
-    }, opciones);
-    if (machine) for (const path of prepared) adjuntosEn.set(path, machine);
-    if (workspace !== workspaceActivo()) return;
-    editarBorrador(key, (b) => ({
-      ...b,
-      archivos: [...new Set([...b.archivos, ...prepared])],
-    }));
-  }
-  // Lo que la tarea YA lee, distinto de lo que está por adjuntarse: los chips
-  // de la caja se vacían al mandar, esto es material de la conversación y se
-  // queda a la vista mientras dure. Sin esto, adjuntar se veía como mandar un
-  // archivo: el chip desaparecía sin dejar nada diciendo que el agente lo
-  // está leyendo.
-  const [adjuntas, setAdjuntas] = createSignal<string[]>([]);
-  const conFuente = (ids: string[]) =>
-    ids
-      .map((id) => taskSources()?.find((s) => s.id === id))
-      .filter((s): s is Source => !!s);
-  const idsDelProyecto = createMemo(
-    () => projectList().find((p) => p.id === project())?.sources ?? [],
-  );
-  const heredadas = createMemo(() =>
-    fuentesHeredadas(projectList(), project(), excludedSourceIds()),
-  );
-  const materialPendiente = createMemo(() => conFuente(sourceIds()));
-  const contexto = createMemo(() =>
-    conFuente(unirFuentes(heredadas(), adjuntas())),
-  );
+  onCleanup(drafts.dispose);
+  const borrador = drafts.current;
+  const input = drafts.input;
+  const setInput = drafts.changeText;
+  const navigateMentionHistory = drafts.history;
+  const sourceIds = drafts.sourceIds;
+  const excludedSourceIds = drafts.excludedSourceIds;
+  const archivos = drafts.files;
+  const setArchivos = drafts.replaceFiles;
+  const agregarArchivos = drafts.addFiles;
+  const adjuntas = drafts.attached;
+  const materialPendiente = drafts.pendingMaterial;
+  const contexto = drafts.context;
 
   const composer = createComposerStore({
     invoke, withLastAnswer,
@@ -1440,12 +1353,7 @@ export default function App() {
     });
     // Otro cliente pudo cambiar el CLI: un traspaso confirmado que ya no parte
     // del que la sesión tiene caduca, y el siguiente envío no lo resucita.
-    setBorradores((bs) => {
-      const suyo = bs[id];
-      if (!suyo?.provider || suyo.provider.from === session.provider) return bs;
-      const { provider: _, ...resto } = suyo;
-      return { ...bs, [id]: resto };
-    });
+    drafts.invalidateProvider(id, session.provider);
     const pager = historiaDe(id);
     const loaded = pager.accept(session.turns, session.history, { reading: leyendoLejos.has(id) });
     setColaSuelta((all) => {
@@ -2232,7 +2140,7 @@ export default function App() {
     setProyectoAbierto(null);
     setHilos(a.active ? workspaceThreads.get(a.active) ?? {} : {});
     setDesdeDeTurno({});
-    setBorradores({});
+    drafts.reset();
     setVivas([]);
     setSettlingTurns([]);
     finishedTurns.clear();
@@ -2242,7 +2150,7 @@ export default function App() {
     setVentana(null);
     if (!desdeCache) setSesiones({});
     soltarCola();
-    setAdjuntas([]);
+    drafts.replaceAttached([]);
     // Y las cuentas, que también son de este workspace: la franja de consumo las
     // lee una vez y se quedaría enseñando las del cliente anterior —nombre,
     // correo y cuánto le queda— sin que nada avise.
@@ -4172,7 +4080,7 @@ export default function App() {
     // el de la conversación en blanco es el suyo, y si tenía algo puesto antes
     // de nombrar el trabajo, sigue ahí.
     batch(() => {
-      setAdjuntas([]);
+      drafts.replaceAttached([]);
       setProject(name);
       setSessionId(null);
       restoreDraftConfiguration();
@@ -4266,11 +4174,8 @@ export default function App() {
   // eligió (`agents::Permisos::resolver`).
       composer.runtimeFact({ kind: "mode", value: s.permission_mode ?? "" });
       // Lo que esta tarea ya lee. No son pendientes: están guardados en ella.
-      setAdjuntas(s.sources ?? []);
-      editarBorrador(id, (b) => ({
-        ...b,
-        excludedSourceIds: s.excluded_sources ?? [],
-      }));
+      drafts.replaceAttached(s.sources ?? []);
+      drafts.restoreSession(id, s.excluded_sources ?? []);
       // Y encima, lo que se eligió en su caja sin llegar a mandar nada.
       restoreSessionConfiguration(s);
       // Lo del disco, y sin vaciar lo vivo: si está contestando, lo que lleva
@@ -4285,7 +4190,7 @@ export default function App() {
         }, deLaTarea(id));
         if (!current()) return;
         composer.resumeTask({ provider: canonicalAgentId(state.provider, modeloDeSubtarea(state)), model: modeloDeSubtarea(state) ?? "", effort: state.effort ?? "", mode: state.permission_mode ?? "" });
-        setAdjuntas(state.sources ?? []);
+        drafts.replaceAttached(state.sources ?? []);
         restoreSessionConfiguration(state);
         void refreshFolder(proyecto, id);
       } catch { /* Sin estado autoritativo se conserva el error de la lectura original. */ }
@@ -4478,7 +4383,7 @@ export default function App() {
       setFolder(null);
     // Lo que la tarea que se deja ya lee es suyo; el borrador de la
     // conversación en blanco es el suyo y no se toca.
-      setAdjuntas([]);
+      drafts.replaceAttached([]);
       soltarCola();
       // El hilo sin id es el del primer turno. Si Rust lo negó, se quedaba
       // pintado en toda tarea nueva, de este proyecto o de otro.
@@ -4557,7 +4462,7 @@ export default function App() {
     // El borrador y el hilo son de la tarea: cerrar un archivo o un
     // artefacto suyo no los toca, la tarea sigue abierta detrás.
     for (const p of cerradas.filter(isTaskTab)) {
-      soltarBorrador(p.id);
+      drafts.drop(p.id);
       olvidarPestana(p.id);
       if (!vivas().includes(p.id)) soltarHilo(p.id);
     }
@@ -4922,7 +4827,7 @@ export default function App() {
     paneles.sync(pestanas.open().map(tab => tab.id));
     for (const id of ids) {
       soltarHilo(id);
-      soltarBorrador(id);
+      drafts.drop(id);
       olvidarPestana(id);
       archivosDeTarea.forget(id);
     }
@@ -5029,16 +4934,7 @@ export default function App() {
    * `--add-dir`; dónde escribe es la carpeta de trabajo del proyecto.
    */
   const adjuntarFuente = async (id: string) => {
-    editarBorrador(claveAbierta(), (b) => ({
-      ...b,
-      sourceIds:
-        idsDelProyecto().includes(id) ||
-        b.sourceIds.includes(id) ||
-        adjuntas().includes(id)
-          ? b.sourceIds
-          : [...b.sourceIds, id],
-      excludedSourceIds: b.excludedSourceIds.filter((x) => x !== id),
-    }));
+    drafts.addSource(id);
     // `harness:sources` y no `harness:workspace`: aquel cierra la
     // conversación abierta; adjuntar material a mitad de una tarea no muda de
     // cliente.
@@ -5051,15 +4947,7 @@ export default function App() {
    * dice «quitar», no «olvidar».
    */
   const quitarFuente = async (id: string) => {
-    editarBorrador(claveAbierta(), (b) => ({
-      ...b,
-      sourceIds: b.sourceIds.filter((x) => x !== id),
-      excludedSourceIds:
-        idsDelProyecto().includes(id) && !b.excludedSourceIds.includes(id)
-          ? [...b.excludedSourceIds, id]
-          : b.excludedSourceIds,
-    }));
-    setAdjuntas((v) => v.filter((x) => x !== id));
+    drafts.removeSource(id);
     const sid = sessionId();
     if (!sid) return;
     try {
@@ -5384,13 +5272,7 @@ export default function App() {
     // la tarea nace con él y con el proveedor y modelo de su perfil.
     if (encargado) abrirBorradorDeAgente(proyecto, encargado);
     else nuevaSesion(proyecto);
-    editarBorrador(claveAbierta(), (b) => ({
-      ...b,
-      input: [prompt, b.input].filter(Boolean).join("\n\n"),
-      archivos: [...b.archivos, context.path],
-      sourceIds: [...new Set([...b.sourceIds, ...context.sources])],
-      excludedSourceIds: [...new Set([...b.excludedSourceIds, ...context.excluded_sources])],
-    }));
+    drafts.continueFrom(prompt, context.path, context.sources, context.excluded_sources);
   }
 
   /**
@@ -5400,14 +5282,7 @@ export default function App() {
    * bajo Codex, o el gratuito bajo la de pago de OpenCode.
    */
   function saveDraftConfiguration(mode?: string, clave = claveAbierta()) {
-    editarBorrador(clave, (draft) => ({
-      ...draft,
-      configuration: {
-        ...composer.snapshot(),
-        // Solo elegido a mano: guardado al elegir modelo, taparía el del workspace.
-        mode: mode ?? draft.configuration?.mode,
-      },
-    }));
+    drafts.configure({ ...composer.snapshot(), mode }, clave);
   }
 
   /**
@@ -5478,7 +5353,7 @@ export default function App() {
    * otro lo guarda su primer turno. Un motor que no lo anuncia sigue como antes.
    */
   function guardarModeloEnLaTarea(id: string, agente: string, modelo: string, nivel: string | null, effortOnly?: boolean) {
-    if (agente !== cliDeLaSesion(id) || borradores()[claveAbierta()]?.provider || !anunciaEnLaTarea(id, SESSION_MODEL_FEATURE)) return;
+    if (agente !== cliDeLaSesion(id) || drafts.peek(claveAbierta())?.provider || !anunciaEnLaTarea(id, SESSION_MODEL_FEATURE)) return;
     const proyecto = project();
     const opciones = opcionesDeLaTarea(id, workspaceActivo());
     void import("../features/chat/handoverSend")
@@ -5523,7 +5398,7 @@ export default function App() {
     let nivel = "";
     batch(() => {
       nivel = composer.selectModel(opcion);
-      if (provider !== undefined) editarBorrador(clave, (b) => ({ ...b, provider: provider ?? undefined }));
+      if (provider !== undefined) drafts.handover(provider, clave);
       saveDraftConfiguration(undefined, clave);
     });
     return nivel;
@@ -5696,10 +5571,7 @@ export default function App() {
       };
     });
     // Y su borrador: lo que quedó sin mandar sigue con ella.
-    setBorradores((bs) => {
-      const { [claveBorrador]: suyo, ...resto } = bs;
-      return suyo ? { ...resto, [id]: suyo } : resto;
-    });
+    drafts.promote(claveBorrador, id);
     if (provisional) {
       // La fila antes que la pestaña: una pestaña sin fila pide la lista.
       setNaciendo((ns) =>
@@ -5756,8 +5628,8 @@ export default function App() {
     const clave = abierta ?? "";
     const claveBorrador = destination?.session ?? claveAbierta();
     const selectedBase = draftBases()[claveBorrador] ?? null;
-    const pendientes = destination ? borradores()[claveBorrador]?.sourceIds ?? [] : sourceIds();
-    const excluidas = destination ? borradores()[claveBorrador]?.excludedSourceIds ?? [] : excludedSourceIds();
+    const pendientes = destination ? drafts.peek(claveBorrador)?.sourceIds ?? [] : sourceIds();
+    const excluidas = destination ? drafts.peek(claveBorrador)?.excludedSourceIds ?? [] : excludedSourceIds();
     if (abierta) marcarViva(abierta);
     else setArrancando(true);
     // Conversar es editar: la pestaña de la tarea deja de ser vista.
@@ -5876,13 +5748,13 @@ export default function App() {
       }, opciones);
       // El consentimiento del traspaso va justo antes del turno: el motor lo
       // consume en `send_message` y deja de valer para el siguiente.
-      const pendiente = abierta ? borradores()[claveBorrador]?.provider ?? null : null;
+      const pendiente = abierta ? drafts.peek(claveBorrador)?.provider ?? null : null;
       const actual = abierta ? (traspasos()[abierta]?.provider ?? filaDe(abierta)?.provider ?? null) : null;
       const vigente = handoverInForce(pendiente, actual);
       // Otro cliente cambió el CLI: el gesto confirmado ya no parte del que la
       // sesión tiene. Se suelta en vez de traspasar desde otro.
       if (pendiente && !vigente) {
-        editarBorrador(claveBorrador, (b) => ({ ...b, provider: undefined }));
+        drafts.handover(null, claveBorrador);
       }
       const { sendWithHandover } = await import("../features/chat/handoverSend");
       const traspaso = await sendWithHandover({
@@ -5899,7 +5771,7 @@ export default function App() {
       // El gesto quedó consumido: se escribió el consentimiento o el mensaje ya
       // salió con el CLI que pedía. Un `!` no lo consume.
       if (traspaso.settled) {
-        editarBorrador(claveBorrador, (b) => ({ ...b, provider: undefined }));
+        drafts.handover(null, claveBorrador);
       }
       if (provisional && naceDormida) {
         anotar(setEncendiendo, provisional, null);
@@ -5942,10 +5814,7 @@ export default function App() {
       if (!abierta) setArrancando(false);
       // Las fuentes de este mensaje salen del borrador; las de otro
       // que siga esperando, no. Va por id: da igual qué se esté mirando.
-      editarBorrador(id, (b) => ({
-        ...b,
-        sourceIds: b.sourceIds.filter((x) => !pendientes.includes(x)),
-      }));
+      drafts.sentSources(id, pendientes);
       // Lo que cuelga de la vista, solo si la vista sigue donde
       // arrancó el turno: el primer mensaje crea la tarea en Rust
       // mientras se puede mirar otra, y ponerla delante aquí dejaba
@@ -5962,7 +5831,7 @@ export default function App() {
         // Ya viajaron: dejan de ser pendientes y pasan a ser el contexto de la
         // conversación, que se sigue viendo mientras esté abierta.
         if (pendientes.length > 0)
-          setAdjuntas((v) => [...new Set([...v, ...pendientes])]);
+          drafts.acceptSources(pendientes);
         // La cola escrita durante el primer turno es de la sesión que ese turno
         // acaba de crear.
         setColaDe(id);
@@ -6331,7 +6200,7 @@ export default function App() {
     const llevar = !sessionId() && !!carryModule()?.carries()[draftKey];
     setInput("");
     // Salen con el texto: el globo los pinta antes de que `send_message` vuelva.
-    editarBorrador(draftKey, (b) => ({ ...b, archivos: adjuntosSinMandar(b.archivos, attachments) }));
+    drafts.takeFiles(draftKey, attachments);
     const sent = await enviar({
       text: prompt,
       task_mentions: message.task_mentions,
@@ -6344,10 +6213,7 @@ export default function App() {
       space: escritorio(),
     }, undefined, undefined, llevar ? (clave) => (carryModule() as CarryModule).runCarry(clave) : undefined);
     if (!sent && generation === workspaceContext.generation()) {
-      editarBorrador(draftKey, b => ({
-        ...(b.input ? b : { ...b, input: message.text, task_mentions: message.task_mentions, recipients: message.recipients }),
-        archivos: adjuntosDevueltos(b.archivos, attachments),
-      }));
+      drafts.restoreFailed(draftKey, message, attachments);
     }
     return sent;
   }
@@ -6422,7 +6288,7 @@ export default function App() {
         return;
       }
       if (m.role !== "user" || !m.text.trim()) continue;
-      editarBorrador(claveAbierta(), b => ({ ...b, input: m.text, task_mentions: m.task_mentions }));
+      drafts.retryText(m.text, m.task_mentions);
       setRetenida(null);
       await mandar([]);
       return;
@@ -7406,16 +7272,8 @@ export default function App() {
         /* Llamar a alguien y adjuntar material entran por caminos distintos y
            acaban en listas distintas; lo que comparten es que insertar en el
            texto corre a la otra lista. */
-        onRecipient={(name, label, trigger) => editarBorrador(claveAbierta(), b => {
-          const next = insertRecipient({ text: b.input, task_mentions: b.task_mentions, recipients: b.recipients }, trigger, name, label);
-          return { ...b, input: next.text, task_mentions: next.task_mentions, recipients: next.recipients,
-            mentionHistory: [...(b.mentionHistory ?? []), { text: b.input, task_mentions: b.task_mentions, recipients: b.recipients }].slice(-100), mentionFuture: [] };
-        })}
-        onReference={(target, label, trigger) => editarBorrador(claveAbierta(), b => {
-          const next = insertMention({ text: b.input, task_mentions: b.task_mentions, recipients: b.recipients }, trigger, target, label);
-          return { ...b, input: next.text, task_mentions: next.task_mentions, recipients: next.recipients,
-            mentionHistory: [...(b.mentionHistory ?? []), { text: b.input, task_mentions: b.task_mentions, recipients: b.recipients }].slice(-100), mentionFuture: [] };
-        })}
+        onRecipient={drafts.recipient}
+        onReference={drafts.reference}
         onInput={setInput}
         onSend={mandar}
         onRespuestaRapida={mandarTexto}
