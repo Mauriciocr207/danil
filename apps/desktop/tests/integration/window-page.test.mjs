@@ -212,9 +212,10 @@ for (const status of [401, 403, 503]) test(`identity HTTP ${status} stays distin
   const selector = status === 401 ? 'a[href*="/v1/identity/login"]' : '[data-web-preparing]';
   await until(() => app.w.document.querySelector(selector));
   assert.equal(app.w.document.querySelector('[data-tira]'), null);
-  assert.deepEqual(calls.slice(0, 2), ['/v1/capabilities', '/v1/identity/me']);
+  assert.ok(calls.includes('/v1/capabilities'));
+  assert.ok(calls.includes('/v1/identity/me'));
   assert.equal(app.w.localStorage.getItem('danil.web.previous.11.tasks'), status === 401 ? null : 'private');
-  if (status === 401) assert.deepEqual(calls, ['/v1/capabilities', '/v1/identity/me']);
+  if (status === 401) assert.deepEqual([...calls].sort(), ['/v1/capabilities', '/v1/identity/me']);
   else {
     // 403/503 en el primer montaje no son fatales: se prepara y se reintenta solo.
     assert.equal(app.w.document.querySelector('[role="alert"]'), null);
@@ -315,7 +316,7 @@ const CAPS = { contract: 'mvp-v1', items: [{ name: 'identity.organizations', ver
 for (const [label, me] of [
   ['403 workspace_selection_required', () => new Response(JSON.stringify({ type: 'urn:danil:problem:workspace_selection_required', status: 403, code: 'workspace_selection_required' }), { status: 403, headers: { 'content-type': 'application/problem+json' } })],
   ['200 with workspace null', () => Response.json({ id: 'user_A', name: 'Operator', workspace: null, organizations: [] })],
-]) test(`an organization without a workspace (${label}) shows the empty state with the organization selector and sign out, not a dead end`, async () => {
+]) test(`an organization without a workspace (${label}) shows the empty state with the organization selector and sign out, not a dead end`, async t => {
   const calls = [];
   const fetcher = async input => {
     const url = new URL(String(input));
@@ -328,7 +329,7 @@ for (const [label, me] of [
     throw new Error(`Unexpected request ${url.pathname}`);
   };
   fetcher.__jsdomApp = true; globalThis.fetch = fetcher;
-  const app = await boot('listo', `org-without-workspace-${label.length}`, {}, undefined, {}, { web: true });
+  const app = await open(t, 'listo', `org-without-workspace-${label.length}`, {}, undefined, {}, { web: true });
   const gate = () => app.w.document.querySelector('[data-web-gate]');
   await until(() => gate()?.querySelector('[data-web-organization="org_A"]'));
   assert.equal(gate().querySelector('[role="alert"]'), null, 'no «No tienes acceso»');
@@ -368,5 +369,30 @@ test('automatic material failure stays local and recovers through the beta machi
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(app.w.document.querySelector('[data-material-status]'), null);
   assert.equal(app.w.document.querySelector('[data-toast-error]'), null);
+  assert.deepEqual(app.failures, []);
+});
+
+
+for (const end of ['pagehide', '401']) test(`${end} during startup cannot mount a late identity snapshot`, async t => {
+  let resolveProfile;
+  const pending = new Promise(resolve => { resolveProfile = resolve; });
+  const calls = [];
+  const signals = [];
+  const fetcher = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.origin === 'http://localhost' && url.pathname.includes('/assets/')) return new Response('');
+    calls.push(url.pathname); signals.push(init.signal);
+    if (url.pathname === '/v1/identity/me') return pending;
+    if (url.pathname === '/v1/capabilities') return end === '401' ? new Response(null, { status: 401 }) : Response.json({ items: [] });
+    throw new Error(`Unexpected late startup request ${url.pathname}`);
+  };
+  fetcher.__jsdomApp = true; globalThis.fetch = fetcher;
+  const app = await open(t, 'listo', `late-startup-${end}`, {}, undefined, {}, { web: true });
+  if (end === 'pagehide') app.w.dispatchEvent(new app.w.Event('pagehide'));
+  resolveProfile(Response.json({ id: 'user_A', name: 'A', workspace: '11', organizations: [] }));
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.ok(signals.every(signal => signal.aborted));
+  assert.deepEqual([...calls].sort(), ['/v1/capabilities', '/v1/identity/me']);
+  assert.equal(app.w.document.querySelector('[data-tira]'), null);
   assert.deepEqual(app.failures, []);
 });
