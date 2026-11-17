@@ -68,6 +68,7 @@ const steps = [
   ["Service capabilities are optional and versioned", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/web-service-capabilities.test.ts")], root],
   ["Web startup shares reads within one attempt and isolates later selections", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/web-startup-reader.test.ts")], root],
   ["Workspace context owns transition and material validity", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/workspace-context.test.ts")], root],
+  ["Composer selection and catalogs have one owner", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/composer-store.test.ts")], root],
   ["Project rows have one scoped owner and share cancellable reads", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/projects-resource.test.ts")], root],
   ["The web hands a ticket only to exact relay origins", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/web-relay-origins.test.ts")], root],
   ["Web and Desk read the published mvp-v1 examples the same way", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/integration/mvp-contracts.test.mjs")], root],

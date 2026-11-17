@@ -1,3 +1,4 @@
+import { createComposerStore } from "../features/composer";
 import { createWorkspaceStore } from "../features/workspace";
 import { createProjectsStore } from "../features/projects";
 import type { DeleteTarget } from "../features/projects/DeleteTaskDialog";
@@ -24,7 +25,6 @@ import {
   Suspense,
   Switch,
   lazy,
-  untrack,
 } from "solid-js";
 import VisorDeArtefacto from "../features/artifacts/ArtifactViewer";
 import type { Preview } from "../features/artifacts/Preview";
@@ -39,9 +39,6 @@ import McpSignInNotice, { noteMcpSignIn } from "../features/chat/McpSignInNotice
 import type { Encolado } from "../features/chat/MessageQueue";
 import {
   MODO_AUTOMATICO,
-  modoInicial,
-  modoRecordado,
-  recordarModo,
 } from "../features/chat/modes";
 import { DelegatedLaunch, DelegatedNone, DelegatedToolbar, delegatedAttention, delegatedDescendants, delegatedFamilies, type DelegatedListProps, type DelegatedPanelModel } from "../features/chat/DelegatedTasks";
 import PreviousAgentChat from "../features/chat/PreviousAgentChat";
@@ -186,19 +183,16 @@ import { createPointerDrag } from "../lib/pointer-drag";
 import type { InternalTaskLink } from "../lib/links";
 import type { MentionSources } from "../lib/mentions";
 import type {
-  Agent,
-  AgentModels,
   AgentProfile as AgentProfileData,
   ArbolEnTarea,
   HandlerDefinition,
   HandlerList,
   HandlerStatusRow,
-  ModoDePermiso,
   Project,
   Source,
 } from "../lib/model";
 import { carpetaDeTrabajo } from "../lib/model";
-import { type CatalogosDeModelos, effortAlCambiarDeModelo, type OpcionDeModelo } from "../lib/models";
+import { type OpcionDeModelo } from "../lib/models";
 import { threadPreview } from "../lib/nextSteps";
 import {
   createPanels,
@@ -227,7 +221,6 @@ import {
   ventanaVecina,
 } from "../lib/shortcuts";
 import { alHilo, comandosConAlMargen, preguntaAlMargen } from "../lib/side-question";
-import type { CliCommand, Skill, SlashMenu } from "../lib/skills";
 import {
   carpetasDelEscritorio,
   enEscritorio,
@@ -236,12 +229,6 @@ import {
   spaceName,
 } from "../lib/spaces";
 import { type Paso, pasoDe } from "../lib/steps";
-import {
-  esDe,
-  paraElMenu,
-  type Superficie,
-  superficieDe,
-} from "../lib/surfaces";
 import {
   type ArtifactTab,
   appendToStoredStrip,
@@ -1210,27 +1197,16 @@ export default function App() {
     conFuente(unirFuentes(heredadas(), adjuntas())),
   );
 
-  const [agents, setAgents] = createSignal<Agent[]>([]);
-  const [agent, setAgent] = createSignal("claude");
-  // Lo que se puede elegir para trabajar. `null` mientras no se ha leído. Es
-  // la lista entera, con lo que no se puede usar dentro: quién filtra es cada
-  // pantalla, y filtran distinto a propósito (`runtime/surfaces.rs`).
-  const [superficies, setSuperficies] = createSignal<Superficie[] | null>(null);
-  // Con cuál se está trabajando. No se guarda en la sesión: lo que la tarea
-  // persiste es el agente y el modelo, y de ahí se deriva esto al abrirla
-  // (`superficies.superficieDe`). Partir la fila de OpenCode en dos no dejó
-  // ninguna tarea apuntando a un nombre que ya no existe.
-  const [superficie, setSuperficie] = createSignal("");
-  // Modelo y razonamiento viven aquí, no dentro de la caja: al reanudar una
-  // sesión hay que restaurar con qué corrió, y eso lo sabe quien la carga.
-  const [catalogos, setCatalogos] = createSignal<CatalogosDeModelos>({});
-  const models = createMemo(() => catalogos()[agent()] ?? null);
-  const modelosParaAgentes = createMemo(() => ({
-    superficies: superficies() ?? [],
-    catalogos: catalogos(),
-  }));
-  const [model, setModel] = createSignal("");
-  const [effort, setEffort] = createSignal("");
+  const composer = createComposerStore({
+    invoke, withLastAnswer,
+    scope: { workspace: workspaceActivo, machine: () => composerMachine(),
+      machineOn: () => machines().find(machine => machine.id === composerMachine())?.on,
+      connected, session: () => sessionId() },
+    workspaceMode, draftConfiguration: () => borrador().configuration,
+  });
+  const { agents, agent, superficies, superficie, catalogos, models, modelosParaAgentes,
+    model, effort, modo, modos, skills, cliCommands, sideCommand } = composer;
+  onCleanup(composer.dispose);
   // Cada hilo separa lo persistido de lo que construyen los eventos del turno
   // en curso: si lo propio viviera en `vivo`, releer del disco al volver a
   // una tarea que sigue contestando lo pintaría dos veces, una del disco y
@@ -1485,8 +1461,7 @@ export default function App() {
     );
     if (id !== sessionId() || !(session.subagent || session.parent)) return;
     const modelo = modeloDeSubtarea(session);
-    if (modelo) setModel(modelo);
-    if (session.effort) setEffort(session.effort);
+    composer.useProfile({ model: modelo, effort: session.effort });
   }
   const soltarHilo = (session: string) => {
     deltasPorCuadro.vaciar();
@@ -1518,13 +1493,6 @@ export default function App() {
       for (const k of suyas) resto.delete(k);
       return resto;
     });
-  // Cuánto se aprueba a mano, y qué modos puede el agente elegido. Vive aquí
-  // por lo mismo que el modelo: al reanudar una tarea hay que restaurar con
-  // qué corrió. La lista se pide al backend: lo que cada CLI sostiene es dato
-  // suyo (`agents::Permisos`), y escrita aquí sería una segunda copia que un
-  // día diría otra cosa.
-  const [modo, setModo] = createSignal("");
-  const [modos, setModos] = createSignal<ModoDePermiso[]>([]);
   // Qué tareas están contestando ahora mismo, por id. Era un `busy` de la
   // aplicación entera: con un turno vivo, la caja de CUALQUIER otra tarea
   // enseñaba «Detener turno» en `type="button"`, y empezar algo mientras el
@@ -1708,25 +1676,6 @@ export default function App() {
   // Editar pausa la cola: si el turno cierra a mitad de la edición, no se manda
   // el texto a medias.
   const [editando, setEditando] = createSignal(false);
-  const [skills, setSkills] = createSignal<Skill[]>([]);
-  const [cliCommands, setCliCommands] = createSignal<CliCommand[]>([]);
-  const [sideCommand, setSideCommand] = createSignal<string | null>(null);
-  // Sin comandos es «no se pudo saber»: el que no publica lista y el que todavía
-  // no la mandó se ven igual desde aquí, y el menú enseña las skills igual. Se
-  // vuelve a pedir al cerrar cada turno: los de ACP la publican dentro de uno.
-  const cargarComandos = (a: string) => {
-    const revision = composerRevision;
-    const poner = (menu: SlashMenu) => {
-      // La respuesta de un agente que ya no es el de la caja ofrecería sus comandos.
-      if (a !== agent() || revision !== composerRevision) return;
-      setCliCommands(menu.commands);
-      setSkills(menu.skills);
-      setSideCommand(menu.side_question ?? null);
-    };
-    void invoke<SlashMenu>("list_slash_menu", { provider: a }, composerOptions())
-      .then(poner)
-      .catch(() => poner({ commands: [], skills: [] }));
-  };
   // La pregunta al margen vive en memoria y es de una tarea: al cambiar de
   // tarea se pierde, y la respuesta que llegue tarde no se pinta en otra.
   const [alMargen, setAlMargen] = createSignal<AlMargen | null>(null);
@@ -2301,7 +2250,7 @@ export default function App() {
     // Con qué se puede trabajar es del workspace por lo mismo: la
     // credencial y el consentimiento cuelgan de él; el menú del otro
     // cliente ofrecería lo que este no tiene conectado.
-    void cargarSuperficies(true);
+    void composer.refreshSurfaces(true);
     setError(null);
     setMaterialError(null);
     setTaskSourcesError(null);
@@ -2416,7 +2365,7 @@ export default function App() {
     onCleanup(() => void closeTab.then((unlisten) => unlisten()));
 
     // Sin respuesta (una máquina apagada sin copia, en la web) se queda la lista de antes.
-    void invoke<Agent[]>("list_providers").then(setAgents).catch(() => {});
+    void composer.refreshProviders();
     // Lo primero de todo: sin workspace no hay dónde leer ni escribir. El
     // arranque migra lo que hubiera suelto de antes y devuelve cuál quedó
     // activo. Lo que el workspace tiene es su fuente de contexto, no «dónde
@@ -2479,7 +2428,7 @@ export default function App() {
         // Sin arranque no hay workspace: no hay nada que ofrecer. Dejarlo
         // en «leyendo» pintaría una caja muda esperando una respuesta que
         // ya falló; vacío es lo que hay, y encima está el error.
-        setSuperficies([]);
+        composer.unavailable();
       }
     };
     void arrancar(10);
@@ -2502,7 +2451,7 @@ export default function App() {
     // Las fuentes de skills también avisan por aquí y cambian el menú de `/`.
     const alCambiarMaterial = () => {
       void recargarMaterial();
-      cargarComandos(agent());
+      composer.refreshCommands(agent());
     };
     window.addEventListener("harness:sources", alCambiarMaterial);
     onCleanup(() =>
@@ -2979,11 +2928,11 @@ export default function App() {
       }
 
       if (kind === "model") {
-        if (session === sessionId()) setModel(text);
+        if (session === sessionId()) composer.runtimeFact({ kind: "model", value: text });
         return;
       }
       if (kind === "effort") {
-        if (session === sessionId()) setEffort(text);
+        if (session === sessionId()) composer.runtimeFact({ kind: "effort", value: text });
         return;
       }
 
@@ -3274,7 +3223,7 @@ export default function App() {
       if (!esDeLaAbierta(rec.session) || !esDelWorkspaceAbierto(rec.workspace))
         return;
       setVentana(ventanaDe([rec]));
-      cargarComandos(agent());
+      composer.refreshCommands(agent());
     });
     onCleanup(() => void usageEv.then((f) => f()));
 
@@ -3284,17 +3233,17 @@ export default function App() {
     // chat el mismo agente seguía diciendo «no está instalado», con el
     // campo muerto hasta cerrar y volver a abrir la app.
     const agentsEv = listen("providers", () => {
-      void invoke<Agent[]>("list_providers").then(setAgents).catch(() => {});
+      void composer.refreshProviders();
       // Y qué se puede usar, que es lo que decide el menú. Conectar una cuenta
       // desde Configuración añade una entrada aquí; desinstalar un CLI se la
       // lleva. Sin esto había que cerrar la app para verlo.
-      void cargarSuperficies(false);
+      void composer.refreshSurfaces(false);
     });
     onCleanup(() => void agentsEv.then((f) => f()));
 
     // Un plugin instalado o activado trae skills: sin esto `/typst` no se
     // reconoce hasta el siguiente turno.
-    const pluginsEv = listen("integrations-changed", () => cargarComandos(agent()));
+    const pluginsEv = listen("integrations-changed", () => composer.refreshCommands(agent()));
     onCleanup(() => void pluginsEv.then((f) => f()));
 
     // Cambió qué cuenta va a correr: cambió qué se puede usar.
@@ -3304,7 +3253,7 @@ export default function App() {
     // ofreciendo un agente que ya no puede correr, y el turno muere
     // contra el guarda con un muro de texto.
     const cuentaEv = listen("account", () => {
-      void cargarSuperficies(false);
+      void composer.refreshSurfaces(false);
       // El reloj de cupo cambia la activa sin pasar por Configuración: sin esto la franja enseña la agotada.
       setCuentasTocadas((n) => n + 1);
     });
@@ -3401,7 +3350,7 @@ export default function App() {
         if (workspace === workspaceActivo()) setProjectReadError(null);
       }).catch((error) => { if (workspace === workspaceActivo() && !asleep(error)) setProjectReadError(prosaDe(error)); });
       void reloadSpaces();
-      void cargarSuperficies(false);
+      void composer.refreshSurfaces(false);
       setCuentasTocadas((n) => n + 1);
       window.dispatchEvent(new CustomEvent("harness:tasks-changed"));
       // El mismo aviso que dan `NewAgent.tsx` y `AgentProfile.tsx`: sin él, lo
@@ -4060,119 +4009,7 @@ export default function App() {
       ? machineOf(id)?.headers["x-terminus-machine"] ?? active
       : draftMachine();
   });
-  const composerOptions = () => {
-    const machine = composerMachine();
-    const workspace = workspaceActivo();
-    return { headers: {
-      ...(machine && machine !== "local" ? { "x-terminus-machine": machine } : {}),
-      ...(workspace ? { "x-terminus-workspace": workspace } : {}),
-    } };
-  };
-  let composerRevision = 0;
-  const catalogosEnVuelo = new Map<string, Promise<void>>();
-  createEffect(on([composerMachine, workspaceActivo], () => {
-    composerRevision++;
-    catalogosEnVuelo.clear();
-    batch(() => {
-      setCatalogos({});
-      setSuperficies(null);
-    });
-    if (connected() && workspaceActivo()) void cargarSuperficies(false);
-  }, { defer: true }));
-  // La que dormía ya contesta: lo suyo de verdad reemplaza lo último que dijo.
-  createEffect(on(() => machines().find((m) => m.id === composerMachine())?.on, (encendida, antes) => {
-    if (encendida && antes === false && connected() && workspaceActivo()) void cargarSuperficies(false);
-  }, { defer: true }));
-
-  // El catálogo depende del agente. No se resetea el modelo elegido aquí: al
-  // abrir una sesión se fijan agente y modelo juntos, y un efecto que limpiara
-  // el modelo correría después y borraría el que se acaba de restaurar.
-  //
-  // Cada petición cuesta un proceso del CLI (`models::opencode_catalog`) y esto
-  // corre por cambio de agente y por panel montado: se reusa el catálogo que ya
-  // está, y dos peticiones del mismo agente a la vez son una.
-  //
-  // `forzar` es de quien sabe que cambió de qué depende la respuesta: la cuenta
-  // activa, la clave o el consentimiento del workspace.
-  function cargarModelos(a: string, forzar = false) {
-    if (!forzar && untrack(() => catalogos()[a])) return Promise.resolve();
-    const yaVa = catalogosEnVuelo.get(a);
-    if (yaVa) return yaVa;
-    const revision = composerRevision;
-    const pedido = withLastAnswer(composerMachine(), `list_models:${a}`, () => invoke<AgentModels>("list_models", { provider: a }, composerOptions()))
-      .then((catalogo) => {
-        if (revision !== composerRevision) return;
-        setCatalogos((actuales) => ({ ...actuales, [a]: catalogo }));
-        // La primera carga tiene que dejar una elección ejecutable. Este punto
-        // conoce qué petición terminó; un catálogo de otro agente no puede
-        // completar por accidente el modelo del agente activo.
-        if (a !== agent()) return;
-        const actual = superficies()?.find((s) => s.id === superficie());
-        const disponibles = catalogo.models.filter((m) => esDe(actual, m));
-        if (
-          disponibles.length > 0 &&
-          !disponibles.some((m) => m.id === model())
-        ) {
-          setModel(disponibles[0].id);
-        }
-      })
-      .catch(() => {
-        if (revision !== composerRevision) return;
-        setCatalogos((actuales) => ({ ...actuales, [a]: null }));
-      })
-      .finally(() => {
-        if (catalogosEnVuelo.get(a) === pedido) catalogosEnVuelo.delete(a);
-      });
-    catalogosEnVuelo.set(a, pedido);
-    return pedido;
-  }
-
-  // Envuelto y no pasado suelto: `on` le daría al segundo parámetro el valor
-  // anterior del agente, que es una cadena y fuerza la recarga siempre.
-  createEffect(on(agent, (a) => void cargarModelos(a)));
-
-  // Qué modos puede el agente elegido, y que el elegido siga siendo uno
-  // de ellos: cambiar de agente puede dejar el modo actual sin sostén
-  // —Codex y Antigravity solo pueden automático—, y un desplegable en
-  // «Manual» con Codex delante prometería un control que no existe. El
-  // backend niega el turno igual (`chat::send_message`), pero enterarse
-  // al mandar es tarde: se baja al primero disponible, y se ve.
-  createEffect(
-    on([agent, composerMachine, workspaceActivo], ([a]) => {
-      const revision = composerRevision;
-      if (!a) {
-        setModos([]);
-        return;
-      }
-      void invoke<ModoDePermiso[]>("list_permission_modes", { provider: a }, composerOptions())
-        .then((lista) => {
-          if (a !== agent() || revision !== composerRevision) return;
-          batch(() => {
-            setModos(lista);
-            const puede = lista.filter((m) => !m.falta);
-            if (!puede.some((m) => m.id === modo())) {
-              // Lo elige `modoInicial`: el del workspace o el último que la
-              // persona eligió a mano, y si este agente no lo sostiene, el que
-              // resolvió el backend.
-              setModo(modoInicial(lista, workspaceMode() ?? modoRecordado()));
-            }
-          });
-        })
-        .catch(() => { if (revision === composerRevision) setModos([]); });
-    }),
-  );
-
-  /**
-   * La caja en blanco arranca con el modo del workspace si eligió uno, salvo
-   * que su borrador ya traiga uno elegido en ella.
-   */
-  function startWithWorkspaceMode() {
-    const mode = workspaceMode();
-    if (!mode || sessionId() || borrador().configuration?.mode) return;
-    const list = modos();
-    setModo(list.some((m) => !m.falta) ? modoInicial(list, mode) : mode);
-  }
-  createEffect(on(workspaceMode, startWithWorkspaceMode, { defer: true }));
+  composer.installEffects();
 
   onMount(() => {
     const onDefaultMode = (e: Event) => {
@@ -4182,128 +4019,6 @@ export default function App() {
     window.addEventListener(DEFAULT_PERMISSION_MODE_EVENT, onDefaultMode);
     onCleanup(() => window.removeEventListener(DEFAULT_PERMISSION_MODE_EVENT, onDefaultMode));
   });
-
-  // Qué se puede elegir para trabajar. `inicial` solo en el arranque: ahí no
-  // hay nada elegido y hay que empezar por algo que se pueda usar. Después no
-  // se toca lo elegido: quien acaba de elegir una superficie no ve cómo se le
-  // mueve el selector por una consulta que termina tarde.
-  async function cargarSuperficies(inicial: boolean) {
-    const revision = composerRevision;
-    try {
-      const s = await withLastAnswer(composerMachine(), "list_surfaces", () => invoke<Superficie[]>("list_surfaces", {}, composerOptions()));
-      if (revision !== composerRevision) return;
-      const primera = s.find((x) => x.usable);
-      batch(() => {
-        setSuperficies(s);
-        // Al cambiar de workspace la tarea del frente se reabre mientras esta
-        // consulta sigue en vuelo; su agente lo fija `load_session`.
-        if (!inicial || sessionId()) return;
-        // El arranque no hereda el agente ni el modelo del workspace anterior.
-        // Si nada sirve, no se fabrica una selección con la primera fila del
-        // catálogo: la caja ofrece conectar algo y ningún modelo se finge.
-        setSuperficie(primera?.id ?? "");
-        if (!primera) {
-          setModel("");
-          setEffort("");
-        } else if (primera.provider !== agent()) {
-          setAgent(primera.provider);
-          setModel("");
-          setEffort("");
-        }
-      });
-      const agentes = new Set(
-        s.filter((x) => x.usable || x.provider === agent()).map((x) => x.provider),
-      );
-      // Envuelto por lo mismo que el efecto de arriba: `map` le pasaría el
-      // índice como `forzar`, y el primero de la lista no forzaría nunca.
-      await Promise.all([...agentes].map((a) => cargarModelos(a, !inicial)));
-    } catch {
-      if (revision !== composerRevision) return;
-      setSuperficies([]);
-    }
-  }
-
-  // La superficie sigue al agente y al modelo, y no al revés: los tres
-  // pueden moverse sin pasar por el selector —abrir una tarea fija
-  // agente y modelo, y el catálogo llega después de preguntarle al CLI.
-  // Sin esto, una tarea de modelo gratuito abriría enseñando «OpenCode»
-  // con su desplegable vacío. `superficieDe` conserva lo ya elegido si
-  // sigue sirviendo.
-  createEffect(
-    on([superficies, agent, model, models, sessionId], ([sups, a, m, cat, sesion]) => {
-      if (!sups) return;
-  // Una conversación nueva empieza por algo que pueda responder. Si la
-  // selección dejó de servir tras volver de Configuración, se mueve a la
-  // primera usable; si no hay ninguna, se vacía. Solo una tarea guardada
-  // conserva su superficie caída: cambiarle el agente en silencio cambiaría
-  // la tarea.
-      if (!sesion) {
-        const elegida = sups.find((s) => s.id === superficie());
-        if (!elegida?.usable) {
-          const primera = sups.find((s) => s.usable);
-          batch(() => {
-            setSuperficie(primera?.id ?? "");
-            if (primera && primera.provider !== a) {
-              setAgent(primera.provider);
-              setModel("");
-              setEffort("");
-            }
-          });
-          return;
-        }
-      }
-      // Sin ninguna para este agente —una fila retirada de la tabla, o una que
-      // la app dejó de saber conducir— la selección se vacía en vez de quedarse
-      // en la anterior: enseñar otra superficie sería decir que la tarea corre
-      // con algo que no es lo suyo. La caja lo dice y no deja mandar.
-      const id = superficieDe(sups, a, m, cat?.models ?? [], superficie());
-      if ((id ?? "") !== superficie()) setSuperficie(id ?? "");
-    }),
-  );
-
-  // El modelo elegido tiene que ser de la superficie elegida: ningún CLI
-  // publica con qué modelo corre si no se le pasa, y la única forma de
-  // que lo leído sea lo que corre es elegirlo y pasarlo. Se elige dentro
-  // de la superficie y no con `models[0]`: con el catálogo partido en
-  // dos, el primero de la lista entera puede ser de pago en «Modelos
-  // Free». Uno que ya no está en el catálogo sí se cambia.
-  createEffect(
-    on([superficie, superficies, models], ([id, sups, cat]) => {
-      const s = sups?.find((x) => x.id === id);
-      const lista = (cat?.models ?? []).filter((m) => esDe(s, m));
-      if (lista.length === 0) return;
-      if (!lista.some((m) => m.id === model())) setModel(lista[0].id);
-    }),
-  );
-
-  // Lo que el menú del chat ofrece, y `null` mientras no se ha leído. Se
-  // compone aquí y no dentro del JSX: un prop compuesto con `&&` entrega
-  // `false`, no `null`, mientras `superficies()` no tiene valor —el
-  // compilador de Solid lo booleaniza para memoizarlo—, y `false.find` lanza
-  // en el primer render. Mismo defecto que documenta AGENTS.md § monta, con
-  // `Setup`.
-  const menuDeSuperficies = () => {
-    const todas = superficies();
-    return todas && paraElMenu(todas, superficie());
-  };
-
-  // Autorizar en Configuración cambia qué hay que ofrecer aquí: el catálogo
-  // de un agente que manda material fuera sin pedir credencial sale vacío
-  // hasta que este workspace lo consiente (`runtime/models.rs`). Sin esto, la caja de
-  // chat se quedaba con la lista vacía hasta cambiar de agente y volver.
-  // Aceptar es además lo que hace aparecer «Modelos gratuitos»: la misma consulta
-  // que decide si se puede usar es la que hay que rehacer.
-  onMount(() => {
-    const refrescar = () => {
-      void cargarSuperficies(false);
-    };
-    window.addEventListener("harness:consentimiento", refrescar);
-    onCleanup(() => window.removeEventListener("harness:consentimiento", refrescar));
-  });
-
-  // Lo que el menú de la barra ofrece depende del agente y del workspace, no
-  // del proyecto: sus comandos, y las skills que la proyección pone en su carpeta.
-  createEffect(on([agent, composerMachine, workspaceActivo], ([a]) => cargarComandos(a)));
 
   /**
    * Lo que esta tarea le va a adjuntar al turno: lo que ya lee más lo que está
@@ -4527,9 +4242,7 @@ export default function App() {
       // Reanudar conserva con qué corrió: una sesión continuada con otro agente
       // o con otro modelo ya no es la misma sesión.
       // Una tarea de un motor anterior guarda `opencode-zen`; el modelo decide si es OpenCode o el Free Router.
-      setAgent(canonicalAgentId(s.provider, modeloDeSubtarea(s)));
-      setModel(modeloDeSubtarea(s) ?? "");
-      setEffort(s.effort ?? "");
+      composer.resumeTask({ provider: canonicalAgentId(s.provider, modeloDeSubtarea(s)), model: modeloDeSubtarea(s) ?? "", effort: s.effort ?? "" });
       // El chat de un encargado no es una tarea que se reabre para releer
       // su historial: es su conversación de siempre, y su perfil dice con
       // qué prefiere seguir. Una preferencia guardada gana a lo último que
@@ -4542,9 +4255,7 @@ export default function App() {
           );
           const perfil = perfiles[s.agent];
           if (!current()) return;
-          if (perfil?.provider) setAgent(perfil.provider);
-          if (perfil?.model) setModel(perfil.model);
-          if (perfil?.effort) setEffort(perfil.effort);
+          if (perfil) composer.useProfile(perfil);
         } catch {
           // Un perfil que no se pudo leer deja la caja con lo de la sesión.
         }
@@ -4553,7 +4264,7 @@ export default function App() {
   // existiera no lo dice, y ahí se deja vacío. El efecto de arriba lo baja al
   // que el agente sostenga, lo mismo que hace el backend con lo que nadie
   // eligió (`agents::Permisos::resolver`).
-      setModo(s.permission_mode ?? "");
+      composer.runtimeFact({ kind: "mode", value: s.permission_mode ?? "" });
       // Lo que esta tarea ya lee. No son pendientes: están guardados en ella.
       setAdjuntas(s.sources ?? []);
       editarBorrador(id, (b) => ({
@@ -4573,10 +4284,7 @@ export default function App() {
           project: proyecto, id, history_request: { version: 1, kind: "state" },
         }, deLaTarea(id));
         if (!current()) return;
-        setAgent(canonicalAgentId(state.provider, modeloDeSubtarea(state)));
-        setModel(modeloDeSubtarea(state) ?? "");
-        setEffort(state.effort ?? "");
-        setModo(state.permission_mode ?? "");
+        composer.resumeTask({ provider: canonicalAgentId(state.provider, modeloDeSubtarea(state)), model: modeloDeSubtarea(state) ?? "", effort: state.effort ?? "", mode: state.permission_mode ?? "" });
         setAdjuntas(state.sources ?? []);
         restoreSessionConfiguration(state);
         void refreshFolder(proyecto, id);
@@ -4679,11 +4387,7 @@ export default function App() {
         if (sigue?.project !== enProyecto || sigue.name !== name) return;
         const perfil = perfiles[name];
         if (!perfil) return;
-        batch(() => {
-          if (perfil.provider) setAgent(perfil.provider);
-          if (perfil.model) setModel(perfil.model);
-          if (perfil.effort) setEffort(perfil.effort);
-        });
+        composer.useProfile(perfil);
       })
       .catch(() => {});
   }
@@ -4722,7 +4426,7 @@ export default function App() {
     // Conectar una cuenta, pegar una clave o activar los gratuitos
     // ocurre ahí dentro, y es justo lo que decide qué ofrece el menú del
     // chat. Sin esto habría que reabrir la app para verlo.
-    void cargarSuperficies(false);
+    void composer.refreshSurfaces(false);
   }
 
   function openAgentProfile(enProyecto: string, name: string) {
@@ -4770,7 +4474,7 @@ export default function App() {
       paneles.showDraft();
       setSessionId(null);
       restoreDraftConfiguration();
-      startWithWorkspaceMode();
+      composer.startNewDraft();
       setFolder(null);
     // Lo que la tarea que se deja ya lee es suyo; el borrador de la
     // conversación en blanco es el suyo y no se toca.
@@ -5699,7 +5403,7 @@ export default function App() {
     editarBorrador(clave, (draft) => ({
       ...draft,
       configuration: {
-        agent: agent(), surface: superficie(), model: model(), effort: effort(),
+        ...composer.snapshot(),
         // Solo elegido a mano: guardado al elegir modelo, taparía el del workspace.
         mode: mode ?? draft.configuration?.mode,
       },
@@ -5715,35 +5419,16 @@ export default function App() {
    * CLI, el pendiente ya no parte del que la sesión tiene y no se aplica.
    */
   function restoreSessionConfiguration(session?: Session) {
-    const { configuration, provider } = borrador();
-    if (configuration) {
-      setModel(configuration.model);
-      setEffort(configuration.effort);
-      if (configuration.mode) setModo(configuration.mode);
-    }
-    // El traspaso pendiente manda sobre el de la sesión: al volver a la
-    // tarea, el gesto sigue en pie y la caja dice el que se confirmó.
-    if (provider && (!session || session.provider === provider.from)) setAgent(provider.to);
+    composer.restoreSessionDraft(borrador(), session);
   }
 
   function restoreDraftConfiguration() {
-    const configuration = borrador().configuration;
-    if (!configuration) return;
-    setAgent(configuration.agent);
-    setSuperficie(configuration.surface);
-    setModel(configuration.model);
-    setEffort(configuration.effort);
-    if (configuration.mode) setModo(configuration.mode);
+    composer.restoreDraft(borrador().configuration);
   }
-
-  // Sin elegir sale escrito el nivel que el catálogo dice que el agente usa:
-  // Codex conserva en su hilo el último pedido, y callarlo dejaba la caja
-  // diciendo «medium» con el turno corriendo en el anterior.
-  const effortDelTurno = () =>
-    effort() || models()?.models.find((m) => m.id === model())?.default_effort || null;
+  const effortDelTurno = composer.effortForTurn;
 
   function chooseEffort(id: string) {
-    setEffort(id);
+    composer.chooseEffort(id);
     saveDraftConfiguration();
     // Como el modo en `elegirModo`: el turno vivo arrancó con el nivel de
     // entonces y no lo relee.
@@ -5835,12 +5520,9 @@ export default function App() {
 
   /** Aplica lo elegido a la caja del borrador, con o sin traspaso pendiente. */
   function aplicarOpcionDeModelo(opcion: OpcionDeModelo, clave: string, provider?: HandoverPending | null) {
-    const nivel = effortAlCambiarDeModelo(effort(), opcion.model);
+    let nivel = "";
     batch(() => {
-      setSuperficie(opcion.superficie);
-      setAgent(opcion.agent);
-      setModel(opcion.model.id);
-      setEffort(nivel);
+      nivel = composer.selectModel(opcion);
       if (provider !== undefined) editarBorrador(clave, (b) => ({ ...b, provider: provider ?? undefined }));
       saveDraftConfiguration(undefined, clave);
     });
@@ -5912,8 +5594,7 @@ export default function App() {
    * cambiar con qué arrancan las próximas.
    */
   function elegirModo(id: string) {
-    recordarModo(id);
-    setModo(id);
+    composer.chooseMode(id);
     saveDraftConfiguration(id);
     const sesion = sessionId();
     if (!sesion || !busy()) return;
@@ -7653,22 +7334,16 @@ export default function App() {
         onAdjuntos={setArchivos}
         onAgregarAdjuntos={agregarArchivos}
         agent={agent()}
-        modelOptions={composerOptions()}
+        modelOptions={composer.options()}
         onCreditsPrepare={async () => {
           const prepare = capabilities().danilCredits?.prepare;
           if (!prepare) return;
-          const revision = composerRevision;
-          const options = composerOptions();
-          await prepare(options.headers);
-          if (revision !== composerRevision) return;
-          await cargarSuperficies(false);
-          if (revision !== composerRevision) return;
-          await cargarModelos(OPENCODE, true);
+          await composer.prepareCredits(prepare);
         }}
         /* Lo utilizable, más la superficie de la tarea abierta si dejó de
            serlo: una tarea viva no puede cambiar de agente en silencio. El
            `&&` va dentro del accesor y no aquí — ver `menuDeSuperficies`. */
-        superficies={menuDeSuperficies()}
+        superficies={composer.menu()}
         superficie={superficie()}
         /* La salida del estado vacío: es la sección, no una superficie.
            Apuntaba al id de la primera —«claude», «opencode»—, válido
@@ -7818,8 +7493,7 @@ export default function App() {
             // pisarían el agente/modelo de la que sí lo tiene.
             if (pp.sesion !== sessionId() || busy()) return;
             batch(() => {
-              if (elegidoAgent) setAgent(elegidoAgent);
-              setModel(elegidoModel ?? "");
+              composer.resumeTask({ provider: elegidoAgent || agent(), model: elegidoModel ?? "", effort: effort() });
               saveDraftConfiguration();
             });
           }}
