@@ -1,3 +1,4 @@
+import { createThreadsStore } from "../features/threads";
 import { createComposerStore } from "../features/composer";
 import { createWorkspaceStore } from "../features/workspace";
 import { createProjectsStore } from "../features/projects";
@@ -51,27 +52,18 @@ import { comandoEscrito } from "../features/chat/slashOutput";
 import { ThreadSearch, type SearchSurface, type ThreadSearchTarget } from "../features/chat/ThreadSearch";
 import TranscriptSource from "../features/chat/TranscriptSource";
 import type { Lectura } from "../features/chat/threadWindow";
-import { lotesDeDeltas } from "../features/chat/deltaFrames";
-import { hasOlder, hasRecentGap, HistoryPager, type OlderState } from "../features/chat/history";
-import { agentSwitchBlocked, canHandOverTask, handoverInForce, handoverMatches, MACHINE_UNANNOUNCED, shellCli, type HandoverPending, type HandoverState } from "../features/chat/handover";
+import { agentSwitchBlocked, canHandOverTask, handoverInForce, handoverMatches, MACHINE_UNANNOUNCED, shellCli, type HandoverPending } from "../features/chat/handover";
 import {
-  anexarDeltas,
-  anexarImagen,
-  anexarRazonamiento,
   type ChatEvent,
   type ChatExportado,
   clave,
-  mcpCallFromName,
   mensajesDelHilo,
   modeloDeSubtarea,
   type PreguntaEvent,
   type Session,
   type SessionEvent,
   type Signatures,
-  type TranscriptOrigin,
   type Turn,
-  tramoGuardado,
-  transcripcion,
 } from "../features/chat/transcript";
 const VisorDeArchivo = lazy(() => import("../features/code/FileViewer"));
 import { avisarDeLosArboles } from "../features/code/refresh";
@@ -173,7 +165,7 @@ import { fondoDeChat, fondoPropio, imagenDelWorkspace, veloDeFondo } from "../li
 import { capabilities, openMachineScreen } from "../lib/platform";
 import { pedirElCampo } from "../lib/focus";
 import { lastRoster, rememberRoster } from "../lib/handlerRoster";
-import { aplicarLenguaDeWorkspace, clavesConocidas, t } from "../lib/i18n";
+import { aplicarLenguaDeWorkspace, t } from "../lib/i18n";
 import { attachmentsOn, NotMovable } from "../lib/remoteAttachments";
 import { ATTACHMENT_DOCUMENTS_FEATURE, PROVIDER_HANDOFF_FEATURE, SESSION_MODEL_FEATURE } from "@terminus/protocol";
 import { invoke } from "../lib/invoke.ts";
@@ -211,7 +203,7 @@ import {
 import { createPref, escribirPref, leerPref } from "../lib/prefs";
 import type { Frase } from "../lib/prose";
 import { type Recipient, type RecipientCandidate, recipientCandidatesOf, type SenderTask, trimDraft } from "../lib/recipients";
-import { conservar, conservarEnOrden, conservarPorClave, sessionRefresh } from "../lib/sessionRefresh";
+import { conservar, sessionRefresh } from "../lib/sessionRefresh";
 import { readShellCache, shellCacheWriter } from "../lib/shellCache";
 import {
   accionDeAtajo,
@@ -228,7 +220,7 @@ import {
   type Space,
   spaceName,
 } from "../lib/spaces";
-import { type Paso, pasoDe } from "../lib/steps";
+import { pasoDe } from "../lib/steps";
 import {
   type ArtifactTab,
   appendToStoredStrip,
@@ -1121,195 +1113,23 @@ export default function App() {
   const { agents, agent, superficies, superficie, catalogos, models, modelosParaAgentes,
     model, effort, modo, modos, skills, cliCommands, sideCommand } = composer;
   onCleanup(composer.dispose);
-  // Cada hilo separa lo persistido de lo que construyen los eventos del turno
-  // en curso: si lo propio viviera en `vivo`, releer del disco al volver a
-  // una tarea que sigue contestando lo pintaría dos veces, una del disco y
-  // otra de la memoria.
-
-  // Un hilo por sesión y no una señal para la abierta: sin eso, lo que
-  // contesta una tarea que no se mira no tiene dónde caer, y volver a ella
-  // enseña la pregunta sin la respuesta hasta que el turno cierre. Tienen
-  // hilo la abierta, las de una pestaña, y las que siguen contestando;
-  // cambiar de workspace los suelta todos (`aplicar`).
-  // `guardados`: los ids de los turnos que trajo la última lectura (`mensajesDelHilo`).
-  type Hilo = { base: Msg[]; vivo: Msg[]; guardados?: ReadonlySet<string> };
-  const SIN_HILO: Hilo = { base: [], vivo: [] };
-  const workspaceThreads = new Map<string, Record<string, Hilo>>();
-  const [hilos, setHilos] = createSignal<Record<string, Hilo>>({});
-  // El hilo de la conversación abierta, memo aparte y no derivado en línea:
-  // `setHilos` reemplaza el registro entero en cada evento pero conserva por
-  // referencia el `Hilo` que no tocó, y un memo sobre el objeto no propaga
-  // cuando lo que cambió fue el de otra tarea. Sin él, `msgs` recalculaba con
-  // cada delta de cualquier tarea del workspace: la transcripción saltaba al
-  // final aunque nada hubiera cambiado aquí.
-  const hiloAbierto = createMemo(() => hilos()[claveDelHilo()]);
-  const msgs = createMemo<Msg[]>(() => {
-    const h = hiloAbierto();
-    return h ? mensajesDelHilo(h) : [];
-  });
-  // De qué tarea se está trayendo la transcripción del disco, si de alguna.
-  // `msgs` no distingue «no tiene mensajes» de «todavía no han llegado»:
-  // abrir una tarea es síncrono hasta `setSessionId`, y hasta que
-  // `load_session` vuelve el chat pinta su estado de conversación nueva.
-  // Guarda el id y no un booleano: las aperturas se solapan, y la respuesta
-  // tardía de la primera no debe apagar el indicador de la segunda.
-  const [cargandoHilo, setCargandoHilo] = createSignal<string | null>(null);
-  /** Lo que construyen los eventos del turno en curso. */
-  const escribirVivo = (session: string, fn: (vivo: Msg[]) => Msg[], workspace = workspaceActivo()) => {
-    if (workspace && workspace !== workspaceActivo()) {
-      const threads = workspaceThreads.get(workspace) ?? {};
-      const thread = threads[session] ?? SIN_HILO;
-      workspaceThreads.set(workspace, { ...threads, [session]: { ...thread, vivo: fn(thread.vivo) } });
-      return;
-    }
-    setHilos((hs) => {
-      const h = hs[session] ?? SIN_HILO;
-      return { ...hs, [session]: { ...h, vivo: fn(h.vivo) } };
-    });
-  };
-  // Los deltas de un cuadro entran juntos; todo lo demás que toca un hilo vacía antes lo pendiente.
-  const deltasPorCuadro = lotesDeDeltas((session, workspace, deltas) =>
-    escribirVivo(session, (m) => anexarDeltas(m, deltas), workspace),
-  );
-  /** Un rechazo del motor como aviso en la conversación de esa tarea. */
-  function avisar(sesion: string) {
-    return (e: unknown) => anexar(sesion, (m) => [...m, { role: "system", text: prosaDe(e), meta: "aviso" }]);
-  }
-  const anexar = (session: string, fn: (vivo: Msg[]) => Msg[], workspace = workspaceActivo()) => {
-    deltasPorCuadro.vaciar();
-    escribirVivo(session, fn, workspace);
-  };
-  /** Lo que ya está —o va a estar— en disco. */
-  const asentar = (session: string, fn: (base: Msg[]) => Msg[]) => {
-    deltasPorCuadro.vaciar();
-    setHilos((hs) => {
-      const h = hs[session] ?? SIN_HILO;
-      return { ...hs, [session]: { ...h, base: fn(h.base) } };
-    });
-  };
-  // La transcripción recién leída del disco. `vivo` se vacía solo al
-  // cerrarse el turno; al abrir una tarea que sigue contestando se
-  // conserva, salvo el tramo que `AskUserQuestion` ya persistió
-  // (`guardar_segmento_pregunta`): ese turno llega por partida doble, de
-  // `base` y de `vivo`. Se identifican por `turno`; a `base` se le copia
-  // su `questionRequestId`, o la respuesta cae al canal de archivo.
-  type IdsDeTurnos = ReadonlySet<string>;
-  const releer = (session: string, leida: Msg[], vaciarVivo: boolean, antepuesta = false, guardados?: IdsDeTurnos, cola?: IdsDeTurnos) => {
-    deltasPorCuadro.vaciar();
-    setHilos((hs) => {
-      const previo = hs[session];
-      const vivoPrevio = previo?.vivo ?? [];
-      const ataduras = new Map(
-        vivoPrevio
-          .filter((m) => m.turno && m.questionRequestId)
-          .map((m) => [m.turno as string, m.questionRequestId]),
-      );
-      // `cola`: lo que acaba de leerse aunque la ventana no lo tenga, porque se quedó atrás leyendo.
-      const persistidos = new Set([
-        ...leida.map((m) => m.turno).filter((t): t is string => !!t),
-        ...(cola ?? []),
-      ]);
-      const atada =
-        ataduras.size === 0
-          ? leida
-          : leida.map((m) =>
-              m.turno && ataduras.has(m.turno)
-                ? { ...m, questionRequestId: ataduras.get(m.turno) }
-                : m,
-            );
-      // El chat identifica filas por referencia: un objeto nuevo por mensaje remonta el hilo entero.
-      const base = (antepuesta ? conservarPorClave : conservarEnOrden)(previo?.base ?? [], atada);
-      const vivo = vaciarVivo
-        ? []
-        : vivoPrevio.filter((m) => !m.turno || !persistidos.has(m.turno));
-      const mismoVivo = vivo.length === vivoPrevio.length;
-      const tramos = guardados ?? previo?.guardados;
-      if (previo && base === previo.base && mismoVivo && tramos === previo.guardados) return hs;
-      return { ...hs, [session]: { base, vivo: mismoVivo ? vivoPrevio : vivo, guardados: tramos } };
-    });
-  };
-  const idsDeTurnos = (turns: readonly Turn[]) => new Set(turns.flatMap((t) => (t.id ? [t.id] : [])));
-  // Por tarea: `undefined` es que aún no se abrió, `null` que salió de `session.json`.
-  const [origenes, setOrigenes] = createSignal<Readonly<Record<string, TranscriptOrigin | null>>>({});
-  // Por tarea, la máquina apagada que la corre (`offline` de la lectura) y la que se está
-  // encendiendo porque se le mandó algo.
-  const [apagadas, setApagadas] = createSignal<Readonly<Record<string, string>>>({});
-  const [encendiendo, setEncendiendo] = createSignal<Readonly<Record<string, string>>>({});
-  // Por tarea, lo que `load_session` dijo de cambiar de CLI. Se relee al abrir
-  // y al cerrar cada turno, que es cuando el motor puede haber cambiado de idea.
-  const [traspasos, setTraspasos] = createSignal<Readonly<Record<string, HandoverState>>>({});
-  const anotar = (set: typeof setApagadas, id: string, machine: string | null) =>
-    set((all) => {
-      if ((all[id] ?? null) === machine) return all;
-      const { [id]: _, ...resto } = all;
-      return machine ? { ...resto, [id]: machine } : resto;
-    });
-  // Los turnos de cada tarea que trajo `service history`, desde `start`; lo anterior se pide al subir.
-  const historias = new Map<string, HistoryPager<Session["turns"][number]>>();
-  const proyectosDeHistoria = new Map<string, string>();
-  const leyendoLejos = new Set<string>();
-  const [conAntiguos, setConAntiguos] = createSignal<Readonly<Record<string, boolean>>>({});
-  const [conRecientes, setConRecientes] = createSignal<Readonly<Record<string, boolean>>>({});
-  const [estadoAntiguos, setEstadoAntiguos] = createSignal<Readonly<Record<string, OlderState>>>({});
-  const marcarAntiguos = (id: string, pager: HistoryPager<unknown>) => {
-    const loaded = pager.loaded;
-    if (loaded) {
-      setConAntiguos((all) => (!!all[id] === hasOlder(loaded) ? all : { ...all, [id]: hasOlder(loaded) }));
-      const recent = hasRecentGap(loaded);
-      setConRecientes(all => !!all[id] === recent ? all : { ...all, [id]: recent });
-    }
-    setEstadoAntiguos(all => (all[id] ?? "idle") === pager.older ? all : { ...all, [id]: pager.older });
-  };
-  const [colaSuelta, setColaSuelta] = createSignal<Readonly<Record<string, Msg[]>>>({});
-  const historiaDe = (id: string) => {
-    const hay = historias.get(id);
-    if (hay) return hay;
-    const pager: HistoryPager<Session["turns"][number]> = new HistoryPager({
-      read: (before) => leerTarea(proyectosDeHistoria.get(id) ?? project(), id, before),
-      onChange: () => marcarAntiguos(id, pager),
-    });
-    historias.set(id, pager);
-    return pager;
-  };
-  // Con el stream empujado el motor sabe paginar: abrir trae los últimos turnos y no la transcripción entera.
   let historialPaginado = false;
-  const leerTarea = async (project: string, id: string, before: number | null = null) => {
-    proyectosDeHistoria.set(id, project);
-    const result = historialPaginado
-      ? await invoke<Session>("load_history", { project, id, before }, deLaTarea(id))
-      : await invoke<Session>("load_session", { project, id, history_request: { version: 1, before } }, deLaTarea(id));
-    if (result.history?.version === 1) {
-      result.turns = result.turns.map(turn => ({ ...turn,
-        history_refs: turn.history_refs?.map(ref => ({ ...ref, project, session: id })),
-      }));
-    }
-    return result;
-  };
-  /**
-   * La página anterior a lo cargado de `id`, lista para anteponerse: devuelve con qué
-   * ponerla, para que el hilo la monte sin mover lo que se lee. `null` si no hay o falló.
-   */
-  async function cargarAntiguos(project: string, id: string): Promise<(() => void) | null> {
-    const pager = historias.get(id);
-    if (!pager) return null;
-    proyectosDeHistoria.set(id, project);
-    const generation = workspaceContext.generation();
-    const poner = await pager.fetchOlder();
-    pintarHistoria(id, pager, false);
-    if (!poner || generation !== workspaceContext.generation()) return null;
-    return () => {
-      if (generation !== workspaceContext.generation()) return;
-      poner();
-      pintarHistoria(id, pager, true);
-    };
+  const threads = createThreadsStore({
+    scope: { workspace: workspaceActivo, generation: workspaceContext.generation, paged: () => historialPaginado },
+    activeSession: sessionId, project, invoke, route: deLaTarea, liveThreads: () => liveThreads,
+  });
+  onCleanup(threads.dispose);
+  const hilos = threads.rows, hiloAbierto = threads.current, msgs = threads.messages, cargandoHilo = threads.loading;
+  const origenes = threads.origins, apagadas = threads.offline, encendiendo = threads.waking, traspasos = threads.handovers;
+  const conAntiguos = threads.olderAvailable, conRecientes = threads.recentAvailable, estadoAntiguos = threads.olderStatus, colaSuelta = threads.recentTail;
+  const leerTarea = threads.read, cargarAntiguos = threads.older, soltarHilo = threads.drop;
+  function avisar(sesion: string) {
+    return (e: unknown) => threads.appendLive(sesion, [{ role: "system", text: prosaDe(e), meta: "aviso" }]);
   }
-  /** El hilo de lo que tiene la ventana de `id`; separado de lo más reciente si se quedó atrás. */
-  function pintarHistoria(id: string, pager: HistoryPager<Session["turns"][number]>, antepuesta: boolean, clear = false, leidos?: ReadonlySet<string>) {
-    const loaded = pager.loaded;
-    if (!loaded) return;
-    const leida = transcripcion(loaded.turns, loaded.start);
-    if (hasRecentGap(loaded)) leida.push({ role: "system", text: "", meta: "history_gap", clave: "history_gap" });
-    releer(id, leida, clear, antepuesta, idsDeTurnos(loaded.turns), leidos);
+  function loadResult(id: string, session: Session, clear: boolean, generation: number) {
+    if (!threads.acceptSession(id, session, clear, generation)) return;
+    drafts.invalidateProvider(id, session.provider);
+    if (id === sessionId() && (session.subagent || session.parent)) composer.useProfile({ model: modeloDeSubtarea(session), effort: session.effort });
   }
   /**
    * La máquina que se enciende para el mensaje que la tarea de esta celda acaba
@@ -1330,58 +1150,6 @@ export default function App() {
     const generation = workspaceContext.generation();
     void leerTarea(project(), id).then((s) => loadResult(id, s, false, generation)).catch(() => {});
   }));
-  function loadResult(id: string, session: Session, clear: boolean, generation: number) {
-    if (generation !== workspaceContext.generation()) return;
-    anotar(setApagadas, id, session.offline?.machine ?? null);
-    setTraspasos((all) => {
-      const previo = all[id];
-      const ahora = {
-        can: session.can_hand_over === true,
-        blocked: session.hand_over_blocked ?? null,
-        provider: session.provider ?? null,
-        model: session.model ?? null,
-        effort: session.effort ?? null,
-      };
-      if (
-        previo &&
-        previo.can === ahora.can &&
-        previo.blocked === ahora.blocked &&
-        previo.provider === ahora.provider &&
-        previo.model === ahora.model &&
-        previo.effort === ahora.effort
-      ) return all;
-      return { ...all, [id]: ahora };
-    });
-    // Otro cliente pudo cambiar el CLI: un traspaso confirmado que ya no parte
-    // del que la sesión tiene caduca, y el siguiente envío no lo resucita.
-    drafts.invalidateProvider(id, session.provider);
-    const pager = historiaDe(id);
-    const loaded = pager.accept(session.turns, session.history, { reading: leyendoLejos.has(id) });
-    setColaSuelta((all) => {
-      if (hasRecentGap(loaded)) return { ...all, [id]: transcripcion(session.turns, session.history?.start ?? 0) };
-      if (!(id in all)) return all;
-      const { [id]: _, ...resto } = all;
-      return resto;
-    });
-    pintarHistoria(id, pager, false, clear, idsDeTurnos(session.turns));
-    const origen = session.transcript ?? null;
-    setOrigenes((o) =>
-      id in o && o[id]?.file === origen?.file && o[id]?.from_cli === origen?.from_cli ? o : { ...o, [id]: origen },
-    );
-    if (id !== sessionId() || !(session.subagent || session.parent)) return;
-    const modelo = modeloDeSubtarea(session);
-    composer.useProfile({ model: modelo, effort: session.effort });
-  }
-  const soltarHilo = (session: string) => {
-    deltasPorCuadro.vaciar();
-    setHilos((hs) => {
-      historias.get(session)?.close();
-      historias.delete(session);
-      if (!(session in hs)) return hs;
-      const { [session]: _, ...resto } = hs;
-      return resto;
-    });
-  };
   // Lo contestado a medias de cada pregunta, por sesión y turno: los ids
   // `q1..qN` se repiten entre turnos. Aquí y no en la tarjeta, que se desmonta
   // con su pestaña.
@@ -1533,7 +1301,7 @@ export default function App() {
     scope: () => ({ workspace: workspaceActivo(), generation: workspaceContext.generation(), session: sessionId(), project: project() }),
     readQueue: (scope) => invoke<Encolado[]>("load_queue", { project: scope.project, session: scope.session }, opcionesDeLaTarea(scope.session, scope.workspace)),
     writeQueue: (scope, queued) => invoke("save_queue", { project: scope.project, session: scope.session, queued }, opcionesDeLaTarea(scope.session, scope.workspace)),
-    onSaveFailure: (error, scope) => anexar(scope.session, messages => [...messages, { role: "system", text: t("shell.queue.save_failed", { error: prosaDe(error) }), meta: "aviso" }]),
+    onSaveFailure: (error, scope) => threads.appendLive(scope.session, [{ role: "system", text: t("shell.queue.save_failed", { error: prosaDe(error) }), meta: "aviso" }]),
   });
   onCleanup(taskQueues.dispose);
   const cola = taskQueues.items;
@@ -2082,14 +1850,10 @@ export default function App() {
   // El tema de terminal sigue al workspace por lo mismo: es cómo se distingue
   // en qué cliente se está sin leer el nombre.
     aplicarTemaDeTerminal(activo?.terminal_theme ?? null);
-    for (const pager of historias.values()) pager.close();
+    threads.saveWorkspace(transition.previous);
     sessionLists.reset();
     const generation = workspaceContext.generation();
     const previousWorkspace = transition.previous;
-    deltasPorCuadro.vaciar();
-    if (previousWorkspace) workspaceThreads.set(previousWorkspace, Object.fromEntries(
-      Object.entries(hilos()).filter(([id]) => liveThreads.has(liveThreadKey(previousWorkspace, id))),
-    ));
     taskQueues.workspaceChanged(previousWorkspace);
     workspaceContext.activate(transition);
     // «Ejecutar en» dice qué tiene cada máquina del workspace abierto: con otro, se relee.
@@ -2118,7 +1882,7 @@ export default function App() {
     paneles.reset();
     setSessionId(null);
     setProyectoAbierto(null);
-    setHilos(a.active ? workspaceThreads.get(a.active) ?? {} : {});
+    threads.activateWorkspace(a.active);
     setDesdeDeTurno({});
     drafts.reset();
     setVivas([]);
@@ -2215,9 +1979,9 @@ export default function App() {
     // esperándola, la pestaña de delante salía vacía y sin indicador.
     const delante = restored ? pestanas.open().find((p) => p.id === restored) : undefined;
     if (delante && isTaskTab(delante) && !hilos()[delante.session]) {
-      setCargandoHilo(delante.session);
+      threads.startLoading(delante.session);
       void loadThread(delante.project, delante.session).finally(() =>
-        setCargandoHilo((c) => (c === delante.session ? null : c)));
+        threads.finishLoading(delante.session));
     }
     const enFrente = paneles.activeTabAt(paneles.activeSite());
     await reconcileActiveTurns();
@@ -2405,13 +2169,7 @@ export default function App() {
         taskQueues.releaseDraft(session);
       }
       marcarQuieta(session);
-      anexar(session, (messages) =>
-        messages.some((m) => m.paso?.corriendo)
-          ? messages.map((m) =>
-              m.paso?.corriendo ? { ...m, paso: { ...m.paso, corriendo: false } } : m,
-            )
-          : messages,
-      );
+      threads.finishSteps(session);
       // Igual que en el `done`: el turno se acabó, y con él la espera de sus
       // hijas. Este camino es el del turno que cerró sin que su evento llegara.
       setEnFondo((ids) => ids.filter((id) => id !== session));
@@ -2420,7 +2178,7 @@ export default function App() {
       soltarTerminal(session);
       // `fallo` y no `aviso`: un aviso se pliega dentro del registro del turno,
       // y éste tiene que verse junto a la respuesta que se perderá.
-      if (unsaved) anexar(session, (messages) => [...messages, { role: "system", text: t("chat.turn.unsaved"), meta: "fallo" }]);
+      if (unsaved) threads.appendLive(session, [{ role: "system", text: t("chat.turn.unsaved"), meta: "fallo" }]);
     });
     const tab = pestanas.open().find((item) => item.id === session);
     const projectId = session === sessionId() ? project() : tab?.project ?? taskQueues.saved(session)?.project ?? tareaDelRiel(session)?.folder;
@@ -2463,10 +2221,7 @@ export default function App() {
         });
         const workspace = (events[0]?.payload as Partial<ChatEvent> | undefined)?.workspace;
         // Reemplaza lo vivo de la tarea, salvo lo que escribió la persona: el motor no lo repite.
-        anexar(session, (messages) => {
-          const kept = messages.filter((m) => m.role === "user");
-          return kept.length === messages.length ? messages : kept;
-        }, workspace);
+        threads.replay(session, workspace);
         deliver(events);
         continue;
       }
@@ -2541,11 +2296,10 @@ export default function App() {
         if (page.reset || page.gap || page.streams) releerTrasHueco();
         const affectedTurns = vivas().length > 0;
         if (page.reset) {
-          deltasPorCuadro.vaciar();
+          threads.flush();
           liveThreads.clear();
           enviarFiltro();
-          workspaceThreads.clear();
-          setHilos((threads) => Object.fromEntries(Object.entries(threads).map(([id, thread]) => [id, { ...thread, vivo: [] }])));
+          threads.resetService();
           setPermissions([]);
           if (affectedTurns) setError(t("chat.error.service_restarted"));
           void reconcileActiveTurns();
@@ -2692,18 +2446,17 @@ export default function App() {
         meta,
         id,
         target,
-        detail,
-        mcp_app,
         ok,
         request_id,
         origin,
-        starts_message,
-        message_id,
-        task,
       } = e.payload;
-      const append = (fn: (messages: Msg[]) => Msg[]) => anexar(session, fn, workspace);
+      const paintTranscript = () => threads.event(e.payload, {
+        provider: filaDe(session)?.provider ?? (session === sessionId() ? agent() : undefined),
+        author: firmas[session] ?? firmas[""] ?? null,
+        model: modelosEnVivo[session] ?? modelosEnVivo[""] ?? null,
+      });
       // Lo que no es texto se ordena detrás de los fragmentos que llegaron antes.
-      if (kind !== "delta") deltasPorCuadro.vaciar();
+      if (kind !== "delta") threads.flush();
       // Que un turno terminó se apunta ANTES del filtro de abajo: es la mitad
       // que hace posible trabajar en dos tareas. El filtro descarta lo que no
       // se está mirando, correcto para pintar, pero el cierre no es pintura:
@@ -2717,8 +2470,7 @@ export default function App() {
           if (workspace) {
             liveThreads.delete(liveThreadKey(workspace, session));
             enviarFiltro();
-            const threads = workspaceThreads.get(workspace);
-            if (threads) delete threads[session];
+            threads.dropSaved(workspace, session);
           }
           setPermissions((items) => items.filter((permission) => permission.session !== session));
         }
@@ -2792,17 +2544,11 @@ export default function App() {
       if (kind === "started") return;
 
       if (kind === "task_launched") {
-        if (task && id) append(messages => messages.some(message => message.turno === id) ? messages : [
-          ...messages, { role: "system", text: "", meta: "task_launched", fromTask: task, turno: id },
-        ]);
+        paintTranscript();
         if (esDelWorkspaceAbierto(workspace)) void refreshSessionsOnEvent(carpetasDeTarea(session));
         return;
       }
-
-      if (kind === "segment_saved") {
-        if (id) append((messages) => tramoGuardado(messages, id));
-        return;
-      }
+      if (kind === "segment_saved") { paintTranscript(); return; }
 
       if (kind === "mcp_auth") {
         noteMcpSignIn(session, text);
@@ -2848,65 +2594,7 @@ export default function App() {
       }
       if (enFondo().includes(session)) setEnFondo((ids) => ids.filter((id) => id !== session));
 
-      // Un paso que arranca: la fila aparece con lo que ya se sabe —qué
-      // herramienta, sobre qué— y gira hasta que vuelva su resultado. Gira
-      // solo si trae `id`: es con lo que empareja su `tool_done`, y sin él
-      // una fila marcada como corriendo se quedaría girando el resto de la
-      // sesión.
-      if (kind === "tool") {
-        append((m) => [
-          ...m,
-          {
-            role: "system",
-            text,
-            meta: "usó",
-            paso: pasoDe(text, target ?? null, {
-              id,
-              detalle: detail ?? null,
-              mcpApp: mcp_app ?? mcpCallFromName(text),
-              corriendo: id !== undefined,
-            }),
-          },
-        ]);
-        return;
-      }
-
-      // Y el paso que cierra: empareja solo contra una fila que siga
-      // corriendo. Los ids de Codex son `item_0`, `item_1`… y reinician en
-      // cada turno; sin esa condición el segundo turno completaría las
-      // filas del primero. Si no encuentra a quién cerrar, se cierra sola.
-      if (kind === "tool_done") {
-        const imagenes = detail?.kind === "output" ? detail.images : undefined;
-        append((m) => {
-          const cerrado = (p: Paso): Paso => ({
-            ...p,
-            corriendo: false,
-            ok,
-            detalle: detail ?? p.detalle,
-            mcpApp: mcp_app ? { ...p.mcpApp, ...mcp_app, arguments: mcp_app.arguments ?? p.mcpApp?.arguments } : p.mcpApp ?? mcpCallFromName(text),
-          });
-          let i = m.length - 1;
-          while (i >= 0 && !(m[i].paso?.corriendo && m[i].paso?.id === id)) i--;
-          const conPaso: Msg[] =
-            i < 0
-              ? [
-                  ...m,
-                  {
-                    role: "system",
-                    text,
-                    meta: "usó",
-                    paso: cerrado(pasoDe(text, target ?? null, { id })),
-                  },
-                ]
-              : (() => {
-                  const copia = [...m];
-                  copia[i] = { ...m[i], paso: cerrado(m[i].paso as Paso) };
-                  return copia;
-                })();
-          return imagenes?.length ? anexarImagen(conPaso, imagenes) : conPaso;
-        });
-        return;
-      }
+      if (kind === "tool" || kind === "tool_done") { paintTranscript(); return; }
 
       if (kind === "done") {
         void settleTurn(session, ok, text === "unsaved");
@@ -2923,21 +2611,18 @@ export default function App() {
         const gate = permissions().find((p) => p.session === session && (p.requestId === request_id || p.durableId === request_id));
         setPermissions((ps) => ps.filter((p) => p.session !== session || (p.requestId !== request_id && p.durableId !== request_id)));
         if (gate && id && esDelWorkspaceAbierto(workspace)) {
-          asentar(session, (ms) => ms.some((m) => m.turno === id) ? ms : [
-            ...ms,
-            {
-              role: "user",
-              text: "",
-              turno: id,
-              permission: {
-                request_id,
-                tool: text || gate.tool,
-                target: target ?? gate.target,
-                allow: ok === true,
-                when: Date.now(),
-              },
-            },
-          ]);
+          threads.commitUniqueTurn(session, {
+                          role: "user",
+                          text: "",
+                          turno: id,
+                          permission: {
+                            request_id,
+                            tool: text || gate.tool,
+                            target: target ?? gate.target,
+                            allow: ok === true,
+                            when: Date.now(),
+                          },
+                        });
         }
         return;
       }
@@ -2945,17 +2630,14 @@ export default function App() {
       if (kind === "permission") {
         setPermissionError(null);
         if (!request_id) {
-          append((m) => [
-            ...m,
-            {
-              role: "system",
-  // Sin nombrar a un agente: un literal escrito mirando a uno nombra al
-  // equivocado justo cuando algo va mal. Los de protocolo también piden
-  // permiso.
-              text: t("shell.turn.permission_no_reply"),
-              meta: "fallo",
-            },
-          ]);
+          threads.appendLive(session, [{
+                          role: "system",
+              // Sin nombrar a un agente: un literal escrito mirando a uno nombra al
+              // equivocado justo cuando algo va mal. Los de protocolo también piden
+              // permiso.
+                          text: t("shell.turn.permission_no_reply"),
+                          meta: "fallo",
+                        }], workspace);
           return;
         }
         setPermissions((ps) =>
@@ -2978,81 +2660,7 @@ export default function App() {
         return;
       }
 
-      // Sin este corte cae al delta de abajo y la salida de un comando de
-      // barra se pinta como respuesta del agente. `meta` trae la fila con que
-      // Rust la guarda; la tarjeta en curso se va cuando llega su salida.
-      if (kind === "command_output" || kind === "command_running") {
-        const fila: Msg = {
-          role: "system",
-          text,
-          meta: kind === "command_running" ? kind : (meta ?? "command_output"),
-          agent: filaDe(session)?.provider ?? (session === sessionId() ? agent() : undefined),
-        };
-        append((m) => [...m.filter((x) => x.meta !== "command_running"), fila]);
-        return;
-      }
-
-      // `tool` no cae aquí: lo atiende la línea de tiempo, que además tiene que
-      // casar el `tool_done` con el paso que abrió.
-      // Una entrega de otra tarea espera a que este turno cierre: es la fila que
-      // el motor ya dejó en la transcripción, que no se relee hasta el cierre.
-      // La prosa del evento es para una ventana anterior.
-      if (kind === "notice" && meta === "delivery_pending") {
-        append((m) => id && m.some((x) => x.turno === id) ? m : [
-          ...m, { role: "system", text: "", meta: "delivery_pending", fromTask: task ?? undefined, turno: id },
-        ]);
-        return;
-      }
-      if (kind === "notice") {
-        const message = clavesConocidas().has(text) ? t(text) : text;
-        append((m) => [...m, { role: "system", text: message, meta: meta?.startsWith("handler_") ? meta : "aviso" }]);
-        return;
-      }
-
-      // Sin este corte, la presencia cae al delta de abajo —destino de todo lo
-      // que no se reconoce— y su etiqueta acaba concatenada dentro de la
-      // respuesta del agente. No es conversación: la pinta el riel.
-      if (kind === "presence") return;
-
-      // La imagen va en la respuesta, no en el rastro. Si cayera al delta de
-      // abajo, el kind se concatenaría al texto.
-      if (kind === "image") {
-        const imagenes = detail?.kind === "output" ? detail.images ?? [] : [];
-        if (imagenes.length > 0) append((m) => anexarImagen(m, imagenes));
-        return;
-      }
-
-      // El razonamiento no es la respuesta: va a su bloque. Sin este corte cae
-      // al delta de abajo y se lee como lo que el agente contestó.
-      if (kind === "reasoning") {
-        append((m) =>
-          anexarRazonamiento(m, {
-            text,
-            messageId: message_id,
-            author: firmas[session] ?? firmas[""] ?? null,
-          }),
-        );
-        return;
-      }
-
-      // Sólo `delta` llega a su rama. Un kind que esta ventana no conoce se
-      // ignora: el motor puede mandar uno nuevo antes de que exista aquí.
-      if (kind !== "delta") return;
-
-      // delta: los fragmentos se CONCATENAN SIN SEPARADOR. Meter "\n" aquí
-      // parte cada token en su propia línea y el texto sale destrozado.
-      //
-      // Salvo que el CLI diga que aquí empieza otro mensaje, o que diga a qué
-      // mensaje pertenece el fragmento: ACP manda `message_id`, y su orden de
-      // entrega puede meter una herramienta entre dos fragmentos del mismo
-      // mensaje. Sin devolver el texto a su globo, el mensaje sale partido.
-      deltasPorCuadro.meter(session, workspace ?? workspaceActivo() ?? undefined, {
-        text,
-        messageId: message_id,
-        startsMessage: starts_message,
-        author: firmas[session] ?? firmas[""] ?? null,
-        model: modelosEnVivo[session] ?? modelosEnVivo[""] ?? null,
-      });
+      paintTranscript();
     });
     onCleanup(() => void chat.then((f) => f()));
 
@@ -3067,32 +2675,7 @@ export default function App() {
       // abierta. El historial lo sabe por fila; el selector solo sabe el de la
       // que se mira.
       const conAgente = filaDe(session)?.provider ?? (session === sessionId() ? agent() : undefined);
-      anexar(session, (m) => {
-        const ultimo = m[m.length - 1];
-        if (ultimo?.role === "agent" && !ultimo.turno)
-          return [
-            ...m.slice(0, -1),
-            {
-              ...ultimo,
-              turno,
-              preguntas,
-              questionRequestId: request_id,
-              agent: conAgente,
-            },
-          ];
-        // Un turno que solo preguntó, sin decir nada más, también es un turno.
-        return [
-          ...m,
-          {
-            role: "agent",
-            text: "",
-            turno,
-            preguntas,
-            questionRequestId: request_id,
-            agent: conAgente,
-          },
-        ];
-      }, workspace ?? workspaceActivo());
+      threads.question(session, { turno, preguntas, questionRequestId: request_id, agent: conAgente }, workspace ?? workspaceActivo());
     });
     onCleanup(() => void question.then((f) => f()));
 
@@ -3339,14 +2922,14 @@ export default function App() {
         permission: guardado.permission ?? undefined,
         author: guardado.author ?? undefined,
       };
-      asentar(p.session, (ms) => [...ms.filter((m) => !fila.turno || m.turno !== fila.turno), fila]);
+      threads.replaceTurn(p.session, fila);
       setPermissions((ps) => ps.filter((x) => x.session !== p.session || x.requestId !== p.requestId));
     } catch (e) {
       const { sinRespuesta } = await import("../features/chat/permissionRecovery");
       const cerrada = sinRespuesta(p, await pendientesDe(p.session, workspace), e);
       if (cerrada) {
         setPermissions(ps => ps.filter(x => x.session !== p.session || x.requestId !== p.requestId));
-        if (cerrada !== "respondida") asentar(p.session, ms => [...ms, cerrada]);
+        if (cerrada !== "respondida") threads.appendPersisted(p.session, [cerrada]);
         return;
       }
       await reponerGates(p.session, workspace);
@@ -3430,7 +3013,7 @@ export default function App() {
     const hayQuienConteste = (superficies() ?? []).some((s) => s.usable && s.provider === lanzado?.provider);
     const contestar = lanzado && codigo !== null && contestaALaTerminal(restantes, detenido, hayQuienConteste) ? lanzado : null;
     // Hasta que se relea el disco: sin esto la tarjeta desaparece un instante.
-    if (vivo && codigo !== null) anexar(session, (ms) => [...ms, mensajeDeTerminal(vivo, codigo)]);
+    if (vivo && codigo !== null) threads.appendLive(session, [mensajeDeTerminal(vivo, codigo)]);
     if (contestar) setPorContestar((ss) => [...ss, session]);
     void settleTurn(session, true).then(() => {
       if (contestar) void contestarALaTerminal(session, contestar);
@@ -3482,11 +3065,11 @@ export default function App() {
         permissionMode: lanzado.permission_mode,
       }, deLaTarea(session));
       if (abrio) {
-        asentar(session, (ms) => [...ms, { role: "system", text: "", meta: "shell_reply", agent: lanzado.provider }]);
+        threads.appendPersisted(session, [{ role: "system", text: "", meta: "shell_reply", agent: lanzado.provider }]);
         return;
       }
     } catch (error) {
-      anexar(session, (ms) => [...ms, { role: "system", ...mensajeDeFallo(error), meta: "fallo" }]);
+      threads.appendLive(session, [{ role: "system", ...mensajeDeFallo(error), meta: "fallo" }]);
     }
     pendingStarts.delete(session);
     marcarQuieta(session);
@@ -3520,7 +3103,7 @@ export default function App() {
           marcarQuieta(session);
         }
       }
-      anexar(session, (ms) => [...ms, { role: "system", ...mensajeDeFallo(error), meta: "fallo" }]);
+      threads.appendLive(session, [{ role: "system", ...mensajeDeFallo(error), meta: "fallo" }]);
       return error;
     }
   }
@@ -3600,7 +3183,7 @@ export default function App() {
       if (nace.generation !== workspaceContext.generation()) return false;
       // La frase de un modo que el agente no sostiene nombra al agente.
       const label = agents().find((a) => a.id === lanzado.provider)?.label ?? lanzado.provider;
-      anexar("", (ms) => [...ms, { role: "system", ...mensajeDeFallo(error, { agent: label }), meta: "fallo" }]);
+      threads.appendLive("", [{ role: "system", ...mensajeDeFallo(error, { agent: label }), meta: "fallo" }]);
       return false;
     }
   }
@@ -3636,7 +3219,7 @@ export default function App() {
     try {
       if (!(await invoke<boolean>("write_shell_input", { session: id, input: texto }, deLaTarea(id)))) return false;
     } catch (e) {
-      anexar(id, (m) => [...m, { role: "system", ...mensajeDeFallo(e), meta: "fallo" }]);
+      threads.appendLive(id, [{ role: "system", ...mensajeDeFallo(e), meta: "fallo" }]);
       return false;
     }
     // Una tecla suelta (flecha, Enter de menú) no se pinta: la dibuja el propio programa.
@@ -3668,7 +3251,7 @@ export default function App() {
       } catch (e) {
         detenidos.delete(id);
         setDeteniendo(null);
-        anexar(id, (m) => [...m, { role: "system", text: t("shell.turn.stop_failed", { error: prosaDe(e) }), meta: "fallo" }]);
+        threads.appendLive(id, [{ role: "system", text: t("shell.turn.stop_failed", { error: prosaDe(e) }), meta: "fallo" }]);
       }
       return;
     }
@@ -3682,14 +3265,11 @@ export default function App() {
       await reconcileActiveTurns();
       if (!vivas().includes(id)) return;
       setDeteniendo(null);
-      anexar(id, (m) => [
-        ...m,
-        {
-          role: "system",
-          text: t("shell.turn.stop_failed", { error: prosaDe(e) }),
-          meta: "fallo",
-        },
-      ]);
+      threads.appendLive(id, [{
+                  role: "system",
+                  text: t("shell.turn.stop_failed", { error: prosaDe(e) }),
+                  meta: "fallo",
+                }]);
     }
   }
 
@@ -4031,7 +3611,7 @@ export default function App() {
   // varias ventanas, pulsar en una para darle el mando vuelve a pasar por
   // aquí aunque su transcripción lleve rato pintada, y marcarla como «viene
   // en camino» la mandaría al esqueleto y de vuelta.
-    if (!hilos()[id]) setCargandoHilo(id);
+    if (!hilos()[id]) threads.startLoading(id);
     const generation = workspaceContext.generation();
     const current = () => generation === workspaceContext.generation() && sessionId() === id && project() === proyecto;
     try {
@@ -4085,13 +3665,13 @@ export default function App() {
         void refreshFolder(proyecto, id);
       } catch { /* Sin estado autoritativo se conserva el error de la lectura original. */ }
       if (!current()) return;
-      releer(id, [{ role: "system", text: prosaDe(e) }], false);
+      threads.replaceHistory(id, [{ role: "system", text: prosaDe(e) }], false);
       if (propagateError) throw e;
     } finally {
       // Solo si sigue siendo esta la que se espera: con dos aperturas
       // solapadas, la respuesta tardía de la primera apagaría el
       // indicador de la segunda y su hilo se pintaría a medias.
-      setCargandoHilo((c) => (c === id ? null : c));
+      threads.finishLoading(id);
     }
     // Después de la transcripción, que la reemplaza entera: un aviso
     // escrito antes de este punto no dejaría rastro.
@@ -4105,14 +3685,11 @@ export default function App() {
       // su archivo: el guardado cuelga del contenido, y adoptar una mano
       // vacía no lo pisa.
       taskQueues.adopt(id);
-      anexar(id, (m) => [
-        ...m,
-        {
-          role: "system",
-          text: t("shell.queue.load_failed", { error: prosaDe(e) }),
-          meta: "aviso",
-        },
-      ]);
+      threads.appendLive(id, [{
+                  role: "system",
+                  text: t("shell.queue.load_failed", { error: prosaDe(e) }),
+                  meta: "aviso",
+                }]);
     }
   }
 
@@ -4831,14 +4408,11 @@ export default function App() {
         source: id,
       }, deLaTarea(sid));
     } catch (e) {
-      asentar(sid, (ms) => [
-        ...ms,
-        {
-          role: "system",
-          text: t("chat.scope.source.remove_failed", { error: prosaDe(e) }),
-          meta: "fallo",
-        },
-      ]);
+      threads.appendPersisted(sid, [{
+                  role: "system",
+                  text: t("chat.scope.source.remove_failed", { error: prosaDe(e) }),
+                  meta: "fallo",
+                }]);
     }
   };
 
@@ -5431,19 +5005,7 @@ export default function App() {
     // eventos del turno pueden haber llegado ANTES que el id —Rust crea la
     // sesión y emite con ella mientras el `invoke` vuelve— y ya están en
     // `hilos[id]`; se conservan detrás de lo propio.
-    deltasPorCuadro.vaciar();
-    setHilos((hs) => {
-      const { [""]: sinId, ...resto } = hs;
-      const previo = hs[id] ?? SIN_HILO;
-      return {
-        ...resto,
-        [id]: {
-          base: [...(sinId?.base ?? []), ...previo.base],
-          vivo: [...(sinId?.vivo ?? []), ...previo.vivo],
-          guardados: previo.guardados,
-        },
-      };
-    });
+    threads.adoptDraft(id);
     // Y su borrador: lo que quedó sin mandar sigue con ella.
     drafts.promote(claveBorrador, id);
     if (provisional) {
@@ -5555,15 +5117,15 @@ export default function App() {
     // A `base` y no a `vivo`: `send_message` lo persiste antes de volver, así
     // que releer el disco lo trae — y si estuviera en `vivo` se pintaría dos
     // veces al volver a esta tarea mientras contesta.
-    asentar(clave, (ms) => [...ms, ...entrando, turnoPropio]);
+    threads.appendPersisted(clave, [...entrando, turnoPropio]);
     // Mandar a una tarea de una máquina apagada la enciende: el proxy espera a que
     // conteste y entrega una sola vez.
     const dormida = abierta ? apagadas()[abierta] ?? null : null;
-    if (abierta && dormida) anotar(setEncendiendo, abierta, dormida);
+    if (abierta && dormida) threads.markWaking(abierta, dormida);
     // Y crear en la elegida en «Ejecutar en» si está apagada: el aviso cuelga de la pestaña que nace.
     const destino = creationOptions?.headers["x-terminus-machine"] ?? null;
     const naceDormida = destino && machines().find((x) => x.id === destino)?.on === false ? destino : null;
-    if (provisional && naceDormida) anotar(setEncendiendo, provisional, naceDormida);
+    if (provisional && naceDormida) threads.markWaking(provisional, naceDormida);
     try {
       const llevado = llevar ? await llevar(claveBorrador) : null;
       if (llevar && !llevado) throw CARRY_STOPPED;
@@ -5648,12 +5210,12 @@ export default function App() {
         drafts.handover(null, claveBorrador);
       }
       if (provisional && naceDormida) {
-        anotar(setEncendiendo, provisional, null);
+        threads.markWaking(provisional, null);
         void refetchMachines();
       }
       if (abierta && dormida) {
-        anotar(setEncendiendo, abierta, null);
-        anotar(setApagadas, abierta, null);
+        threads.markWaking(abierta, null);
+        threads.markAwake(abierta);
         void refreshSessions(grupos());
         void leerTarea(proyecto, abierta)
           .then((s) => loadResult(abierta, s, false, generation))
@@ -5661,13 +5223,7 @@ export default function App() {
       }
       if (generation !== workspaceContext.generation()) return true;
       if (respuestas) {
-        asentar(clave, (ms) =>
-          ms.map((mensaje) =>
-            mensaje === turnoPropio
-              ? { ...mensaje, respuestas: respuestas.pinta }
-              : mensaje,
-          ),
-        );
+        threads.reviseOptimistic(clave, turnoPropio, { respuestas: respuestas.pinta });
       }
       // El turno ya tiene a qué colgarse: deja de ser «la ventana sin id».
       firmas[id] = firmas[id] ?? firmas[""] ?? null;
@@ -5680,9 +5236,7 @@ export default function App() {
         if (generation !== workspaceContext.generation()) return;
         firmas[id] = signature?.agent ?? null;
         if (!respuestas) {
-          asentar(id, (messages) => messages.map((message) =>
-            message === turnoPropio ? { ...message, author: signature?.person ?? null } : message,
-          ));
+          threads.reviseOptimistic(id, turnoPropio, { author: signature?.person ?? null });
         }
       });
       if (!abierta) setArrancando(false);
@@ -5713,8 +5267,8 @@ export default function App() {
       if (finishedTurns.has(id)) void settleTurn(id, finishedTurns.get(id));
       return true;
     } catch (e) {
-      if (abierta && dormida) anotar(setEncendiendo, abierta, null);
-      if (provisional && naceDormida) anotar(setEncendiendo, provisional, null);
+      if (abierta && dormida) threads.markWaking(abierta, null);
+      if (provisional && naceDormida) threads.markWaking(provisional, null);
       // Sin esto queda una tarea que nadie creó: la fila y la pestaña se
       // pintaron contando con que Rust aceptara el turno.
       if (provisional) {
@@ -5725,41 +5279,33 @@ export default function App() {
       if (generation !== workspaceContext.generation()) return false;
       if (e === CARRY_STOPPED) {
         // El texto vuelve a la caja: el globo se iría duplicado.
-        asentar(clave, (ms) => ms.filter((message) => message !== turnoPropio && !entrando.includes(message)));
+        threads.rejectOptimistic(clave, [turnoPropio, ...entrando]);
         setArrancando(false);
         return false;
       }
       if (destination && claveDe(e) === "history.error.busy") {
-        asentar(clave, (ms) => ms.filter((message) => message !== turnoPropio && !entrando.includes(message)));
+        threads.rejectOptimistic(clave, [turnoPropio, ...entrando]);
         marcarQuieta(destination.session);
         throw e;
       }
       if (!respuestas && claveDe(e) === "history.error.busy" && abierta === sessionId()) {
-        asentar(clave, (ms) => ms.filter((mensaje) => mensaje !== turnoPropio && !entrando.includes(mensaje)));
+        threads.rejectOptimistic(clave, [turnoPropio, ...entrando]);
         retainBusySession(m, { title: filaDe(abierta ?? "")?.title ?? "" }, abierta);
         return true;
       }
       if (abierta === sessionId()) taskQueues.retain("fallo");
       if (!abierta) setArrancando(false);
       if (abierta) marcarQuieta(abierta);
-      asentar(clave, (ms) =>
-        // Una respuesta rechazada no deja ni un globo vacío que parezca un
-        // turno humano. Los mensajes ordinarios sí se conservan: su texto se
-        // escribió de verdad y ayuda a reintentar el fallo.
-        respuestas ? ms.filter((mensaje) => mensaje !== turnoPropio) : ms,
-      );
-      anexar(clave, (ms) => [
-        ...ms,
-        {
-          role: "system",
-          // Una negativa de comando llega como clave: la frase nombra lo escrito.
-          ...mensajeDeFallo(e, {
-            command: comandoEscrito(m.text),
-            agent: agents().find((a) => a.id === m.provider)?.label ?? m.provider,
-          }),
-          meta: "fallo",
-        },
-      ]);
+      respuestas && threads.rejectOptimistic(clave, [turnoPropio]);
+      threads.appendLive(clave, [{
+                  role: "system",
+                  // Una negativa de comando llega como clave: la frase nombra lo escrito.
+                  ...mensajeDeFallo(e, {
+                    command: comandoEscrito(m.text),
+                    agent: agents().find((a) => a.id === m.provider)?.label ?? m.provider,
+                  }),
+                  meta: "fallo",
+                }]);
       if (respuestas) throw e;
       return false;
     } finally {
@@ -5822,21 +5368,15 @@ export default function App() {
         turn: turno,
       }, deLaTarea(sid));
       soltarPreguntas(sid, turno);
-      asentar(sid, (ms) => [
-        ...ms,
-        {
-          role: "user",
-          text: guardado.text,
-          turno: guardado.id ?? undefined,
-          respuestas: guardado.answers ?? undefined,
-          author: guardado.author ?? undefined,
-        },
-      ]);
+      threads.appendPersisted(sid, [{
+                  role: "user",
+                  text: guardado.text,
+                  turno: guardado.id ?? undefined,
+                  respuestas: guardado.answers ?? undefined,
+                  author: guardado.author ?? undefined,
+                }]);
     } catch (error) {
-      anexar(sid, (ms) => [
-        ...ms,
-        { role: "system", ...mensajeDeFallo(error), meta: "fallo" },
-      ]);
+      threads.appendLive(sid, [{ role: "system", ...mensajeDeFallo(error), meta: "fallo" }]);
       throw error;
     }
   }
@@ -5880,22 +5420,16 @@ export default function App() {
           respuestas: manda,
         }, opcionesDeLaTarea(questionSession, questionWorkspace));
         soltarPreguntas(sid, turno);
-        asentar(sid, (ms) => [
-          ...ms,
-          {
-            role: "user",
-            text: guardado.text,
-            turno: guardado.id ?? undefined,
-            respuestas: guardado.answers ?? undefined,
-            author: guardado.author ?? undefined,
-          },
-        ]);
+        threads.appendPersisted(sid, [{
+                      role: "user",
+                      text: guardado.text,
+                      turno: guardado.id ?? undefined,
+                      respuestas: guardado.answers ?? undefined,
+                      author: guardado.author ?? undefined,
+                    }]);
         return true;
       } catch (error) {
-        anexar(sid, (ms) => [
-          ...ms,
-          { role: "system", ...mensajeDeFallo(error), meta: "fallo" },
-        ]);
+        threads.appendLive(sid, [{ role: "system", ...mensajeDeFallo(error), meta: "fallo" }]);
         throw error;
       }
     }
@@ -6229,7 +5763,7 @@ export default function App() {
     const primera = !sinSteer().includes(provider);
     if (primera) setSinSteer((lista) => [...lista, provider]);
     if (!primera) return;
-    anexar(session, (ms) => [...ms, { role: "system", text: t(aviso), meta: "steer_refused" }], workspace);
+    threads.appendLive(session, [{ role: "system", text: t(aviso), meta: "steer_refused" }], workspace);
   }
 
   /**
@@ -6287,15 +5821,15 @@ export default function App() {
       setDesdeDeTurno((d) => (abierta in d ? { ...d, [abierta]: Date.now() } : d));
       taskQueues.remove(id, abierta);
       // Con su `turno`: la relectura de la tarea a mitad del turno ya lo trae de disco, y sin id salía dos veces.
-      anexar(abierta, (ms) => [...ms, {
-        role: "user",
-        text: m.text,
-        task_mentions: m.task_mentions,
-        attachments: attachments.length ? attachments : undefined,
-        turno: guardado?.id ?? undefined,
-        author: guardado?.author ?? undefined,
-        inyectado: guardado?.id ? undefined : { tras },
-      }]);
+      threads.appendLive(abierta, [{
+                role: "user",
+                text: m.text,
+                task_mentions: m.task_mentions,
+                attachments: attachments.length ? attachments : undefined,
+                turno: guardado?.id ?? undefined,
+                author: guardado?.author ?? undefined,
+                inyectado: guardado?.id ? undefined : { tras },
+              }]);
     } catch (e) {
       const clave = claveDe(e);
       // El turno acaba de cerrar: el mensaje sigue en la cola y sale como el siguiente.
@@ -6318,7 +5852,7 @@ export default function App() {
         noRecibeAMedias(abierta, proveedor, "chat.steer.unconfirmed", sourceWorkspace);
         return;
       }
-      anexar(abierta, (ms) => [...ms, { role: "system", ...mensajeDeFallo(e), meta: "fallo" }]);
+      threads.appendLive(abierta, [{ role: "system", ...mensajeDeFallo(e), meta: "fallo" }]);
     } finally {
       setInjecting((items) => items.filter((item) => item.id !== id));
       if (workspaceActivo() === sourceWorkspace && finishedTurns.get(abierta) === true) void drainHiddenQueue(abierta);
@@ -6989,20 +6523,13 @@ export default function App() {
         masRecientes={!!conRecientes()[pp.sesion ?? ""]}
         onRecientes={async () => {
           if (!pp.sesion) return;
-          const id = pp.sesion, pager = historias.get(id), generation = workspaceContext.generation();
-          if (!pager) return;
-          try {
-            await pager.latest();
-            if (generation === workspaceContext.generation()) pintarHistoria(id, pager, false);
-          } catch (e) {
-            setError(prosaDe(e));
-          }
+          try { await threads.latest(pp.sesion); }
+          catch (e) { setError(prosaDe(e)); }
         }}
         estadoAntiguos={estadoAntiguos()[pp.sesion ?? ""] ?? "idle"}
         onLeyendo={(leyendo) => {
           if (!pp.sesion) return;
-          if (leyendo) leyendoLejos.add(pp.sesion);
-          else leyendoLejos.delete(pp.sesion);
+          threads.reading(pp.sesion, leyendo);
         }}
         masAntiguos={!!conAntiguos()[pp.sesion ?? ""]}
         onAntiguos={() => cargarAntiguos(proyectoDeLaCelda()?.id ?? "", pp.sesion ?? "")}
