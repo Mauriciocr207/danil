@@ -4,7 +4,7 @@ import { createWorkspaceStore } from "../features/workspace";
 import { createProjectsStore } from "../features/projects";
 import type { DeleteTarget } from "../features/projects/DeleteTaskDialog";
 import type { HandlerTarget } from "../features/settings/HandlerPolicy";
-import { deliver, type JournalEvent, listen } from "../lib/serviceEvents";
+import { deliver, listen } from "../lib/serviceEvents";
 import { open } from "@tauri-apps/plugin-dialog";
 import ArrowLeft from "lucide-solid/icons/arrow-left";
 import Columns2 from "lucide-solid/icons/columns-2";
@@ -283,6 +283,7 @@ import { DragOverlay, UnsavedCloseDialog } from "../features/tabs";
 import { TitleBarSection } from "../features/shell";
 import { createDraftsStore } from "../features/drafts";
 import { createTaskQueues } from "../features/task-queues";
+import { createServiceStream, type PushedBatch, type ServicePage } from "../features/service-stream";
 
 // Lo que falla en el camino a la ventana y no en el comando: se vuelve a
 // preguntar en vez de pintarlo (`cli/service/mod.rs`, `para_la_ventana`).
@@ -1113,9 +1114,8 @@ export default function App() {
   const { agents, agent, superficies, superficie, catalogos, models, modelosParaAgentes,
     model, effort, modo, modos, skills, cliCommands, sideCommand } = composer;
   onCleanup(composer.dispose);
-  let historialPaginado = false;
   const threads = createThreadsStore({
-    scope: { workspace: workspaceActivo, generation: workspaceContext.generation, paged: () => historialPaginado },
+    scope: { workspace: workspaceActivo, generation: workspaceContext.generation, paged: () => serviceStream.paged() },
     activeSession: sessionId, project, invoke, route: deLaTarea, liveThreads: () => liveThreads,
   });
   onCleanup(threads.dispose);
@@ -2206,7 +2206,6 @@ export default function App() {
 
   // Lo que reconstruye el turno en curso de una tarea que pasa a verse: lo filtrado y lo que lo acompaña.
   const REPUESTO = new Set(["delta", "reasoning", "tool", "tool_done", "command_output", "command_running", "shell_started", "shell_output", "image", "retry", "notice", "task_launched", "segment_saved"]);
-  type PushedBatch = { events?: JournalEvent[]; catchup?: string; resync?: string };
   function applyPushed(batches: PushedBatch[]) {
     for (const lote of batches) {
       if (lote.resync) {
@@ -2239,100 +2238,50 @@ export default function App() {
       .catch(() => {});
   }
   // El filtro de la suscripción: de las demás tareas solo llegan inicio y fin, no su flujo token a token.
-  let filtroEnviado: string | null = null;
-  let filtroEnCola = false;
   const tareasQueSeVen = () => {
     const ids = new Set([...sesionesConPestana(), sessionId() ?? "", ...vivas()]);
     for (const key of liveThreads) ids.add(key.slice(key.indexOf("/") + 1));
     return [...ids].filter((id) => id !== "" && !esProvisional(id)).sort();
   };
-  function enviarFiltro() {
-    if (!historialPaginado || filtroEnCola) return;
-    filtroEnCola = true;
-    queueMicrotask(() => {
-      filtroEnCola = false;
-      if (!historialPaginado) return;
-      const sessions = tareasQueSeVen();
-      const key = sessions.join("\n");
-      if (key === filtroEnviado) return;
-      filtroEnviado = key;
-      void invoke("service_filter", { sessions }).catch(() => {
-        filtroEnviado = null;
-      });
-    });
-  }
+  const enviarFiltro = () => serviceStream.filterChanged();
   createEffect(on([sesionesConPestana, sessionId, vivas], enviarFiltro, { defer: true }));
 
   let serviceListenersReady: Promise<unknown> = Promise.resolve();
-  onMount(() => {
-    let disposed = false;
-    let cursor: number | null = null;
-    let replay = true;
-    let runtime: string | null = null;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let failingSince: number | null = null;
-    // Con el stream empujado `service_poll` espera en Rust a que haya algo: se vuelve a pedir enseguida.
-    let pushed = false;
-    const poll = async () => {
-      await Promise.resolve();
-      await serviceListenersReady;
-      if (disposed) return;
-      pushed = false;
-      try {
-        const page = await invoke<{ cursor: number | null; gap: boolean; streams?: boolean; replay: boolean; runtime: string; reset: boolean; push?: boolean; batches?: PushedBatch[] }>("service_poll", { cursor, workspace: null, replay, runtime });
-        if (disposed) return;
-        if (page.batches) applyPushed(page.batches);
-        pushed = page.push === true;
-        if (pushed !== historialPaginado) {
-          historialPaginado = pushed;
-          filtroEnviado = null;
-          enviarFiltro();
-        }
-        cursor = page.cursor;
-        replay = page.replay;
-        runtime = page.runtime;
-        if (page.reset || page.gap || page.streams || failingSince !== null) window.dispatchEvent(new CustomEvent("harness:service-resync"));
-        // Un stream de comando cortado (árbol, git) se relee, pero no es salida en vivo perdida.
-        if (page.reset || page.gap || page.streams) releerTrasHueco();
-        const affectedTurns = vivas().length > 0;
-        if (page.reset) {
-          threads.flush();
-          liveThreads.clear();
-          enviarFiltro();
-          threads.resetService();
-          setPermissions([]);
-          if (affectedTurns) setError(t("chat.error.service_restarted"));
-          void reconcileActiveTurns();
-        }
-        // Un reinicio sin turnos vivos también corta el stream (`page.gap`); sin
-        // esta guarda el aviso de hueco sale sin que nada se haya perdido.
-        if (page.gap && !page.reset && affectedTurns) setError(t("chat.error.service_gap"));
-        if (failingSince !== null) {
-          failingSince = null;
-          setConnectionError(null);
-        }
-      } catch (e) {
-        if (disposed) return;
-        // Un sondeo suelto falla al empezar un turno y el siguiente ya contesta.
-        failingSince ??= Date.now();
-        const sinMotor = claveDe(e) === "shell.service.engine_missing";
-        // Una máquina remota apagada no es un fallo: se enciende al enviar algo.
-        const apagada = claveDe(e) === "shell.service.machine_off";
-        const encendiendo = claveDe(e) === "shell.service.machine_starting";
-        const managed = claveDe(e) === "shell.service.managed";
-        const caido = sinMotor || managed || apagada || encendiendo || claveDe(e) === "shell.service.engine_down";
-        // La computadora en reposo tiene su indicador, también en escritorio.
-        if (apagada || encendiendo || asleep(e)) { setConnectionError(null); return; }
-        if (!disposed && Date.now() - failingSince > (caido ? 2_000 : 10_000)) {
-          setConnectionError(sinMotor ? t("shell.service.engine_missing") : managed ? t("shell.service.managed") : apagada ? t("shell.service.machine_off") : encendiendo ? t("shell.service.machine_starting") : t(caido ? "shell.service.engine_down" : "chat.error.service_unavailable"));
-        }
-      } finally {
-        if (!disposed) timer = setTimeout(() => void poll(), pushed ? 0 : 250);
+  const serviceStream = createServiceStream({
+    ready: () => serviceListenersReady,
+    read: request => invoke<ServicePage>("service_poll", request),
+    filter: sessions => invoke("service_filter", { sessions }),
+    visibleSessions: tareasQueSeVen,
+    applyBatches: applyPushed,
+    applyPage: (page, recovered) => {
+      if (page.reset || page.gap || page.streams || recovered) window.dispatchEvent(new CustomEvent("harness:service-resync"));
+      // Un stream de comando cortado (árbol, git) se relee, pero no es salida en vivo perdida.
+      if (page.reset || page.gap || page.streams) releerTrasHueco();
+      const affectedTurns = vivas().length > 0;
+      if (page.reset) {
+        threads.flush();
+        liveThreads.clear();
+        enviarFiltro();
+        threads.resetService();
+        setPermissions([]);
+        if (affectedTurns) setError(t("chat.error.service_restarted"));
+        void reconcileActiveTurns();
       }
-    };
-    void poll();
-    onCleanup(() => { disposed = true; if (timer) clearTimeout(timer); });
+      // Un reinicio sin turnos vivos también corta el stream (`page.gap`); sin
+      // esta guarda el aviso de hueco sale sin que nada se haya perdido.
+      if (page.gap && !page.reset && affectedTurns) setError(t("chat.error.service_gap"));
+    },
+    classifyFailure: error => {
+      const code = claveDe(error);
+      if (code === "shell.service.machine_off" || code === "shell.service.machine_starting" || asleep(error)) return "sleep";
+      if (code === "shell.service.engine_missing") return "missing";
+      if (code === "shell.service.managed") return "managed";
+      return code === "shell.service.engine_down" ? "down" : "unavailable";
+    },
+    connectionStatus: key => setConnectionError(key === null ? null : t(key)),
   });
+  onMount(serviceStream.start);
+  onCleanup(serviceStream.dispose);
 
   async function reconcileActiveTurns() {
     const workspace = workspaceActivo();
