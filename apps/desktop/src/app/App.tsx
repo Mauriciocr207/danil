@@ -1,3 +1,4 @@
+import { createProjectsStore } from "../features/projects";
 import type { DeleteTarget } from "../features/projects/DeleteTaskDialog";
 import type { HandlerTarget } from "../features/settings/HandlerPolicy";
 import { deliver, type JournalEvent, listen } from "../lib/serviceEvents";
@@ -385,9 +386,9 @@ export default function App() {
   const attention = createAttention();
   const [draftBases, setDraftBases] = createSignal<Record<string, string>>({});
   const [hablandoCon, setHablandoCon] = createSignal<{ project: string; name: string } | null>(null);
-  const [projectList, setProjectRows] = createSignal<Project[]>([]);
-  // El riel pinta carpetas con `For`: una nueva en cada relectura remonta sus tareas, y cada una vuelve a pedir su `task_history`.
-  const setProjectList = (next: Project[]) => setProjectRows((previous) => conservar(previous, next, (p) => p.id));
+  const projectCatalog = createProjectsStore({ scope: () => ({ workspace: workspaceActivo(), machine: null }), invoke });
+  const projectList = projectCatalog.rows;
+  onCleanup(projectCatalog.dispose);
   createEffect(() => recordarCarpetas(projectList()));
   const [sources, setSources] = createSignal<Source[]>([]);
   // `rows: null`: la máquina está apagada y no contestó; el selector ofrece lo que se sabe de ella.
@@ -434,7 +435,7 @@ export default function App() {
     }
     let current = true;
     onCleanup(() => { current = false; });
-    void invoke<Project[]>("list_projects", {}, { headers: { "x-terminus-machine": machine } }).then(rows => {
+    void projectCatalog.readForMachine(machine).then(rows => {
       if (current) { setDraftProjectError(null); setDraftProjects({ workspace, machine, rows: rows.map(row => ({
         ...row, machines: projectList().find(p => p.id === row.id)?.machines ?? [machine],
       })) }); }
@@ -567,7 +568,7 @@ export default function App() {
   const [enCache, setEnCache] = createSignal(shellCache !== null);
   if (shellCache) {
     batch(() => {
-      setProjectList(shellCache.projects);
+      projectCatalog.fromCache(shellCache.projects);
       setSesiones(shellCache.sessions);
       setSpaces(shellCache.spaces);
       setEscritorio(shellCache.desk);
@@ -2195,8 +2196,8 @@ export default function App() {
       if (!current) throw { what: t("projects.context.unavailable"), detail: "context_unavailable" };
       const root = current.context_root;
       const [, fuentes] = await Promise.all([
-        invoke<Project[]>("list_projects").then(rows => {
-          if (generation === sessionGeneration && request === materialRequest) { setProjectList(rows); setProjectReadError(null); }
+        projectCatalog.changed().then(rows => {
+          if (generation === sessionGeneration && request === materialRequest) setProjectReadError(null);
           return rows;
         }),
         invoke<Source[]>("list_sources"),
@@ -2281,6 +2282,7 @@ export default function App() {
     pestanas.load(null);
     // El mismo workspace que la caché: sus filas se quedan hasta que lleguen las de verdad.
     const desdeCache = enCache() && shellCache?.workspace === a.active;
+    projectCatalog.workspaceChanged(desdeCache);
     if (!desdeCache) setEnCache(false);
     batch(() => {
       if (!desdeCache) {
@@ -2328,7 +2330,6 @@ export default function App() {
     // encima del primer arranque —la app avisando de que falta lo que esa
     // misma pantalla está pidiendo.
     if (a.active === null) {
-      setProjectList([]);
       setSources([]);
       return;
     }
@@ -2342,10 +2343,7 @@ export default function App() {
       // no usa su respuesta.
       // Las fuentes que no llegan (su máquina apagada, sin copia) dejan las de antes y no tumban las carpetas.
       const [, fuentes] = await Promise.all([
-        invoke<Project[]>("list_projects").then(rows => {
-          if (generation === sessionGeneration) setProjectList(rows);
-          return rows;
-        }),
+        projectCatalog.refresh(),
         invoke<Source[]>("list_sources").catch(() => null),
       ]);
       if (generation !== sessionGeneration) return;
@@ -2362,7 +2360,6 @@ export default function App() {
       // de la caché, la ventana se queda inerte con la foto de la vez anterior
       // y no restaura pestañas ni se entera de cuando la máquina enciende.
       if (!asleep(e)) {
-        setProjectList([]);
         setSources([]);
         setMaterialError(prosaDe(e));
       }
@@ -2490,7 +2487,7 @@ export default function App() {
         if (enCache()) {
           batch(() => {
             setEnCache(false);
-            setProjectList([]);
+            projectCatalog.discardUnconfirmedCache();
             setSesiones({});
           });
         }
@@ -3393,8 +3390,8 @@ export default function App() {
       if (changes.includes("mentions") && input().includes("@")) void refreshTaskCandidates();
       if (changes.includes("projects")) {
         const workspace = workspaceActivo();
-        void invoke<Project[]>("list_projects").then((items) => {
-          if (workspace === workspaceActivo()) { setProjectList(items); setProjectReadError(null); }
+        void projectCatalog.changed().then(() => {
+          if (workspace === workspaceActivo()) setProjectReadError(null);
         }).catch(() => {});
       }
     };
@@ -3415,8 +3412,8 @@ export default function App() {
       window.dispatchEvent(new CustomEvent("harness:workspace-name"));
       if (!esDelWorkspaceAbierto(e.payload.workspace ?? undefined)) return;
       const workspace = workspaceActivo();
-      void invoke<Project[]>("list_projects").then((items) => {
-        if (workspace === workspaceActivo()) { setProjectList(items); setProjectReadError(null); }
+      void projectCatalog.changed().then(() => {
+        if (workspace === workspaceActivo()) setProjectReadError(null);
       }).catch((error) => { if (workspace === workspaceActivo() && !asleep(error)) setProjectReadError(prosaDe(error)); });
       void reloadSpaces();
       void cargarSuperficies(false);
@@ -4394,8 +4391,8 @@ export default function App() {
   async function releerProyectos() {
     const workspace = workspaceActivo();
     try {
-      const items = await invoke<Project[]>("list_projects");
-      if (workspace === workspaceActivo()) { setProjectList(items); setProjectReadError(null); }
+      await projectCatalog.changed();
+      if (workspace === workspaceActivo()) setProjectReadError(null);
     } catch {
       // La lista anterior sigue sirviendo: releer es una puesta al día.
     }
@@ -4403,8 +4400,7 @@ export default function App() {
 
   async function renombrarProyecto(id: string, name: string) {
     try {
-      await invoke("rename_project", { id, name });
-      setProjectList(await invoke<Project[]>("list_projects"));
+      await projectCatalog.rename(id, name);
     } catch (e) {
       setError(prosaDe(e));
     }
@@ -4422,8 +4418,7 @@ export default function App() {
   /** Material que leerá toda tarea del proyecto, no solo la abierta. */
   async function adjuntarAlProyecto(id: string, source: string) {
     try {
-      await invoke("attach_known_source", { project: id, source });
-      setProjectList(await invoke<Project[]>("list_projects"));
+      await projectCatalog.attach(id, source);
     } catch (e) {
       setError(prosaDe(e));
     }
@@ -4431,8 +4426,7 @@ export default function App() {
 
   async function quitarDelProyecto(id: string, source: string) {
     try {
-      await invoke("detach_source", { project: id, source });
-      setProjectList(await invoke<Project[]>("list_projects"));
+      await projectCatalog.detach(id, source);
     } catch (e) {
       setError(prosaDe(e));
     }
@@ -4442,8 +4436,7 @@ export default function App() {
   // árbol de trabajo, que la enseña sin que alguien reabra nada.
   async function carpetaEditable(id: string, dir: string | null) {
     try {
-      await invoke("set_project_work_tree", { id, dir });
-      setProjectList(await invoke<Project[]>("list_projects"));
+      await projectCatalog.workTree(id, dir);
       window.dispatchEvent(new CustomEvent("harness:copia"));
     } catch (e) {
       setError(prosaDe(e));
@@ -4452,14 +4445,13 @@ export default function App() {
 
   async function borrarProyecto(id: string) {
     try {
-      await invoke("delete_project", { id });
+      await projectCatalog.remove(id);
       if (proyectoAbierto() === id) setProyectoAbierto(null);
       if (project() === id) {
         nuevaSesion();
         setProject("");
       }
-      const quedan = await invoke<Project[]>("list_projects");
-      setProjectList(quedan);
+      const quedan = await projectCatalog.refresh();
       void reloadSpaces();
       await refreshSessions(["", ...quedan.map((p) => p.id)]);
     } catch (e) {
@@ -5269,7 +5261,7 @@ export default function App() {
       if (id === sessionId()) setProject(a);
       pestanas.moveToProject(id, a);
       void refreshSessions([de, a]);
-      setProjectList(await invoke<Project[]>("list_projects"));
+      await projectCatalog.changed();
     } catch (e) {
       setError(prosaDe(e));
     }
@@ -8901,7 +8893,7 @@ export default function App() {
           setInicioDeCarpeta(null);
         })}
         onHecho={async (p, activate) => {
-          setProjectList(await invoke<Project[]>("list_projects"));
+          await projectCatalog.changed();
           // El backend ya la fijó en el escritorio desde el que se pidió: un
           // clon en segundo plano termina cuando la ventana puede mirar otro.
           await reloadSpaces();
