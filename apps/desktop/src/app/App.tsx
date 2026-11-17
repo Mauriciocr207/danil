@@ -43,7 +43,7 @@ import {
 import { DelegatedLaunch, DelegatedNone, DelegatedToolbar, delegatedAttention, delegatedDescendants, delegatedFamilies, type DelegatedListProps, type DelegatedPanelModel } from "../features/chat/DelegatedTasks";
 import PreviousAgentChat from "../features/chat/PreviousAgentChat";
 import type { AlmacenDePreguntas, PreguntasAMedias, Respuesta, RespuestaEnviada } from "../features/chat/Questions";
-import { contestaALaTerminal, despachable, ENTREGA_SIN_CONFIRMAR, esDeLaTerminal, guardable, inyectable, type RazonDeRetencion, retencionAlCargar, siguienteLote, sueltaElBorrador } from "../features/chat/queue";
+import { contestaALaTerminal, ENTREGA_SIN_CONFIRMAR, inyectable } from "../features/chat/queue";
 import type { ComandoEnVivo } from "../features/chat/ShellCard";
 import { comandoDeTerminal } from "../features/chat/terminalIndent";
 import type { AlMargen } from "../features/chat/SideQuestion";
@@ -260,7 +260,7 @@ import {
   tituloProvisional,
   unirFuentes,
 } from "../lib/taskDraft";
-import { editMentions, type PlaceCandidate, type TaskCandidate, type TaskMention } from "../lib/taskMentions";
+import { type PlaceCandidate, type TaskCandidate, type TaskMention } from "../lib/taskMentions";
 import { aplicarTemaDeTerminal } from "../lib/terminal-themes";
 import {
   type SessionUsage,
@@ -290,6 +290,7 @@ import { apagarVistasDe, hayVistasDe, soltarVistasHuerfanas } from "../features/
 import { DragOverlay, UnsavedCloseDialog } from "../features/tabs";
 import { TitleBarSection } from "../features/shell";
 import { createDraftsStore } from "../features/drafts";
+import { createTaskQueues } from "../features/task-queues";
 
 // Lo que falla en el camino a la ventana y no en el comando: se vuelve a
 // preguntar en vez de pintarlo (`cli/service/mod.rs`, `para_la_ventana`).
@@ -1528,34 +1529,17 @@ export default function App() {
   // el material que la tarea lee.
   const [ventana, setVentana] = createSignal<Ventana>(null);
 
-  // Lo escrito durante un turno, que sale cuando el turno cierre. Vive
-  // aquí y no dentro de la caja: es de la SESIÓN.
-  const [cola, setCola] = createSignal<Encolado[]>([]);
-  // De qué sesión es la cola que se tiene en la mano. `null` es una
-  // conversación que todavía no existe en disco.
-  const [colaDe, setColaDe] = createSignal<string | null>(null);
-  /**
-   * Por qué la cola no avanza sola: `fallo` es un turno que no cerró bien
-   * —mandar algo encima de lo reventado compone el daño—; `borrador` se
-   * cargó de disco y podría dispararse contra un proyecto ya cambiado;
-   * `pregunta` es la única que no se suelta a mano, se sale contestando;
-   * `session` espera a que termine otro turno de esta misma sesión.
-   */
-  const [retenida, setRetenida] = createSignal<
-    null | "fallo" | "borrador" | "pregunta" | "session"
-  >(null);
-  type SavedQueue = { project: string; items: Encolado[]; retained: RazonDeRetencion | null };
-  const savedQueues = new Map<string, SavedQueue>();
-  const drainingQueues = new Set<string>();
-  // La retención de cada cola de los workspaces que se dejaron. Sin ella, volver
-  // la leía de disco como `borrador` y se quedaba parada (`retencionAlCargar`).
-  const workspaceRetentions = new Map<string, Map<string, RazonDeRetencion | null>>();
-  // La tarea cuya cola se abrió en `borrador` por venir de disco (`sueltaElBorrador`).
-  let draftFromDisk: string | null = null;
-
-  createEffect(on([cola, colaDe, retenida], ([items, owner, retained]) => {
-    if (owner && owner === sessionId()) savedQueues.set(owner, { project: project(), items, retained });
-  }));
+  const taskQueues = createTaskQueues({
+    scope: () => ({ workspace: workspaceActivo(), generation: workspaceContext.generation(), session: sessionId(), project: project() }),
+    readQueue: (scope) => invoke<Encolado[]>("load_queue", { project: scope.project, session: scope.session }, opcionesDeLaTarea(scope.session, scope.workspace)),
+    writeQueue: (scope, queued) => invoke("save_queue", { project: scope.project, session: scope.session, queued }, opcionesDeLaTarea(scope.session, scope.workspace)),
+    onSaveFailure: (error, scope) => anexar(scope.session, messages => [...messages, { role: "system", text: t("shell.queue.save_failed", { error: prosaDe(error) }), meta: "aviso" }]),
+  });
+  onCleanup(taskQueues.dispose);
+  const cola = taskQueues.items;
+  const colaDe = taskQueues.owner;
+  const retenida = taskQueues.retained;
+  const editando = taskQueues.editing;
 
   /** El título de la sesión ocupada. */
   const [esperandoA, setEsperandoA] = createSignal<string | null>(null);
@@ -1583,7 +1567,7 @@ export default function App() {
   const [enFondo, setEnFondo] = createSignal<string[]>([]);
   // Editar pausa la cola: si el turno cierra a mitad de la edición, no se manda
   // el texto a medias.
-  const [editando, setEditando] = createSignal(false);
+
   // La pregunta al margen vive en memoria y es de una tarea: al cambiar de
   // tarea se pierde, y la respuesta que llegue tarde no se pinta en otra.
   const [alMargen, setAlMargen] = createSignal<AlMargen | null>(null);
@@ -2106,11 +2090,7 @@ export default function App() {
     if (previousWorkspace) workspaceThreads.set(previousWorkspace, Object.fromEntries(
       Object.entries(hilos()).filter(([id]) => liveThreads.has(liveThreadKey(previousWorkspace, id))),
     ));
-    if (previousWorkspace) workspaceRetentions.set(previousWorkspace, new Map(
-      [...savedQueues].filter(([, queued]) => queued.items.length > 0).map(([id, queued]) => [id, queued.retained]),
-    ));
-    savedQueues.clear();
-    drainingQueues.clear();
+    taskQueues.workspaceChanged(previousWorkspace);
     workspaceContext.activate(transition);
     // «Ejecutar en» dice qué tiene cada máquina del workspace abierto: con otro, se relee.
     void refetchMachines();
@@ -2416,18 +2396,13 @@ export default function App() {
         // saliera lo que ya estaba escrito. Retener aquí dejaría el mensaje
         // parado y el gesto a medias; la marca se suelta al salir la cola.
         const saleAhora = enviarAlCerrar.has(session);
-        if (session === sessionId() && !saleAhora) setRetenida(retained);
-        if (draftFromDisk === session) draftFromDisk = null;
-        const queued = savedQueues.get(session);
-        if (queued) savedQueues.set(session, { ...queued, retained: saleAhora ? null : retained });
+        taskQueues.turnClosed(session, retained, saleAhora);
         if (ok == null) sinDesenlace.add(session);
         else sinDesenlace.delete(session);
       } else if (sinDesenlace.delete(session)) {
         // El registro lo dio por cerrado antes de que llegara su `done`: el
         // borrador era por no saber cómo acabó, y ya se sabe.
-        if (session === sessionId() && retenida() === "borrador") setRetenida(null);
-        const queued = savedQueues.get(session);
-        if (queued?.retained === "borrador") savedQueues.set(session, { ...queued, retained: null });
+        taskQueues.releaseDraft(session);
       }
       marcarQuieta(session);
       anexar(session, (messages) =>
@@ -2448,7 +2423,7 @@ export default function App() {
       if (unsaved) anexar(session, (messages) => [...messages, { role: "system", text: t("chat.turn.unsaved"), meta: "fallo" }]);
     });
     const tab = pestanas.open().find((item) => item.id === session);
-    const projectId = session === sessionId() ? project() : tab?.project ?? savedQueues.get(session)?.project ?? tareaDelRiel(session)?.folder;
+    const projectId = session === sessionId() ? project() : tab?.project ?? taskQueues.saved(session)?.project ?? tareaDelRiel(session)?.folder;
     try {
       // El motor no pudo escribir el turno: el disco no lo tiene, y releerlo
       // borraría del chat la respuesta que la persona acaba de ver llegar.
@@ -2636,7 +2611,7 @@ export default function App() {
       });
       for (const id of active) pendingStarts.delete(id);
       const nuevas = active.filter((id) => !vivas().includes(id));
-      const finished = vivas().filter((id) => !active.includes(id) && !pendingStarts.has(id) && !drainingQueues.has(id));
+      const finished = vivas().filter((id) => !active.includes(id) && !pendingStarts.has(id) && !taskQueues.draining(id));
       for (const id of nuevas) void reponerGates(id);
       for (const id of active) if (!settlingTurns().includes(id)) marcarViva(id);
       for (const id of finished) void settleTurn(id);
@@ -2749,9 +2724,8 @@ export default function App() {
         }
         if (esDelWorkspaceAbierto(workspace)) finishedTurns.set(session, ok);
         // Lo mismo que `settleTurn`, para la cola de un workspace que no se mira.
-        const retentions = workspace ? workspaceRetentions.get(workspace) : undefined;
-        if (!esDelWorkspaceAbierto(workspace) && ok !== true && retentions?.has(session)) {
-          retentions.set(session, ok === false ? "fallo" : "borrador");
+        if (workspace && !esDelWorkspaceAbierto(workspace) && ok !== true && taskQueues.retainedAt(workspace, session) !== undefined) {
+          taskQueues.retainAt(workspace, session, ok === false ? "fallo" : "borrador");
         }
         if (esDelWorkspaceAbierto(workspace) && deteniendo() === session) setDeteniendo(null);
         // Un turno que acaba libera el material que tenía delante, y hay quien
@@ -3395,9 +3369,7 @@ export default function App() {
   }
 
   function quitarDeLaCola(session: string, id: string) {
-    const saved = savedQueues.get(session);
-    if (saved) savedQueues.set(session, { ...saved, items: saved.items.filter((q) => q.id !== id) });
-    if (session === sessionId()) setCola((c) => c.filter((q) => q.id !== id));
+    taskQueues.remove(id, session);
   }
 
   // Lo que se pinta de un `!` en marcha. Más atrás no se lee y volver a pintarlo
@@ -3453,7 +3425,7 @@ export default function App() {
     comandosDeLaCola.delete(session);
     const detenido = detenidos.delete(session);
     const codigo = ev.meta ? Number(ev.meta) : null;
-    const restantes = session === sessionId() ? cola() : savedQueues.get(session)?.items ?? [];
+    const restantes = session === sessionId() ? cola() : taskQueues.saved(session)?.items ?? [];
     // Sin superficie utilizable nadie contesta: la salida viaja con el primer mensaje.
     const hayQuienConteste = (superficies() ?? []).some((s) => s.usable && s.provider === lanzado?.provider);
     const contestar = lanzado && codigo !== null && contestaALaTerminal(restantes, detenido, hayQuienConteste) ? lanzado : null;
@@ -3568,7 +3540,7 @@ export default function App() {
       if (claveAbierta() !== nace.claveBorrador) return;
       setSessionId(session);
       setHablandoCon(null);
-      setColaDe(session);
+      taskQueues.adopt(session);
     });
     return true;
   }
@@ -3654,7 +3626,7 @@ export default function App() {
     const clave = error === null ? null : claveDe(error);
     if (error === null || clave === "chat.shell.not_queued" || clave === "chat.shell.not_from_person") {
       quitarDeLaCola(abierta, item.id);
-    } else if (sessionId() === abierta) setRetenida("fallo");
+    } else if (sessionId() === abierta) taskQueues.retain("fallo");
   }
 
   /** Le teclea al `!` en marcha de una tarea. La terminal no hace eco: lo pinta la ventana. */
@@ -3721,42 +3693,9 @@ export default function App() {
     }
   }
 
-  // La cola se guarda en la carpeta de la sesión, no en esta máquina: es
-  // del trabajo, no una preferencia, y se va con ella al borrarla. Sin
-  // sesión el guardado se salta —el primer turno la crea y se guarda de
-  // golpe. Lo que NO escribe es una mano vacía que estrena dueño —la
-  // sesión recién abierta—: si su `.cola.json` no se pudo leer, guardarla
-  // encima borraría lo único que quedaba dentro.
-  createEffect(
-    on([cola, colaDe] as const, ([items, de], antes) => {
-      // `on` corre su cuerpo sin rastrear: leer aquí qué se está mirando
-      // no suscribe este efecto a la sesión abierta.
-      if (!guardable(de, sessionId())) return;
-      // La mano no cambió y está vacía: esto es el estreno de dueño y nada más.
-      if (antes && antes[0] === items && items.length === 0) return;
-      invoke("save_queue", {
-        project: project(),
-        session: de,
-        queued: items,
-      }, deLaTarea(de)).catch((e) =>
-        anexar(de, (m) => [
-          ...m,
-          {
-            role: "system",
-            text: t("shell.queue.save_failed", { error: prosaDe(e) }),
-            meta: "aviso",
-          },
-        ]),
-      );
-    }),
-  );
-
   createEffect(() => {
     const id = sessionId();
-    if (id && sueltaElBorrador(retenida(), vivas().includes(id), draftFromDisk === id)) {
-      draftFromDisk = null;
-      setRetenida(null);
-    }
+    if (id) taskQueues.releaseDiskDraft(id, vivas().includes(id));
   });
 
   createEffect(() => {
@@ -3772,7 +3711,7 @@ export default function App() {
       try {
         const ready = await invoke<boolean>("queue_ready", { project: proyecto, session: id }, deLaTarea(id));
         if (ready && !cancelled && generation === workspaceContext.generation() && id === sessionId()) {
-          setRetenida(null);
+          taskQueues.retain(null);
         }
       } catch {
         // Un fallo al consultar no demuestra que la tarea ya esté disponible.
@@ -3787,11 +3726,11 @@ export default function App() {
   createEffect(
     on(
       [cola, colaDe, sessionId, queueBusy, editando, retenida, esperando, cierres] as const,
-      ([items, de, mirando, ocupado, edit, ret, esp, cierre]) => {
+      ([items, _de, mirando, ocupado, edit, ret, esp, cierre]) => {
         if (items.length === 0) {
           // Sin nada en cola no hay nada que retener. Si no se soltara aquí, un
           // fallo dejaría detenida para siempre la cola que venga después.
-          if (ret) setRetenida(null);
+          if (ret) taskQueues.retain(null);
           // «Detener y enviar» sin nada que enviar ya no tiene promesa que cumplir.
           enviarAlCerrar.delete(mirando ?? "");
           return;
@@ -3799,89 +3738,47 @@ export default function App() {
         // El cierre permite reintentar una sesión reservada por otro turno.
         if (ret === "session") {
           if (cierre === cierreDeLaRetencion) return;
-          setRetenida(null);
-          return;
-        }
-        // `esperando` retiene la cola igual que un fallo: lo que está en
-        // cola se escribió antes de que el agente preguntara. Soltarlo
-        // haría correr el turno siguiente sin el dato que pidió.
-        if (
-          !despachable({
-            pendientes: items.length,
-            de,
-            mirando,
-            ocupado,
-            editando: edit,
-            retenida: ret,
-            esperando: esp,
-          })
-        )
-          return;
-        const { mensaje, lote, resto } = siguienteLote(items);
-        if (!mensaje) return;
-        if (esDeLaTerminal(lote[0])) {
-          void ejecutarDeLaCola(lote[0]);
+          taskQueues.retain(null);
           return;
         }
         batch(() => {
-          // Lo que no cabe en este turno —lo que viene de otro remitente— se
-          // queda en la cola y sale en el siguiente, no se pierde ni se cuela
-          // firmado por quien no lo escribió.
-          setCola(resto);
-          // La promesa de «detener y enviar» se cumple aquí: el cierre de ese
-          // turno ya no tiene que dejar paso a una cola que ya salió.
+          const next = taskQueues.next({ busy: ocupado, waiting: esp, editing: edit });
+          if (!next) return;
+          if (next.kind === "shell") {
+            void ejecutarDeLaCola(next.item);
+            return;
+          }
           enviarAlCerrar.delete(mirando ?? "");
-          void enviar(mensaje);
+          void enviar(next.message);
         });
       },
     ),
   );
 
   async function drainHiddenQueue(session: string) {
-    const queued = savedQueues.get(session);
-    if (!queued?.items.length || session === sessionId() || vivas().includes(session) || drainingQueues.has(session) ||
-      settlingTurns().includes(session) || injecting().some((item) => item.session === session)) return;
-    if (queued.retained && queued.retained !== "session") return;
     const history = hilos()[session];
-    if (!history || preguntasPendientes([...history.base, ...history.vivo])) return;
-    const { mensaje: message, lote, resto } = siguienteLote(queued.items);
-    // Un `!` no corre en una tarea que nadie mira: espera a que se abra.
-    if (!message || esDeLaTerminal(lote[0])) return;
+    const reservation = taskQueues.beginHidden(session, vivas().includes(session) || settlingTurns().includes(session) ||
+      injecting().some(item => item.session === session) || !history || preguntasPendientes([...(history?.base ?? []), ...(history?.vivo ?? [])]));
+    if (!reservation) return;
     const generation = workspaceContext.generation();
-    drainingQueues.add(session);
-    savedQueues.set(session, { ...queued, items: resto, retained: null });
     marcarViva(session);
     try {
-      await invoke("save_queue", { project: queued.project, session, queued: resto }, deLaTarea(session));
+      await taskQueues.persist(session, reservation.project, taskQueues.saved(session)?.items ?? []);
       if (generation !== workspaceContext.generation()) return;
-      if (!await enviar(message, undefined, { project: queued.project, session })) throw new Error("queue-send-failed");
+      if (!await enviar(reservation.message, undefined, { project: reservation.project, session })) throw new Error("queue-send-failed");
     } catch (error) {
       if (generation !== workspaceContext.generation()) return;
-      const restored = {
-        ...queued,
-        // Lo que salió vuelve delante de lo que quedó esperando: `savedQueues`
-        // ya tiene el resto, y reponer la lista entera lo duplicaría.
-        items: [...lote, ...(savedQueues.get(session)?.items ?? [])],
-        retained: claveDe(error) === "history.error.busy" ? "session" as const : "fallo" as const,
-      };
-      savedQueues.set(session, restored);
-      if (session === sessionId()) batch(() => {
-        setRetenida(restored.retained);
-        setCola(restored.items);
-        setColaDe(session);
-      });
+      const restored = taskQueues.restoreHidden(reservation, claveDe(error) === "history.error.busy" ? "session" : "fallo");
       marcarQuieta(session);
-      void invoke("save_queue", { project: queued.project, session, queued: restored.items }, deLaTarea(session)).catch((error) => {
-        anexar(session, (messages) => [...messages, { role: "system", text: t("shell.queue.save_failed", { error: prosaDe(error) }), meta: "aviso" }]);
-      });
+      if (restored) void taskQueues.persistRestored(session, reservation.project, restored);
     } finally {
-      drainingQueues.delete(session);
+      taskQueues.endHidden(session);
     }
   }
 
   onMount(() => {
     const timer = setInterval(() => {
-      for (const [session, queued] of savedQueues) {
+      for (const [session, queued] of taskQueues.savedEntries()) {
         if (queued.retained === "session") void drainHiddenQueue(session);
       }
     }, 1000);
@@ -4095,14 +3992,7 @@ export default function App() {
   // con `colaDe` todavía nombrando la sesión que se abandona es un
   // `save_queue` con la cola vacía, y el `.cola.json` de esa tarea desaparece
   // con lo que se había escrito para ella.
-  function soltarCola() {
-    batch(() => {
-      setColaDe(null);
-      setCola([]);
-      setRetenida(null);
-      setEditando(false);
-    });
-  }
+  const soltarCola = taskQueues.detach;
 
   // Abrir una sesión de otro proyecto cambia el contexto entero: la sesión
   // pertenece a su proyecto y arrastrarla al activo la sacaría de sitio.
@@ -4206,23 +4096,7 @@ export default function App() {
     // Después de la transcripción, que la reemplaza entera: un aviso
     // escrito antes de este punto no dejaría rastro.
     try {
-      const cached = savedQueues.get(id);
-      const q = cached?.items ?? await invoke<Encolado[]>("load_queue", {
-        project: proyecto,
-        session: id,
-      }, deLaTarea(id));
-      if (!current()) return;
-      const restored = savedQueues.get(id);
-      const retentions = workspaceRetentions.get(workspaceActivo() ?? "");
-      const kept = retentions?.get(id);
-      retentions?.delete(id);
-      const retained = restored ? restored.retained : retencionAlCargar(q.length, kept);
-      draftFromDisk = !restored && kept === undefined && retained === "borrador" ? id : null;
-      batch(() => {
-        setCola(restored?.items ?? q);
-        setColaDe(id);
-        setRetenida(retained);
-      });
+      await taskQueues.openSession(id, proyecto, current);
     } catch (e) {
       if (!current()) return;
       // Sin esto la cola queda sin dueño: no es «no pude leerla», es que
@@ -4230,7 +4104,7 @@ export default function App() {
       // en la mano sea la de la tarea abierta. Lo no leído se conserva en
       // su archivo: el guardado cuelga del contenido, y adoptar una mano
       // vacía no lo pisa.
-      setColaDe(id);
+      taskQueues.adopt(id);
       anexar(id, (m) => [
         ...m,
         {
@@ -5834,7 +5708,7 @@ export default function App() {
           drafts.acceptSources(pendientes);
         // La cola escrita durante el primer turno es de la sesión que ese turno
         // acaba de crear.
-        setColaDe(id);
+        taskQueues.adopt(id);
       }
       if (finishedTurns.has(id)) void settleTurn(id, finishedTurns.get(id));
       return true;
@@ -5865,7 +5739,7 @@ export default function App() {
         retainBusySession(m, { title: filaDe(abierta ?? "")?.title ?? "" }, abierta);
         return true;
       }
-      if (abierta === sessionId()) setRetenida("fallo");
+      if (abierta === sessionId()) taskQueues.retain("fallo");
       if (!abierta) setArrancando(false);
       if (abierta) marcarQuieta(abierta);
       asentar(clave, (ms) =>
@@ -6279,7 +6153,7 @@ export default function App() {
       if (m.meta === "fallo" && m.resume === "deliveries") {
         const abierta = sessionId();
         if (!abierta) return;
-        setRetenida(null);
+        taskQueues.retain(null);
         try {
           await invoke("reintentar_reanudacion_por_entregas", { project: project(), session: abierta }, deLaTarea(abierta));
         } catch (e) {
@@ -6289,7 +6163,7 @@ export default function App() {
       }
       if (m.role !== "user" || !m.text.trim()) continue;
       drafts.retryText(m.text, m.task_mentions);
-      setRetenida(null);
+      taskQueues.retain(null);
       await mandar([]);
       return;
     }
@@ -6300,9 +6174,7 @@ export default function App() {
   // al enviar: quitarlo de la cola no deja archivos sueltos.
   function encolar(text: string, attachments: string[], task_mentions?: TaskMention[], recipients?: Recipient[]) {
     const id = `${Date.now().toString(36)}-${++encolados}`;
-    setCola((c) => [
-      ...c,
-      {
+    taskQueues.enqueue({
         id,
         text,
         task_mentions,
@@ -6313,8 +6185,7 @@ export default function App() {
         permission_mode: modo() || null,
         attachments,
         space: escritorio(),
-      },
-    ]);
+      });
     return id;
   }
 
@@ -6330,12 +6201,9 @@ export default function App() {
   ) {
     cierreDeLaRetencion = cierres();
     batch(() => {
-      setCola((c) => [
-        { ...m, id: m.id ?? `${Date.now().toString(36)}-${++encolados}` },
-        ...c,
-      ]);
+      taskQueues.prependBusy({ ...m, id: m.id ?? `${Date.now().toString(36)}-${++encolados}` });
       setEsperandoA(titular.title);
-      setRetenida("session");
+      taskQueues.retain("session");
       setArrancando(false);
       if (abierta) marcarQuieta(abierta);
     });
@@ -6343,12 +6211,12 @@ export default function App() {
 
   function editarEncolado(id: string, text: string, mentions?: TaskMention[]) {
     if (injecting().some((item) => item.id === id)) return;
-    setCola((c) => c.map((q) => (q.id === id ? { ...q, text, task_mentions: mentions ?? editMentions(q, text) } : q)));
+    taskQueues.edit(id, text, mentions);
   }
 
   function quitarEncolado(id: string) {
     if (injecting().some((item) => item.id === id)) return;
-    setCola((c) => c.filter((q) => q.id !== id));
+    taskQueues.remove(id);
   }
 
   /**
@@ -6374,8 +6242,8 @@ export default function App() {
     const m = cola().find((q) => q.id === id);
     if (!abierta || !m || !inyectable(m)) return;
     // Lo elegido sale primero; el resto conserva su orden.
-    setCola((c) => [m, ...c.filter((q) => q.id !== id)]);
-    setRetenida(null);
+    taskQueues.prioritize(id);
+    taskQueues.retain(null);
     // Sin turno vivo no hay nada que detener: la cola sale sola.
     if (!busy()) return;
     enviarAlCerrar.add(abierta);
@@ -6417,9 +6285,7 @@ export default function App() {
       // bajo el mensaje recién escrito afirma una espera que no es suya.
       // Solo si ya había reloj: apuntarlo aquí encendería una fila quieta.
       setDesdeDeTurno((d) => (abierta in d ? { ...d, [abierta]: Date.now() } : d));
-      const saved = savedQueues.get(abierta);
-      if (saved) savedQueues.set(abierta, { ...saved, items: saved.items.filter((item) => item.id !== id) });
-      if (sessionId() === abierta && project() === sourceProject) setCola((c) => c.filter((q) => q.id !== id));
+      taskQueues.remove(id, abierta);
       // Con su `turno`: la relectura de la tarea a mitad del turno ya lo trae de disco, y sin id salía dos veces.
       anexar(abierta, (ms) => [...ms, {
         role: "user",
@@ -6435,9 +6301,7 @@ export default function App() {
       // El turno acaba de cerrar: el mensaje sigue en la cola y sale como el siguiente.
       if (clave === "chat.steer.not_running" || clave === "chat.steer.stopping") return;
       if (clave === "chat.steer.delivered") {
-        const saved = savedQueues.get(abierta);
-        if (saved) savedQueues.set(abierta, { ...saved, items: saved.items.filter((item) => item.id !== id) });
-        if (sessionId() === abierta && project() === sourceProject) setCola((c) => c.filter((q) => q.id !== id));
+        taskQueues.remove(id, abierta);
         return;
       }
       // Este agente no recibe mensajes a medias: sigue en la cola y sale al cerrar
@@ -7312,8 +7176,8 @@ export default function App() {
           esperandoA: esperandoA(),
           onEditar: editarEncolado,
           onBorrar: quitarEncolado,
-          onEditando: setEditando,
-          onMandar: () => setRetenida(null),
+          onEditando: taskQueues.editMode,
+          onMandar: () => taskQueues.retain(null),
           // Solo con un turno vivo y con un agente que no haya dicho que no
           // recibe mensajes a medias: sin él, lo escrito sale por el camino
           // normal y el gesto no significaría nada; con él negado, sería un
