@@ -27,3 +27,24 @@ test('the selected machine follows the person even when the preference was creat
     } finally { setCapabilities(original); dispose(); }
   });
 });
+
+test('the last picked projects follow the person on the web', () => {
+  const values = new Map<string, string>();
+  Object.assign(globalThis, { localStorage: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) } });
+  const original = capabilities();
+  const person = (id: string) => setCapabilities({ ...original, nativeWindow: false, webAccounts: {
+    current: { user_id: id, email: null, name: null, extra: false }, others: () => [], open: () => {}, add: () => {}, remove: async () => {}, signOut: () => {},
+  } });
+  createRoot(dispose => {
+    try {
+      const [read, write] = createPref<Record<string, Record<string, number>>>('projects.last_picked', {});
+      person('user_A');
+      write({ w: { p1: 1 } });
+      assert.equal(values.get('danil.web.user_A.preferences.projects.last_picked'), '{"w":{"p1":1}}');
+      person('user_B');
+      assert.deepEqual(read(), {});
+      person('user_A');
+      assert.deepEqual(read(), { w: { p1: 1 } });
+    } finally { setCapabilities(original); dispose(); }
+  });
+});

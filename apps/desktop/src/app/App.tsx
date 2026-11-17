@@ -113,8 +113,9 @@ import { createdTasks } from "../features/projects/agentPageFilters";
 import BaseBranchPicker from "../features/projects/BaseBranchPicker";
 import { watchHandlerStatus, watchHandlerStatuses } from "../features/projects/handlerPresence";
 import { EmptyContext, ProjectPicker } from "../features/projects/Projects";
+import { activityByProject, type PickedAt, rememberPick } from "../features/projects/recent";
 import { bringHereLabel, canBringHere, carryOrigin, machineName, machineOf, machineWakes, machines, refetchMachines, remoteChildScope, runOn, senderTaskId, setRunOn, setTaskRowMachine } from "../features/machines/store";
-import { canonicalAgentId, isFreeRouterModel, launcherOf, OPENCODE, withRemoteLaunchers } from "@terminus/tasks";
+import { canonicalAgentId, isFreeRouterModel, lastActivity, launcherOf, OPENCODE, withRemoteLaunchers } from "@terminus/tasks";
 import type { CarriedBase, CarryCheck } from "../features/machines/carry";
 // Chunk aparte: solo lo carga quien crea una tarea, no la carga inicial.
 const MachinePicker = lazy(() =>
@@ -483,6 +484,16 @@ export default function App() {
   // responde por proyecto: se pregunta una vez por cada uno. Son lecturas
   // de un directorio, no de red.
   const [sesiones, setSesiones] = createSignal<Record<string, SessionRow[]>>({});
+  // Lo que ordena el selector de proyectos: sus tareas vivas y la última vez que se eligió, por workspace.
+  const actividadDeProyectos = createMemo(() => activityByProject(sesiones(), lastActivity));
+  const [proyectosElegidos, setProyectosElegidos] = createPref<Record<string, PickedAt>>("projects.last_picked", {});
+  const elegidosAqui = () => proyectosElegidos()[workspaceActivo() ?? ""] ?? {};
+  function recordarEleccion(id: string) {
+    const workspace = workspaceActivo();
+    if (!workspace || !id) return;
+    const existentes = new Set([...projectList(), ...composerProjects()].map((p) => p.id));
+    setProyectosElegidos({ ...proyectosElegidos(), [workspace]: rememberPick(elegidosAqui(), id, Date.now(), existentes) });
+  }
   /**
    * Las tareas que la pantalla ya pinta y Rust todavía no ha escrito.
    *
@@ -7032,7 +7043,12 @@ export default function App() {
           projects={props.nueva ? composerProjects() : projectList()}
           project={project()}
           sources={sources()}
-          onPick={elegirProyecto}
+          activity={actividadDeProyectos()}
+          picked={elegidosAqui()}
+          onPick={(id) => {
+            recordarEleccion(id);
+            elegirProyecto(id);
+          }}
           onNuevoProyecto={() => setAnadiendoCarpeta(true)}
           onAdministrar={() => setSettings("proyectos")}
           // Solo al crear: una tarea abierta ya vive en la máquina que la corre.
