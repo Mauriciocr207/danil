@@ -28,7 +28,11 @@ export function createProjectsStore(deps: { scope: () => ProjectsScope; invoke: 
   });
   const empty: Project[] = [];
   const snapshotRows = () => { const current = resource.state(); return "value" in current ? current.value : empty; };
-  const rows = createMemo(() => { const current = resource.state(); return current.status !== "idle" && current.key === scopeKey(deps.scope()) ? snapshotRows() : empty; });
+  const rows = createMemo(() => {
+    const current = resource.state();
+    const found = current.status !== "idle" && current.key === scopeKey(deps.scope()) ? snapshotRows() : empty;
+    return found.length === 0 ? empty : found;
+  });
   const routed = new Map<string, ReturnType<typeof createResource<string, Project[]>>>();
   const refresh = () => resource.read(scopeKey(currentScope()));
   const invalidate = () => { resource.invalidate(); for (const reader of routed.values()) reader.invalidate(); };

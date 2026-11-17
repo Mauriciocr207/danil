@@ -142,3 +142,19 @@ test("project mutations pin both workspace and machine before awaiting the reply
   scope = { workspace: "B", machine: "m2" }; store.workspaceChanged(); reply.resolve(null); await writing;
   assert.deepEqual(calls, [{ command: "rename_project", headers: { "x-terminus-workspace": "A", "x-terminus-machine": "m1" } }]); store.dispose();
 });
+
+test("empty project snapshots do not restart row consumers", async () => {
+  let updates = 0; let release!: () => void;
+  const store = createRoot(dispose => {
+    const current = projectsStore({ scope: () => ({ workspace: "A", machine: null }), invoke: async <T>() => [] as T });
+    createEffect(() => { current.rows(); updates++; });
+    release = () => { current.dispose(); dispose(); }; return current;
+  });
+  const initial = store.rows();
+  store.workspaceChanged();
+  await store.refresh();
+  store.fromCache([]);
+  assert.equal(store.rows(), initial);
+  assert.equal(updates, 1);
+  release();
+});
