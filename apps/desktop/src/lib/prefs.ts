@@ -13,7 +13,7 @@ import { capabilities } from "./platform.ts";
  */
 const NS = "harness.layout.";
 function storageKey(key: string) {
-  const person = (key === "machines.run_on" || key === "machines.known_names") && !capabilities().nativeWindow ? capabilities().webAccounts?.current.user_id : null;
+  const person = ["machines.run_on", "machines.known_names", "workspaces.hidden"].includes(key) && !capabilities().nativeWindow ? capabilities().webAccounts?.current.user_id : null;
   return person ? `danil.web.${person}.preferences.${key}` : NS + key;
 }
 
@@ -74,7 +74,7 @@ export function createPref<T>(
   clave: string,
   porOmision: T,
 ): [Accessor<T>, (valor: T) => void] {
-  if (clave === "machines.run_on") {
+  if (clave === "machines.run_on" || clave === "workspaces.hidden") {
     const [revision, changed] = createSignal(0);
     return [() => { revision(); return leerPref(clave, porOmision); }, value => {
       escribirPref(clave, value);

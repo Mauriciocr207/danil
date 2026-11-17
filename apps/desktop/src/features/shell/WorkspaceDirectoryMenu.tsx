@@ -9,6 +9,7 @@ import { ITEM_DE_MENU } from "../../ui/Popover";
 import { createWorkspaces } from "../settings/workspaces-store";
 import { directoryErrorText } from "./directory-errors";
 import { directory, linkableAccounts, linkActiveWorkspace, togglePin } from "./workspace-directory";
+import WorkspaceSearch, { SEARCH_FROM } from "./WorkspaceSearch";
 
 /** Desde aquí se entra a cualquier workspace; la barra solo muestra los fijados. */
 export default function WorkspaceDirectoryMenu(props: { onClose: () => void }) {
@@ -51,15 +52,8 @@ export default function WorkspaceDirectoryMenu(props: { onClose: () => void }) {
   return (
     <Show when={entries().length > 0}>
       <p class="m-0 px-2 pt-1 pb-1 text-caption font-medium text-neutral-500">{t("shell.directory.title")}</p>
-      <Show when={entries().length > 6}>
-        <input
-          type="search"
-          class="mx-2 mb-1 h-7 w-[calc(100%-1rem)] rounded-sm border border-border bg-surface px-2 text-xs outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-primary"
-          placeholder={t("shell.directory.search")}
-          aria-label={t("shell.directory.search")}
-          value={query()}
-          onInput={(e) => setQuery(e.currentTarget.value)}
-        />
+      <Show when={entries().length >= SEARCH_FROM}>
+        <WorkspaceSearch value={query()} onInput={setQuery} />
       </Show>
       <div class="max-h-64 overflow-y-auto" data-workspace-directory="">
         <For each={groupDirectory(visible())}>
