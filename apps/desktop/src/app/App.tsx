@@ -7443,7 +7443,7 @@ export default function App() {
       machine={draftMachine() ?? undefined}
       on={machines().find(m => m.id === draftMachine())?.on !== false}
       onScreen={abrirPantalla}
-      project={proyectoDeLaCelda()?.name}
+      project={proyectoDeLaCelda()}
       path={carpetaDeTrabajo(proyectoDeLaCelda() ?? {}) || undefined} /></Suspense>)}</Show>}>{(id) => {
       return barraDeLaTarea(<Suspense fallback={null}><TaskLocation
         machine={filaDe(id())?.machine}
@@ -7453,7 +7453,7 @@ export default function App() {
           const folder = proyectoDeLaCelda()?.id;
           if (folder) void abrirSesion(folder, id()).then(() => archivosDeTarea.setOpen(id(), true));
         }}
-        project={proyectoDeLaCelda()?.name}
+        project={proyectoDeLaCelda()}
         path={estadoDelTrabajo()?.path || undefined}
         branch={workLabel(estadoDelTrabajo()?.branch, estadoDelTrabajo()?.alias) || undefined} /></Suspense>);
     }}</Show>;
