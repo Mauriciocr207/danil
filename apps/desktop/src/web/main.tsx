@@ -1,7 +1,7 @@
 import "../styles/global.css";
 import "../lib/sharedClock";
-import { announceStaleTab, updateNoticeReady } from "./update-state";
 import { phoneRoute } from "./phone";
+import { announceStaleTab, updateNoticeReady } from "./update-state";
 
 declare const __DANIL_WEB_API__: import("./session-config").WebSessionDeployment;
 /** La compilación publica la versión del teléfono en `<base>m/` (`DANIL_WEB_PHONE=1`, `web-mobile.mjs`). */
@@ -20,10 +20,10 @@ window.addEventListener("vite:preloadError", (event) => {
   window.location.reload();
 });
 
-
 const phone = __DANIL_WEB_PHONE__ ? phoneRoute(window.location, import.meta.env.BASE_URL, window) : null;
 if (phone) window.location.replace(phone);
 else {
+  document.querySelector("link[data-app-preload]")?.setAttribute("rel", "modulepreload");
   const root = document.getElementById("root") as HTMLElement;
   void import("./window-session").then(m => m.startWindow(__DANIL_WEB_API__, root));
 }

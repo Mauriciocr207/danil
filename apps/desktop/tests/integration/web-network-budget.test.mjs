@@ -19,7 +19,7 @@ function exceeded(actual, limit, prefix = "") {
   });
 }
 
-test("real web startup and sixty seconds idle stay within the network budget", async (t) => {
+test("W1a shares control-plane startup reads and preserves the network budget", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setTimeout", "setInterval"], now: new Date("2026-11-13T18:00:00Z") });
   const counts = { http: {}, rpc: {}, sockets: 0, httpRequestPayloadBytes: 0, httpResponsePayloadBytes: 0, wsSentPayloadBytes: 0, wsReceivedPayloadBytes: 0 };
   const snapshot = () => structuredClone(counts);
@@ -115,12 +115,13 @@ test("real web startup and sixty seconds idle stay within the network budget", a
   await until(() => (counts.http["GET /v1/workspaces"] ?? 0) >= 1);
   await drain();
   t.mock.timers.tick(1000);
-  await until(() => milestones.paint && milestones.result);
+  await until(() => milestones.paint && milestones.result && browser.document.querySelector('[data-danil-foot="connected"]'));
   await drain();
   const app = await mounting;
   assert.deepEqual(app.failures, []);
   assert.ok(milestones.connected, "Socket upgrade is distinct from the first engine result");
   const startup = snapshot();
+  for (const path of ["/v1/identity/me", "/v1/capabilities", "/v1/workspaces"]) assert.equal(startup.http[`GET ${path}`], 1);
   for (let ms = 0; ms < 60_000; ms += 100) {
     t.mock.timers.tick(100);
     await drain();
@@ -131,8 +132,17 @@ test("real web startup and sixty seconds idle stay within the network budget", a
     for (const key of Object.keys(idle[group])) idle[group][key] -= startup[group][key] ?? 0;
   }
   for (const key of ["sockets", "httpRequestPayloadBytes", "httpResponsePayloadBytes", "wsSentPayloadBytes", "wsReceivedPayloadBytes"]) idle[key] -= startup[key];
+  for (const path of ["/v1/identity/me", "/v1/capabilities", "/v1/workspaces"]) assert.equal(idle.http[`GET ${path}`] ?? 0, 0);
   assert.deepEqual(app.failures, []);
   t.diagnostic(JSON.stringify({ startup, idle, milestones }));
   assert.deepEqual(exceeded(startup, baseline.startup), []);
   assert.deepEqual(exceeded(idle, baseline.idle), []);
+  for (let remaining = 238_999; remaining > 0; remaining -= 100) {
+    t.mock.timers.tick(Math.min(100, remaining));
+    await drain();
+  }
+  for (const path of ["/v1/identity/me", "/v1/capabilities", "/v1/workspaces"]) assert.equal(counts.http[`GET ${path}`], 1);
+  t.mock.timers.tick(1);
+  await until(() => counts.http["GET /v1/workspaces"] === 2);
+  for (const path of ["/v1/identity/me", "/v1/capabilities", "/v1/workspaces"]) assert.equal(counts.http[`GET ${path}`], 2);
 });

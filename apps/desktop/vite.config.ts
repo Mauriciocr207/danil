@@ -77,7 +77,14 @@ function webBuild(serve: boolean): UserConfig {
     },
     generateBundle(_, bundle) {
       const html = bundle["web.html"];
-      if (html) html.fileName = "index.html";
+      if (html?.type === "asset" && typeof html.source === "string") {
+        const entry = fileURLToPath(new URL("./src/app/main.tsx", import.meta.url));
+        const app = Object.values(bundle).find(chunk => chunk.type === "chunk" && Object.hasOwn(chunk.modules, entry));
+        if (!app) this.error("No se encontró la entrada de la ventana para precargarla");
+        // La ruta de escritorio activa la descarga; el teléfono redirige sin pedir esta entrada.
+        html.source = html.source.replace("</head>", `<link data-app-preload crossorigin href="${base}${app.fileName}">\n</head>`);
+        html.fileName = "index.html";
+      }
       if (!policy) this.error("web.html sin Content-Security-Policy");
     },
     // `_headers` lleva lo que un `<meta>` no puede (frame-ancestors). La copia de
