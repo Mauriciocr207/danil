@@ -33,6 +33,17 @@ test("si no, proveedor, carpeta, máquina y agente; el chat del agente no repite
   assert.equal(taskCard(row, { live: [], approving: [], hideFolder: true }).folder, null);
 });
 
+test("la marca es la de Danil cuando el turno lo sirvió Danil: Free Router o créditos", () => {
+  const mark = (provider: string, model: string | null) =>
+    taskCard({ ...row, provider, model }, { live: [], approving: [] }).mark;
+  assert.equal(mark("claude", "claude-opus-5-5"), "claude");
+  assert.equal(mark("opencode", "opencode-go/kimi"), "opencode");
+  assert.equal(mark("free-router-opencode", "danil-free/reflection/beam-free"), "danil");
+  assert.equal(mark("opencode", "danil-free/reflection/beam-free"), "danil");
+  assert.equal(mark("opencode", "danil-credits/deepseek/deepseek-v4.1-flash"), "danil");
+  assert.equal(taskCard(row, { live: [], approving: [] }).mark, null);
+});
+
 test("aprobar gana a todo y una entregada sin estado lleva su marca", () => {
   assert.equal(taskCard({ ...row, esperando: true }, { live: ["t1"], approving: ["t1"] }).state, "approving");
   const delivered = taskCard({ ...row, outcome: "delivered" as const }, { live: [], approving: [] });

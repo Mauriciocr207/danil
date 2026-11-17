@@ -62,6 +62,8 @@ export type TaskPreview = {
   folder: string | null;
   agent: string | null;
   provider: string | null;
+  /** La marca de la fila: Danil cuando el turno lo sirvió Danil. */
+  mark: string | null;
   /** El modelo con nombre legible; `null` es el modelo por omisión. */
   model: string | null;
   /** La máquina que la corre, solo si se enseña (más de una). */
@@ -85,6 +87,7 @@ export function taskPreview<T extends PreviewTask>(
     folder: card.folder,
     agent: task.agent ?? null,
     provider: task.provider || null,
+    mark: card.mark,
     model: task.model ? modelName(task.model, options.catalog) : null,
     machine: card.machine,
     pinned,

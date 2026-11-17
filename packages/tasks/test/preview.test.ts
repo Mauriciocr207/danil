@@ -11,12 +11,15 @@ test("la vista previa dice lo de la tarjeta flotante del escritorio, en su orden
   assert.equal(p.folder, "p1");
   assert.equal(p.agent, "Ada");
   assert.equal(p.provider, "claude");
+  assert.equal(p.mark, "claude");
   assert.equal(p.model, "Claude Opus 5.5");
   assert.deepEqual(p.machine, { id: "Mac", on: false });
   assert.deepEqual(p.actions, ["open", "pin", "archive"]);
   assert.deepEqual(taskPreview("es", { ...row, pinned: true, archived: true }, { live: [], approving: [] }).actions, ["open", "unpin"]);
   assert.equal(taskPreview("es", { ...row, model: null, last_message: " " }, { live: [], approving: [] }).model, null);
   assert.equal(taskPreview("es", { ...row, last_message: " " }, { live: [], approving: [] }).excerpt, null);
+  const credits = taskPreview("es", { ...row, provider: "opencode", model: "danil-credits/deepseek/deepseek-v4.1-flash" }, { live: [], approving: [] });
+  assert.equal(credits.mark, "danil");
 });
 
 test("las palabras son las del escritorio", () => {
