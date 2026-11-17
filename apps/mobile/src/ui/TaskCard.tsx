@@ -156,8 +156,8 @@ function TaskCardView({
         </View>
       </View>
       <View style={[styles.line, styles.second]}>
-        <View testID="task-provider" accessibilityRole="image" accessibilityLabel={card.provider ?? task.provider} {...(Platform.OS === "web" ? { title: card.provider ?? task.provider } : {})} style={styles.provider}>
-          <BrandMark id={card.provider ?? task.provider} size={13} color={theme.text} />
+        <View testID="task-provider" accessibilityRole="image" accessibilityLabel={card.mark ?? card.provider ?? task.provider} {...(Platform.OS === "web" ? { title: card.mark ?? card.provider ?? task.provider } : {})} style={styles.provider}>
+          <BrandMark id={card.mark ?? card.provider ?? task.provider} size={13} color={theme.text} />
         </View>
         {chips.includes("folder") && folder ? <View testID="task-folder" style={[styles.chip, { width: sections.folder, flexShrink: 0 }]} accessibilityLabel={folder.name}>
           <FolderIcon folder={folder} size={13} />

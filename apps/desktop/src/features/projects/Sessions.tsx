@@ -693,7 +693,7 @@ export default function Sessions(props: {
           <Show when={!tarjetaDelRiel()}><EtapaDeTarea etapa={r.s.stage} /></Show>
         </div>
         <div data-session-preview data-no-folder={hideFolder(r.s) ? "" : undefined} data-no-machine={hayMaquinas() ? undefined : ""} class={cn("task-card-metadata text-xs font-normal leading-4 text-neutral-500", activeAgent() && "task-card-has-agent", r.apagada && "opacity-80 group-hover/session:opacity-100")}>
-          <span data-session-provider class="task-card-provider" title={tarjeta().provider ?? r.s.provider} aria-label={tarjeta().provider ?? r.s.provider}><MarcaAgente id={r.s.provider} size={13} /></span>
+          <span data-session-provider class="task-card-provider" title={tarjeta().mark ?? r.s.provider} aria-label={tarjeta().mark ?? r.s.provider}><MarcaAgente id={tarjeta().mark ?? r.s.provider} size={13} /></span>
           <Show when={!hideFolder(r.s)}>
             <span class="task-card-slot">
               <Show when={props.carpetaDe?.(r.s)}>{folder =>

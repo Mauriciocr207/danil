@@ -1,3 +1,15 @@
+import { canonicalAgentId, isFreeRouterAgent } from "./agents.ts";
+
+/**
+ * La marca de quien sirvió el turno: un modelo de Danil —Free Router o
+ * créditos— lleva la marca de Danil aunque lo corra otro motor. Sin modelo
+ * propio, la del agente.
+ */
+export function providerMark(provider: string | null | undefined, model?: string | null): string | null {
+  if (isFreeRouterAgent(provider) || model?.startsWith("danil-")) return "danil";
+  return canonicalAgentId(provider, model) ?? null;
+}
+
 /** Sólo la ruta Beam aprobada tiene atribución comprobada; no se deduce del gateway. */
 export function modelPresentation(id: string, label?: string | null): { label: string; creator: string | null } {
   if (id === "danil-free/reflection/beam-free" || id === "reflection/beam-free") {

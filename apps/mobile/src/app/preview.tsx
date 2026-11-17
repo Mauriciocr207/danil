@@ -88,7 +88,7 @@ export default function Preview() {
           </Field>
         ) : null}
         <Field label={previewLabel(lang, "provider")}>
-          <BrandMark id={task.provider} size={14} color={theme.text} />
+          <BrandMark id={preview.mark ?? task.provider} size={14} color={theme.text} />
           <Text numberOfLines={1} style={[styles.value, { color: theme.text }]}>
             {task.model ? modelLabel(task.model, { credits: t("services.credits"), router: t("composer.free_models") }) : previewLabel(lang, "default_model")}
           </Text>

@@ -1,5 +1,5 @@
-import { modelPresentation } from "../../../../packages/tasks/src/model-presentation.ts";
-export { modelPresentation };
+import { modelPresentation, providerMark } from "../../../../packages/tasks/src/model-presentation.ts";
+export { modelPresentation, providerMark };
 import { canonicalAgentId, isFreeRouterAgent, OPENCODE } from "../../../../packages/tasks/src/agents.ts";
 import { t } from "./i18n.ts";
 import type { AgentModels, ModelOption } from "./model";
@@ -220,6 +220,6 @@ export function nombreDeModelo(id: string, catalogo?: AgentModels | null): strin
 
 /** La marca del modelo observado no cambia la identidad de su ejecutor. */
 export function modelBrand(agent: string, id?: string | null, catalog?: AgentModels | null): string {
-  return id?.startsWith("danil-free/") || id?.startsWith("danil-credits/") || isFreeRouterAgent(agent) || catalog?.models.some((model) => model.id === id && model.gratis === true)
-    ? "danil" : canonicalAgentId(agent, id);
+  const gratis = catalog?.models.some((model) => model.id === id && model.gratis === true) ?? false;
+  return gratis ? "danil" : providerMark(agent, id) ?? canonicalAgentId(agent, id);
 }
