@@ -1,3 +1,4 @@
+import { createWorkspaceStore } from "../features/workspace";
 import { createProjectsStore } from "../features/projects";
 import type { DeleteTarget } from "../features/projects/DeleteTaskDialog";
 import type { HandlerTarget } from "../features/settings/HandlerPolicy";
@@ -363,26 +364,17 @@ export default function App() {
   /* El fondo propio del agente de la conversación con el mando: lo publica su
      celda y se pinta detrás del área de trabajo, no solo detrás de su chat. */
   const [fondoDelAgente, setFondoDelAgente] = createSignal<{ url: string; veil?: number } | null>(null);
-  // `null` es «este workspace todavía no tiene contexto»; se enseña como un
-  // renglón al lado del selector de proyecto, no como una pantalla que lo pida.
-  const [contextRoot, setContextRoot] = createSignal<string | null>(null);
-  const [contextConfirmed, setContextConfirmed] = createSignal(false);
-  let materialRequest = 0;
-  function confirmContext(root: string | null, listed: Source[]) {
-    root ??= listed.find((source) => source.root)?.id ?? null;
-    if (root && !listed.some((source) => source.id === root && !source.missing)) {
-      throw { what: t("projects.context.unavailable"), detail: "context_unavailable" };
-    }
-    setContextRoot(root);
-    setContextConfirmed(true);
-    setMaterialError(null);
+  const workspaceContext = createWorkspaceStore();
+  const contextRoot = workspaceContext.root;
+  const contextConfirmed = workspaceContext.confirmed;
+  const workspaceMode = workspaceContext.mode;
+  const workspaceActivo = workspaceContext.active;
+  onCleanup(workspaceContext.dispose);
+  function confirmContext(token: Parameters<typeof workspaceContext.confirmContext>[0], root: string | null, listed: Source[]) {
+    const result = workspaceContext.confirmContext(token, root, listed);
+    if (result === "unavailable") throw { what: t("projects.context.unavailable"), detail: "context_unavailable" };
+    if (result === "accepted") setMaterialError(null);
   }
-  /** Con qué modo arranca lo nuevo de este workspace. `null` es el último elegido a mano. */
-  const [workspaceMode, setWorkspaceMode] = createSignal<string | null>(null);
-  /** Cuál está abierto, para poder descartar lo que emite el turno de otro. */
-  const [workspaceActivo, setWorkspaceActivo] = createSignal<string | null>(
-    null,
-  );
   const attention = createAttention();
   const [draftBases, setDraftBases] = createSignal<Record<string, string>>({});
   const [hablandoCon, setHablandoCon] = createSignal<{ project: string; name: string } | null>(null);
@@ -1411,12 +1403,12 @@ export default function App() {
     const pager = historias.get(id);
     if (!pager) return null;
     proyectosDeHistoria.set(id, project);
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     const poner = await pager.fetchOlder();
     pintarHistoria(id, pager, false);
-    if (!poner || generation !== sessionGeneration) return null;
+    if (!poner || generation !== workspaceContext.generation()) return null;
     return () => {
-      if (generation !== sessionGeneration) return;
+      if (generation !== workspaceContext.generation()) return;
       poner();
       pintarHistoria(id, pager, true);
     };
@@ -1445,11 +1437,11 @@ export default function App() {
     return id && apagadas()[id] && filaDe(id)?.machine_on === true ? id : null;
   }, (id) => {
     if (!id) return;
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     void leerTarea(project(), id).then((s) => loadResult(id, s, false, generation)).catch(() => {});
   }));
   function loadResult(id: string, session: Session, clear: boolean, generation: number) {
-    if (generation !== sessionGeneration) return;
+    if (generation !== workspaceContext.generation()) return;
     anotar(setApagadas, id, session.offline?.machine ?? null);
     setTraspasos((all) => {
       const previo = all[id];
@@ -1998,7 +1990,6 @@ export default function App() {
     }));
   }
 
-  let sessionGeneration = 0;
   const sessionLists = sessionRefresh<SessionRow>({
     read: async (project) => {
       const open = sesionesConPestana();
@@ -2041,7 +2032,7 @@ export default function App() {
   // Un hueco del stream o un motor nuevo se lleva los eventos `session` de en medio: se
   // relee lo que habrían refrescado. Las tareas vivas las reconcilia `reconcileActiveTurns`.
   function releerTrasHueco() {
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     void refreshSessionsOnEvent(grupos());
     for (const pestana of pestanas.open()) avisarDeLosArboles(pestana.id);
     const abierta = sessionId();
@@ -2167,10 +2158,10 @@ export default function App() {
   // pantalla sería de otro cliente, aquí es de este.
   let startupRetryRequest = 0;
   async function retryStartupRead() {
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     const workspace = workspaceActivo();
     const request = ++startupRetryRequest;
-    const current = () => request === startupRetryRequest && generation === sessionGeneration && workspace === workspaceActivo();
+    const current = () => request === startupRetryRequest && generation === workspaceContext.generation() && workspace === workspaceActivo();
     try {
       const startup = await invoke<Startup>("workspaces_startup");
       if (!current()) return;
@@ -2183,31 +2174,29 @@ export default function App() {
   }
 
   async function recargarMaterial() {
-    const generation = sessionGeneration;
-    const request = ++materialRequest;
+    const request = workspaceContext.beginMaterial();
     const workspace = workspaceActivo();
     if (!workspace) return;
-    setContextConfirmed(false);
     setMaterialError(null);
     try {
       const arranque = await invoke<Startup>("list_workspaces");
-      if (generation !== sessionGeneration || request !== materialRequest) return;
+      if (!workspaceContext.currentMaterial(request)) return;
       const current = arranque.workspaces.find((w) => w.id === workspace);
       if (!current) throw { what: t("projects.context.unavailable"), detail: "context_unavailable" };
       const root = current.context_root;
       const [, fuentes] = await Promise.all([
         projectCatalog.changed().then(rows => {
-          if (generation === sessionGeneration && request === materialRequest) setProjectReadError(null);
+          if (workspaceContext.currentMaterial(request)) setProjectReadError(null);
           return rows;
         }),
         invoke<Source[]>("list_sources"),
       ]);
-      if (generation !== sessionGeneration || request !== materialRequest) return;
+      if (!workspaceContext.currentMaterial(request)) return;
 
       setSources(fuentes);
-      confirmContext(root, fuentes);
+      confirmContext(request, root, fuentes);
     } catch (e) {
-      if (generation !== sessionGeneration || request !== materialRequest || asleep(e)) return;
+      if (!workspaceContext.currentMaterial(request) || asleep(e)) return;
       setMaterialError(prosaDe(e));
     }
   }
@@ -2245,21 +2234,17 @@ export default function App() {
   // Sin workspace se abre el alta. Si ya estaba abierta no se toca: el paso 1
   // acaba de crear uno, y volver a mirar aquí la cerraría a mitad.
     if (a.active === null) setAlta((x) => x ?? "primera");
-    setContextRoot(activo?.context_root ?? null);
-    setContextConfirmed(false);
-    const material = ++materialRequest;
-    setWorkspaceMode(activo?.default_permission_mode ?? null);
+    const transition = workspaceContext.beginTransition(a);
   // La lengua es del workspace, y cambia al cambiar de cliente: eso es lo que
   // se pidió, no un efecto secundario. `null` hereda la de la máquina.
     aplicarLenguaDeWorkspace(activo?.lengua ?? null);
   // El tema de terminal sigue al workspace por lo mismo: es cómo se distingue
   // en qué cliente se está sin leer el nombre.
     aplicarTemaDeTerminal(activo?.terminal_theme ?? null);
-    sessionGeneration++;
     for (const pager of historias.values()) pager.close();
     sessionLists.reset();
-    const generation = sessionGeneration;
-    const previousWorkspace = workspaceActivo();
+    const generation = workspaceContext.generation();
+    const previousWorkspace = transition.previous;
     deltasPorCuadro.vaciar();
     if (previousWorkspace) workspaceThreads.set(previousWorkspace, Object.fromEntries(
       Object.entries(hilos()).filter(([id]) => liveThreads.has(liveThreadKey(previousWorkspace, id))),
@@ -2269,7 +2254,7 @@ export default function App() {
     ));
     savedQueues.clear();
     drainingQueues.clear();
-    setWorkspaceActivo(a.active);
+    workspaceContext.activate(transition);
     // «Ejecutar en» dice qué tiene cada máquina del workspace abierto: con otro, se relee.
     void refetchMachines();
     setDraftBases({});
@@ -2346,16 +2331,16 @@ export default function App() {
         projectCatalog.refresh(),
         invoke<Source[]>("list_sources").catch(() => null),
       ]);
-      if (generation !== sessionGeneration) return;
+      if (generation !== workspaceContext.generation()) return;
 
-      if (material === materialRequest) {
+      if (workspaceContext.currentMaterial(transition)) {
         if (fuentes) {
           setSources(fuentes);
-          confirmContext(activo?.context_root ?? null, fuentes);
+          confirmContext(transition, activo?.context_root ?? null, fuentes);
         } else setMaterialError(t("projects.context.unavailable"));
       }
     } catch (e) {
-      if (generation !== sessionGeneration || material !== materialRequest) return;
+      if (generation !== workspaceContext.generation() || !workspaceContext.currentMaterial(transition)) return;
       // Una máquina dormida no es un fallo, pero el arranque sigue: sin salir
       // de la caché, la ventana se queda inerte con la foto de la vez anterior
       // y no restaura pestañas ni se entera de cuando la máquina enciende.
@@ -2367,7 +2352,7 @@ export default function App() {
     if (primeras) {
       // Si cambiaron las carpetas, `grupos` relee también las nuevas; esta lectura ya vale para las de siempre.
       await primeras;
-      if (generation !== sessionGeneration) return;
+      if (generation !== workspaceContext.generation()) return;
       setEnCache(false);
     }
     // La tarea que estaba abierta en este workspace vuelve a estarlo, que es lo
@@ -2375,7 +2360,7 @@ export default function App() {
     // ya no existe, `abrirSesion` lo dice en la conversación y la
     // sincronización con el historial se lleva la pestaña.
     const lista = await pedidas;
-    if (generation !== sessionGeneration) return;
+    if (generation !== workspaceContext.generation()) return;
     const desk = asentarEscritorio(a.active, lista);
     const restored = pestanas.load(a.active, desk);
     // El reparto de su espacio vuelve con la tira: la pantalla partida que se
@@ -2399,7 +2384,7 @@ export default function App() {
     }
     const enFrente = paneles.activeTabAt(paneles.activeSite());
     await reconcileActiveTurns();
-    if (generation !== sessionGeneration) return;
+    if (generation !== workspaceContext.generation()) return;
     // Lo que la persona abrió mientras se conciliaba gana: abrir la restaurada ahora le quitaría la ventana.
     if (sessionId() !== null || pestanas.active() !== null || paneles.activeTabAt(paneles.activeSite()) !== enFrente) return;
     if (delante) void abrirSesion(delante.project, delante.id);
@@ -2563,7 +2548,7 @@ export default function App() {
   );
 
   async function settleTurn(session: string, ok?: boolean | null, unsaved = false) {
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     const revision = advanceTurn(session);
     finishedTurns.set(session, ok);
     batch(() => {
@@ -2613,13 +2598,13 @@ export default function App() {
       if (unsaved) return;
       if (projectId !== undefined) {
         const result = await leerTarea(projectId, session);
-        if (generation === sessionGeneration && revision === turnRevisions.get(session))
+        if (generation === workspaceContext.generation() && revision === turnRevisions.get(session))
           loadResult(session, result, true, generation);
       } else soltarHilo(session);
     } catch {
       // El fallo de lectura conserva lo recibido en vivo y no revive el proceso.
     } finally {
-      if (generation === sessionGeneration && revision === turnRevisions.get(session)) batch(() => {
+      if (generation === workspaceContext.generation() && revision === turnRevisions.get(session)) batch(() => {
         setSettlingTurns((ids) => ids.filter((id) => id !== session));
         setCierres((n) => n + 1);
         void refreshSessions(grupos());
@@ -2659,7 +2644,7 @@ export default function App() {
   }
   /** `session_resync`: el turno en curso no cupo en el reenvío; se relee lo guardado y se conserva lo vivo. */
   function releerUna(session: string) {
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     const projectId = esDeLaAbierta(session) ? project() : pestanas.open().find((p) => p.id === session)?.project ?? tareaDelRiel(session)?.folder;
     if (projectId === undefined) return;
     void leerTarea(projectId, session)
@@ -2767,13 +2752,13 @@ export default function App() {
     const workspace = workspaceActivo();
     if (!workspace) return;
     const revision = lifecycleRevision;
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     try {
       const [active, timing] = await Promise.all([
         invoke<string[]>("list_active_turns", { workspace }),
         invoke<LiveTurn[]>("list_live_turns").catch(() => []),
       ]);
-      if (generation !== sessionGeneration || revision !== lifecycleRevision) return;
+      if (generation !== workspaceContext.generation() || revision !== lifecycleRevision) return;
       const enVuelo = timing.filter((turn) => turn.workspace === workspace && active.includes(turn.session));
       setDesdeDeTurno((previous) => ({ ...previous, ...Object.fromEntries(
         enVuelo.map((turn) => [turn.session, turn.started_at]),
@@ -3426,11 +3411,12 @@ export default function App() {
         window.dispatchEvent(new CustomEvent("harness:profiles"));
       }
       if (e.payload.command === "config.set") {
+        const modeGeneration = workspaceContext.generation();
         void invoke<Startup>("list_workspaces").then((startup) => {
           if (workspace !== workspaceActivo()) return;
           const current = startup.workspaces.find((w) => w.id === workspace);
           aplicarLenguaDeWorkspace(current?.lengua ?? null);
-          setWorkspaceMode(current?.default_permission_mode ?? null);
+          workspaceContext.modeChanged(workspace, current?.default_permission_mode ?? null, modeGeneration);
           setStartupReadError(null);
         }).catch((error) => { if (workspace === workspaceActivo() && !asleep(error)) setStartupReadError(prosaDe(error)); });
       }
@@ -3459,7 +3445,7 @@ export default function App() {
     onCleanup(() => void cliOpen.then((stop) => stop()));
 
     const sesionEv = listen<SessionEvent>("session", (e) => {
-      const generation = sessionGeneration;
+      const generation = workspaceContext.generation();
       const { session, project, workspace } = e.payload;
       if (!esDelWorkspaceAbierto(workspace)) return;
       // El historial primero, y para todos: una tarea que la otra ventana
@@ -3716,7 +3702,7 @@ export default function App() {
     if (!nace) return false;
     nacenConComando.delete(runId);
     nace.session = session;
-    if (nace.generation !== sessionGeneration) return true;
+    if (nace.generation !== workspaceContext.generation()) return true;
     lanzados.set(session, nace.lanzado);
     batch(() => {
       soltarTerminal("");
@@ -3743,7 +3729,7 @@ export default function App() {
       provisional: pintarNaciendo(proyecto, titulo, lanzado, encargado),
       titulo,
       claveBorrador,
-      generation: sessionGeneration,
+      generation: workspaceContext.generation(),
       session: null,
     };
     nacenConComando.set(runId, nace);
@@ -3769,7 +3755,7 @@ export default function App() {
         runId,
       }, enOtra);
       // Sin su `shell_started` no hay nada pintado: se adopta aquí y se lee del disco.
-      if (adoptarComando(runId, corrida.session) && nace.generation === sessionGeneration) void settleTurn(corrida.session, true);
+      if (adoptarComando(runId, corrida.session) && nace.generation === workspaceContext.generation()) void settleTurn(corrida.session, true);
       return true;
     } catch (error) {
       // Tras arrancar, la tarea queda con el fallo escrito y llega al releerla.
@@ -3782,7 +3768,7 @@ export default function App() {
         pestanas.close(nace.provisional);
         olvidarPestana(nace.provisional);
       });
-      if (nace.generation !== sessionGeneration) return false;
+      if (nace.generation !== workspaceContext.generation()) return false;
       // La frase de un modo que el agente no sostiene nombra al agente.
       const label = agents().find((a) => a.id === lanzado.provider)?.label ?? lanzado.provider;
       anexar("", (ms) => [...ms, { role: "system", ...mensajeDeFallo(error, { agent: label }), meta: "fallo" }]);
@@ -3920,7 +3906,7 @@ export default function App() {
     if (retenida() !== "session" || !cola().length || !sessionId()) return;
     const id = sessionId();
     const proyecto = project();
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     let cancelled = false;
     let checking = false;
     const timer = setInterval(async () => {
@@ -3928,7 +3914,7 @@ export default function App() {
       checking = true;
       try {
         const ready = await invoke<boolean>("queue_ready", { project: proyecto, session: id }, deLaTarea(id));
-        if (ready && !cancelled && generation === sessionGeneration && id === sessionId()) {
+        if (ready && !cancelled && generation === workspaceContext.generation() && id === sessionId()) {
           setRetenida(null);
         }
       } catch {
@@ -4004,16 +3990,16 @@ export default function App() {
     const { mensaje: message, lote, resto } = siguienteLote(queued.items);
     // Un `!` no corre en una tarea que nadie mira: espera a que se abra.
     if (!message || esDeLaTerminal(lote[0])) return;
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     drainingQueues.add(session);
     savedQueues.set(session, { ...queued, items: resto, retained: null });
     marcarViva(session);
     try {
       await invoke("save_queue", { project: queued.project, session, queued: resto }, deLaTarea(session));
-      if (generation !== sessionGeneration) return;
+      if (generation !== workspaceContext.generation()) return;
       if (!await enviar(message, undefined, { project: queued.project, session })) throw new Error("queue-send-failed");
     } catch (error) {
-      if (generation !== sessionGeneration) return;
+      if (generation !== workspaceContext.generation()) return;
       const restored = {
         ...queued,
         // Lo que salió vuelve delante de lo que quedó esperando: `savedQueues`
@@ -4191,7 +4177,7 @@ export default function App() {
   onMount(() => {
     const onDefaultMode = (e: Event) => {
       const change = (e as CustomEvent<DefaultPermissionModeChange>).detail;
-      if (change.workspace === workspaceActivo()) setWorkspaceMode(change.mode);
+      workspaceContext.modeChanged(change.workspace, change.mode);
     };
     window.addEventListener(DEFAULT_PERMISSION_MODE_EVENT, onDefaultMode);
     onCleanup(() => window.removeEventListener(DEFAULT_PERMISSION_MODE_EVENT, onDefaultMode));
@@ -4533,8 +4519,8 @@ export default function App() {
   // aquí aunque su transcripción lleve rato pintada, y marcarla como «viene
   // en camino» la mandaría al esqueleto y de vuelta.
     if (!hilos()[id]) setCargandoHilo(id);
-    const generation = sessionGeneration;
-    const current = () => generation === sessionGeneration && sessionId() === id && project() === proyecto;
+    const generation = workspaceContext.generation();
+    const current = () => generation === workspaceContext.generation() && sessionId() === id && project() === proyecto;
     try {
       const s = await leerTarea(proyecto, id);
       if (!current()) return;
@@ -4651,10 +4637,10 @@ export default function App() {
    */
   async function loadThread(project: string, id: string) {
     if (esProvisional(id) || hilos()[id]) return;
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     try {
       const s = await leerTarea(project, id);
-      if (generation !== sessionGeneration) return;
+      if (generation !== workspaceContext.generation()) return;
       loadResult(id, s, false, generation);
     } catch {
       // Sin hilo, su panel queda vacío hasta pulsarla, y ahí `abrirSesion` lo
@@ -5401,7 +5387,7 @@ export default function App() {
     return chosen ?? (machine ? { headers: { "x-terminus-machine": machine } } : undefined);
   }
 
-  const materialTarget = () => `${workspaceActivo()}:${sessionGeneration}:${sessionId()}:${claveAbierta()}:${JSON.stringify(taskMaterialOptions())}`;
+  const materialTarget = () => `${workspaceActivo()}:${workspaceContext.generation()}:${sessionId()}:${claveAbierta()}:${JSON.stringify(taskMaterialOptions())}`;
   let taskSourcesRequest = 0;
   createEffect(on(() => ({
     target: materialTarget(),
@@ -6073,7 +6059,7 @@ export default function App() {
     // Se marca la sesión si ya existe, y si no, la ventana sin id: un
     // turno que reanuda tiene su id desde el principio; el primero de
     // una tarea nueva lo recibe al volver de Rust, más abajo.
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     const abierta = destination?.session ?? sessionId();
     const creationOptions = abierta ? undefined : draftOptions();
     if (abierta) advanceTurn(abierta);
@@ -6246,7 +6232,7 @@ export default function App() {
           .then((s) => loadResult(abierta, s, false, generation))
           .catch(() => {});
       }
-      if (generation !== sessionGeneration) return true;
+      if (generation !== workspaceContext.generation()) return true;
       if (respuestas) {
         asentar(clave, (ms) =>
           ms.map((mensaje) =>
@@ -6264,7 +6250,7 @@ export default function App() {
       if (!abierta) adoptarNacida(id, { provisional, proyecto, titulo: tituloProvisional(m.text), claveBorrador });
       if (!finishedTurns.has(id)) marcarViva(id);
       void signatureReady.then((signature) => {
-        if (generation !== sessionGeneration) return;
+        if (generation !== workspaceContext.generation()) return;
         firmas[id] = signature?.agent ?? null;
         if (!respuestas) {
           asentar(id, (messages) => messages.map((message) =>
@@ -6312,7 +6298,7 @@ export default function App() {
         pestanas.close(provisional);
         olvidarPestana(provisional);
       }
-      if (generation !== sessionGeneration) return false;
+      if (generation !== workspaceContext.generation()) return false;
       if (e === CARRY_STOPPED) {
         // El texto vuelve a la caja: el globo se iría duplicado.
         asentar(clave, (ms) => ms.filter((message) => message !== turnoPropio && !entrando.includes(message)));
@@ -6389,12 +6375,12 @@ export default function App() {
   const permissionReads = new Map<string, number>();
   let gateSeq = 0;
   async function reponerGates(session: string, workspace = workspaceActivo()) {
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     const reading = (permissionReads.get(session) ?? 0) + 1;
     permissionReads.set(session, reading);
     const desde = gateSeq;
     const pendientes = await pendientesDe(session, workspace);
-    if (!pendientes || generation !== sessionGeneration || reading !== permissionReads.get(session)) return;
+    if (!pendientes || generation !== workspaceContext.generation() || reading !== permissionReads.get(session)) return;
     setPermissions((ps) => mergeGates(ps, session, workspace, pendientes.permissions, desde));
   }
 
@@ -6659,7 +6645,7 @@ export default function App() {
       return true;
     }
     const draftKey = claveAbierta();
-    const generation = sessionGeneration;
+    const generation = workspaceContext.generation();
     if (hojaDeLlevar()?.key === draftKey) return false;
     const llevar = !sessionId() && !!carryModule()?.carries()[draftKey];
     setInput("");
@@ -6676,7 +6662,7 @@ export default function App() {
       attachments,
       space: escritorio(),
     }, undefined, undefined, llevar ? (clave) => (carryModule() as CarryModule).runCarry(clave) : undefined);
-    if (!sent && generation === sessionGeneration) {
+    if (!sent && generation === workspaceContext.generation()) {
       editarBorrador(draftKey, b => ({
         ...(b.input ? b : { ...b, input: message.text, task_mentions: message.task_mentions, recipients: message.recipients }),
         archivos: adjuntosDevueltos(b.archivos, attachments),
@@ -7592,11 +7578,11 @@ export default function App() {
         masRecientes={!!conRecientes()[pp.sesion ?? ""]}
         onRecientes={async () => {
           if (!pp.sesion) return;
-          const id = pp.sesion, pager = historias.get(id), generation = sessionGeneration;
+          const id = pp.sesion, pager = historias.get(id), generation = workspaceContext.generation();
           if (!pager) return;
           try {
             await pager.latest();
-            if (generation === sessionGeneration) pintarHistoria(id, pager, false);
+            if (generation === workspaceContext.generation()) pintarHistoria(id, pager, false);
           } catch (e) {
             setError(prosaDe(e));
           }
