@@ -63,8 +63,6 @@ import { base64De, copyText, imagenPegada } from "../../lib/clipboard";
 import { capabilities } from "../../lib/platform";
 import { atenderElCampo, enfocar, enfocarSiNadieEscribe } from "../../lib/focus";
 import { t } from "../../lib/i18n";
-import { imagenInerte } from "../../lib/links";
-import { CarruselDeImagenes } from "../../ui/EnlargeableImage";
 import {
   activeTrigger,
   applySuggestion,
@@ -119,11 +117,7 @@ import { FileMachine } from "../../ui/fileMachine";
 import { WorkFace } from "./workFace";
 import { Markdown } from "../../ui/Markdown";
 import { createVisualBudget, type VisualBudget } from "./visualBudget";
-import ChatVisual from "./ChatVisual";
-import { splitChatVisuals, type ChatVisual as Visual } from "./visualDirective";
-import type { NextStepsPart } from "../../lib/nextSteps";
-import { splitNextSteps, stripNextSteps, lastSentAt, usedSince } from "../../lib/nextSteps";
-import NextSteps from "./NextSteps";
+import { stripNextSteps, lastSentAt, usedSince } from "../../lib/nextSteps";
 import { Skeleton } from "../../ui/Skeleton";
 import { MarcaFuente } from "../../ui/sources";
 import { Textarea } from "../../ui/Textarea";
@@ -174,6 +168,7 @@ import { WithMentions } from "./WithMentions";
 import { Spinner } from "../../ui/Spinner";
 import { Interrupcion, LineaDeSistema, TraspasoDeProveedor, SiguioTrasElCupo } from "./components/thread/SystemMarkers";
 import { HoraDelTurno, LineaDeProveedor, BotonCopiar, CambioDeContexto } from "./components/thread/MessageDecorations";
+import { TextoConSiguientes, ImagenesEntregadas, type RespuestaRapida } from "./components/thread/AgentAnswer";
 
 // Chunk aparte: el bloque de razonamiento solo lo carga un turno que lo trae.
 const Reasoning = sharedLazy(() => import("./Reasoning"));
@@ -4012,77 +4007,6 @@ function TrabajoDeAgente(props: {
       </div>
 
     </article>
-  );
-}
-
-type RespuestaRapida = {
-  /** Falso si la caja tampoco podría mandar: sin cuenta o con una pregunta abierta. */
-  puede: boolean;
-  usada: (texto: string) => boolean;
-  onElegir: (texto: string) => Promise<boolean>;
-};
-
-/**
- * La respuesta del agente con sus respuestas rápidas pintadas como botones.
- * `Index` y no `For`: cada token trae partes nuevas y `For` remontaría el
- * markdown entero en cada una.
- */
-function TextoConSiguientes(props: { texto: string; vivo: boolean; rapida: RespuestaRapida | null; owner: string; visualBudget: VisualBudget; readVisual?: (file: string) => Promise<string>; openVisual?: (file: string) => Promise<void> }) {
-  const partes = createMemo(() => {
-    const visuals = props.readVisual ? splitChatVisuals(props.texto, props.vivo) : [{ kind: "markdown" as const, markdown: props.texto }];
-    return visuals.flatMap<Visual | NextStepsPart>((part) => part.kind === "visual" ? [part] : splitNextSteps(part.markdown, props.vivo));
-  });
-  const [enviando, setEnviando] = createSignal(false);
-  const elegir = async (texto: string) => {
-    if (!props.rapida || enviando()) return;
-    setEnviando(true);
-    try {
-      await props.rapida.onElegir(texto);
-    } finally {
-      setEnviando(false);
-    }
-  };
-  return (
-    <Index each={partes()}>
-      {(parte) => {
-        const bloque = () => {
-          const p = parte();
-          return p.kind === "next_steps" ? p : null;
-        };
-        const markdown = () => {
-          const p = parte();
-          return p.kind === "markdown" ? p.markdown : "";
-        };
-        return (
-          <Show when={parte().kind === "visual" && props.readVisual} fallback={
-          <Show when={bloque()} fallback={<Markdown>{markdown()}</Markdown>}>
-            <Show when={bloque()?.prose}>
-              <Markdown>{bloque()?.prose ?? ""}</Markdown>
-            </Show>
-            <NextSteps
-              options={bloque()?.options ?? []}
-              usada={(texto) => props.rapida?.usada(texto) ?? false}
-              habilitado={Boolean(props.rapida?.puede && bloque()?.complete) && !enviando()}
-              onElegir={(texto) => void elegir(texto)}
-            />
-          </Show>
-          }>
-            <ChatVisual visual={parte() as Visual} owner={props.owner} budget={props.visualBudget} read={(file) => props.readVisual!(file)} open={props.openVisual} />
-          </Show>
-        );
-      }}
-    </Index>
-  );
-}
-
-function ImagenesEntregadas(props: { items: string[] }) {
-  const imagenes = () => props.items.map(imagenInerte).filter((url): url is string => url !== null);
-  return (
-    <Show when={imagenes().length > 0}>
-      <div class="pt-2">
-        <CarruselDeImagenes srcs={imagenes()} />
-      </div>
-    </Show>
   );
 }
 
