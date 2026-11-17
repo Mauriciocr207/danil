@@ -71,6 +71,7 @@ const steps = [
   ["Composer selection and catalogs have one owner", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/composer-store.test.ts")], root],
   ["Drafts own text references attachments and rollback", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/drafts-store.test.ts")], root],
   ["Task queues own retention persistence and session scope", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/task-queues-store.test.ts")], root],
+  ["Threads own transcript history and streaming reconciliation", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/threads-store.test.ts")], root],
   ["Project rows have one scoped owner and share cancellable reads", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/projects-resource.test.ts")], root],
   ["The web hands a ticket only to exact relay origins", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/web-relay-origins.test.ts")], root],
   ["Web and Desk read the published mvp-v1 examples the same way", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/integration/mvp-contracts.test.mjs")], root],
