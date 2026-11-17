@@ -63,6 +63,8 @@ const rustSteps = [
 ];
 
 const steps = [
+  ["Front modularization debt only decreases", process.execPath, [join(root, "scripts/guards/front-modularization.mjs")], root],
+  ["Front modularization gates reject injected regressions", process.execPath, ["--test", join(root, "tests/unit/front-modularization.test.mjs")], root],
   ["Service capabilities are optional and versioned", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/web-service-capabilities.test.ts")], root],
   ["The web hands a ticket only to exact relay origins", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/web-relay-origins.test.ts")], root],
   ["Web and Desk read the published mvp-v1 examples the same way", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/integration/mvp-contracts.test.mjs")], root],
