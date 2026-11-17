@@ -80,6 +80,7 @@ export function createDraftsStore(deps: Dependencies) {
     });
   }
   async function addFiles(paths: string[]) {
+    if (disposed) return;
     const key = deps.key(), workspace = deps.workspace(), generation = deps.generation(), requestEpoch = epoch;
     const prepared = await deps.prepareAttachments(paths, deps.project());
     if (disposed || workspace !== deps.workspace() || generation !== deps.generation() || requestEpoch !== epoch) return;

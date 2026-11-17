@@ -75,3 +75,8 @@ test("equal source memberships do not notify readers while text changes", async 
   assert.equal(reads, before); f.store.addSource("extra"); assert.equal(reads, before + 1);
   dispose(); f.dispose();
 });
+
+test("disposed draft store never begins attachment preparation", async () => {
+  let reads = 0; const f = fixture(async paths => { reads++; return paths; });
+  f.store.dispose(); await f.store.addFiles(["source"]); assert.equal(reads, 0); f.dispose();
+});
