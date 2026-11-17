@@ -99,7 +99,7 @@ import { createdTasks } from "../features/projects/agentPageFilters";
 import BaseBranchPicker from "../features/projects/BaseBranchPicker";
 import { watchHandlerStatus, watchHandlerStatuses } from "../features/projects/handlerPresence";
 import { EmptyContext, ProjectPicker } from "../features/projects/Projects";
-import { activeTaskCounts, activityByProject, type HiddenProjects, hiddenIn, type PickedAt, rememberPick, setHidden, taskCountOf } from "../features/projects";
+import { activeTaskCounts, activityByProject, type HiddenProjects, hiddenIn, type PickedAt, picksIn, rememberPick, setHidden, storedPicks, taskCountOf } from "../features/projects";
 import { bringHereLabel, canBringHere, carryOrigin, machineName, machineOf, machineWakes, machines, refetchMachines, remoteChildScope, runOn, senderTaskId, setRunOn, setTaskRowMachine } from "../features/machines/store";
 import { canonicalAgentId, isFreeRouterModel, lastActivity, launcherOf, OPENCODE, withRemoteLaunchers } from "@terminus/tasks";
 import type { CarriedBase, CarryCheck } from "../features/machines/carry";
@@ -453,12 +453,13 @@ export default function App() {
   // Lo que ordena el selector de proyectos: sus tareas vivas y la última vez que se eligió, por workspace.
   const actividadDeProyectos = createMemo(() => activityByProject(sesiones(), lastActivity));
   const [proyectosElegidos, setProyectosElegidos] = createPref<Record<string, PickedAt>>("projects.last_picked", {});
-  const elegidosAqui = () => proyectosElegidos()[workspaceActivo() ?? ""] ?? {};
+  // Lo guardado puede venir de otra versión o estar roto: se lee con tolerancia.
+  const elegidosAqui = () => picksIn(proyectosElegidos(), workspaceActivo() ?? "");
   function recordarEleccion(id: string) {
     const workspace = workspaceActivo();
     if (!workspace || !id) return;
     const existentes = new Set([...projectList(), ...composerProjects()].map((p) => p.id));
-    setProyectosElegidos({ ...proyectosElegidos(), [workspace]: rememberPick(elegidosAqui(), id, Date.now(), existentes) });
+    setProyectosElegidos({ ...storedPicks(proyectosElegidos()), [workspace]: rememberPick(elegidosAqui(), id, Date.now(), existentes) });
   }
   // Las tareas activas que la ventana ya cargó: el `sessions` del motor cuenta también las archivadas.
   const tareasActivas = createMemo(() => activeTaskCounts(sesiones()));
