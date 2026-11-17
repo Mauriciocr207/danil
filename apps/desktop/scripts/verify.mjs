@@ -636,6 +636,7 @@ const steps = [
   ["A task composer mounts with its queue and attachments", process.execPath, [join(root, "scripts/guards/mount-task-composer.mjs")], root],
   ["The rail mounts with git, groups and clone", process.execPath, [join(root, "scripts/guards/mount-sidebar.mjs")], root],
   ["Starting and following a turn mounts", process.execPath, [join(root, "scripts/guards/mount-turns.mjs")], root],
+  ["Chat system markers preserve their status, text and quota variants", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/chat-system-markers.test.mjs")], root],
   ["Settings mounts", process.execPath, [join(root, "scripts/guards/mount-settings.mjs")], root],
   ["Workspaces, title bar and first run mount", process.execPath, [join(root, "scripts/guards/mount-workspaces.mjs")], root],
   ["Live questions and permissions mount", process.execPath, [join(root, "scripts/guards/mount-permissions.mjs")], root],

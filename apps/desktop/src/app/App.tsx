@@ -309,6 +309,7 @@ import { BotonConAtajo } from "../ui/Shortcut";
 import type { ActivityEvent } from "@terminus/protocol";
 import { Toast, ToastStack } from "../ui/Toast";
 import { apagarVistasDe, hayVistasDe, soltarVistasHuerfanas } from "../features/code/typst";
+import { DragOverlay } from "../features/tabs";
 
 // Lo que falla en el camino a la ventana y no en el comando: se vuelve a
 // preguntar en vez de pintarlo (`cli/service/mod.rs`, `para_la_ventana`).
@@ -8148,54 +8149,15 @@ export default function App() {
           pinta este fantasma solo; el nuestro es por puntero
           (`arrastrarPestana`) y hay que pintarlo aquí, no en la tira, que
           no sabe dónde acabó el cursor. */}
-      <Show when={arrastrando() !== null && cursor() !== null}>
-        <div
-          aria-hidden="true"
-          class="pointer-events-none fixed z-[60] max-w-[220px] truncate rounded-sm border border-border-strong bg-surface-raised px-2 py-1 text-sm font-medium text-neutral-950 shadow-md"
-          style={{
-            left: `${cursor()!.x + 12}px`,
-            top: `${cursor()!.y + 12}px`,
-          }}
-        >
-          {tituloDePestana(arrastrando()!)}
-        </div>
-      </Show>
-
-      {/* A qué ventana va a caer lo que se arrastra. En el centro —o sobre una
-          tira, donde manda la barra de inserción— es el marco del cuadrante
-          entero; en un borde que admite partida, media ventana, que es donde
-          va a nacer la nueva. No recibe puntero: taparía el gesto que lo pinta. */}
-      {/* Con una sola ventana no hay a cuál caer: reordenar ya lo dice la barra de inserción de la tira. */}
-      <Show when={paneles.isSplit() && arrastrando() !== null && donde() !== null}>
-        <Show
-          when={dropSide()}
-          fallback={
-            <div
-              aria-hidden="true"
-              class="pointer-events-none z-50 rounded-sm border-2 border-primary/70 bg-primary/5"
-              style={estiloDeLaCelda(donde()!.sitio)}
-            />
-          }
-        >
-          {(side) => (
-            <div
-              aria-hidden="true"
-              class="pointer-events-none relative z-50"
-              style={estiloDeLaCelda(donde()!.sitio)}
-            >
-              <div
-                class={cn(
-                  "absolute rounded-sm border-2 border-primary/70 bg-primary/5",
-                  side() === "left" && "inset-y-0 left-0 w-1/2",
-                  side() === "right" && "inset-y-0 right-0 w-1/2",
-                  side() === "up" && "inset-x-0 top-0 h-1/2",
-                  side() === "down" && "inset-x-0 bottom-0 h-1/2",
-                )}
-              />
-            </div>
-          )}
-        </Show>
-      </Show>
+      <DragOverlay
+        dragging={arrastrando() !== null}
+        cursor={cursor()}
+        title={tituloDePestana(arrastrando()!)}
+        split={paneles.isSplit()}
+        hasDestination={donde() !== null}
+        targetStyle={estiloDeLaCelda(donde()!.sitio)}
+        side={dropSide()}
+      />
 
       {/* Una conversación por tarea abierta, no por ventana: la clave es la
           tarea. Arrastrarla a otra ventana solo le cambia la celda —no se
