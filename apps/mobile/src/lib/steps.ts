@@ -58,6 +58,13 @@ export const groupSteps = (steps: readonly Step[]): StepRow[] => joinSteps(steps
 export { bareCommand, classify, fileName };
 
 /**
+ * Si la línea de estado del turno nombra el paso que corre. Un comando cuya
+ * fila ya se ve debajo (la hoja de trabajo) no se repite: la línea dice solo
+ * «Ejecutando · 12s». Con el grupo plegado, en el chat, sí lo nombra.
+ */
+export const statusNamesStep = (step: Step, rowsVisible: boolean) => !(rowsVisible && step.kind === "run");
+
+/**
  * Una fila de comando es su marca más el comando, **sin verbo visible**: el
  * tramo ya dice «Ejecutó N comandos» (plan `2026-11-17-marcas-comandos-shell.md`
  * § 3.11). El verbo sigue en lo que oye VoiceOver: ver `rowAccessibilityLabel`.
