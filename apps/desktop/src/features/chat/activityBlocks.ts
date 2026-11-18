@@ -22,3 +22,8 @@ export function coalesceLiveActivity<M extends LiveMessage>(blocks: ActivityBloc
   if (first === blocks.length - 1) return blocks;
   return [...blocks.slice(0, first), { ...last, i: blocks[first].i, avance: [...progress, ...(last.avance ?? [])] }];
 }
+
+/** Only visible answers are searchable; historical explicit progress stays in its fold. */
+export function visibleActivityMessages<M>(block: ActivityBlock<M>): M[] {
+  return [...(block.tipo === "msg" ? [] : block.avance?.filter(chunk => chunk.outside).map(chunk => chunk.msg) ?? []), ...(block.tipo === "pasos" ? [] : [block.msg])];
+}

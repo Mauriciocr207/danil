@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { coalesceLiveActivity, type ActivityBlock } from "../../src/features/chat/activityBlocks.ts";
+import { coalesceLiveActivity, visibleActivityMessages, type ActivityBlock } from "../../src/features/chat/activityBlocks.ts";
 type Message = { nativeMessageId?: string; turno?: string; duration_ms?: number; text: string; preguntas?: unknown[] };
 const work = (i: number, msg: Message): ActivityBlock<Message> => ({ tipo: "trabajo", i, msg, pasos: [] });
 
@@ -47,4 +47,13 @@ test("startsMessage pieces with the same native ID remain outside the activity f
   const tail = coalesceLiveActivity([work(0, first), { tipo: "pasos", pasos: [], i: 1 }], true)[0];
   assert.ok(tail.tipo === "pasos");
   assert.equal(tail.avance?.[0].outside, true);
+});
+
+test("search keeps both same-ID answers and answers before a tool tail, excluding explicit hidden progress", () => {
+  const first = { nativeMessageId: "same", text: "Primera respuesta única" }, last = { nativeMessageId: "same", text: "Segunda respuesta distinta" };
+  const grouped = coalesceLiveActivity([work(0, first), work(2, last)], true)[0];
+  assert.deepEqual(visibleActivityMessages(grouped), [first, last]);
+  const tail = coalesceLiveActivity([work(0, first), { tipo: "pasos", pasos: [], i: 1 }], true)[0];
+  assert.deepEqual(visibleActivityMessages(tail), [first]);
+  assert.deepEqual(visibleActivityMessages({ tipo: "trabajo", pasos: [], msg: last, i: 0, avance: [{ pasos: [], msg: first }] }), [last]);
 });

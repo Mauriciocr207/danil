@@ -165,7 +165,7 @@ import Suggestions, { type Suggestion } from "./Suggestions";
 import LineaDeTiempo, { SUPERFICIE_DE_EJECUCION } from "./Timeline";
 import EstadoDelTurno from "./TurnStatus";
 import { ActivityDots } from "./ActivityDots";
-import { coalesceLiveActivity, type ActivityBlock, type ActivityChunk } from "./activityBlocks";
+import { coalesceLiveActivity, visibleActivityMessages, type ActivityBlock, type ActivityChunk } from "./activityBlocks";
 import { WithMentions } from "./WithMentions";
 import { Interrupcion, LineaDeSistema, TraspasoDeProveedor, SiguioTrasElCupo } from "./components/thread/SystemMarkers";
 import { HoraDelTurno, LineaDeProveedor, BotonCopiar, CambioDeContexto } from "./components/thread/MessageDecorations";
@@ -1706,7 +1706,8 @@ export default function Chat(props: ChatProps) {
     return coalesceLiveActivity(out, Boolean(props.busy));
   });
   const searchMessages = () => bloques().flatMap((block, index) => {
-    const message = block.tipo === "pasos" ? null : block.msg;
+    const messages = visibleActivityMessages(block).filter(message => ["user", "agent"].includes(message.role) && !message.shell && !message.permission);
+    const message = messages.at(-1);
     if (!message || !["user", "agent"].includes(message.role) || message.shell || message.permission) return [];
     const named = message.author?.name?.trim() || message.encargado || message.fromTask?.title || "";
     const speaker = named || (message.role === "agent" && message.agent
@@ -1714,7 +1715,7 @@ export default function Chat(props: ChatProps) {
       : null);
     return [{
       block: index,
-      text: message.role === "agent" ? stripNextSteps(textoVisible(message.text)) : message.text,
+      text: messages.map(message => message.role === "agent" ? stripNextSteps(textoVisible(message.text)) : message.text).join("\n\n"),
       markdown: message.role === "agent",
       role: message.role as "user" | "agent",
       speaker,
@@ -3013,7 +3014,7 @@ export default function Chat(props: ChatProps) {
                         setTrabajos({ ...trabajos(), [claveFila(bp())]: abierto });
                       }}
                     />
-                    <RespuestasDeAvance avance={pasosDe(b())?.avance ?? SIN_AVANCE} visualBudget={visualBudget} visualScope={props.visualScope} readVisual={props.readVisual} openVisual={props.openVisual} />
+                    <div data-thread-search-text={indice()}><RespuestasDeAvance avance={pasosDe(b())?.avance ?? SIN_AVANCE} visualBudget={visualBudget} visualScope={props.visualScope} readVisual={props.readVisual} openVisual={props.openVisual} /></div>
                     <Index each={(pasosDe(b())?.avance ?? SIN_AVANCE).map(chunk => chunk.msg).filter(message => message.preguntas?.length)}>{(message) => <RegistroPreguntas items={message().preguntas!} respuestas={message().turno ? respondido().get(message().turno!) ?? null : null} abierta={!preguntasPlegadas()[claveDeTrabajo(message())]} onAlternar={() => { const key = claveDeTrabajo(message()); setPreguntasPlegadas({ ...preguntasPlegadas(), [key]: !preguntasPlegadas()[key] }); }} />}</Index>
                     </div>
                   )}
@@ -3898,8 +3899,6 @@ function TrabajoDeAgente(props: {
         />
       </Show>
 
-      <RespuestasDeAvance avance={props.avance} visualBudget={props.visualBudget} visualScope={props.visualScope} readVisual={props.readVisual} openVisual={props.openVisual} />
-
       {/* Entre el registro y la respuesta, que es donde ocurrió: el
           agente preguntó a mitad del turno, por debajo de lo que hizo
           hasta entonces y por encima de lo que contestó con la respuesta
@@ -3924,14 +3923,17 @@ function TrabajoDeAgente(props: {
           acciones, con la hora y los botones, y solo al posar. Antes firmaba la
           respuesta con un renglón encima; ahí competía con el texto y nombraba
           al encargado del hilo, que ya lo dice la cabecera. */}
+      <div data-thread-search-text={props.searchBlock}>
+      <RespuestasDeAvance avance={props.avance} visualBudget={props.visualBudget} visualScope={props.visualScope} readVisual={props.readVisual} openVisual={props.openVisual} />
       <Show when={texto()}>
         {(md) => (
-          <AltoMonotono vivo={props.vivo} searchBlock={props.searchBlock}>
+          <AltoMonotono vivo={props.vivo}>
             <TextoConSiguientes texto={md()} vivo={props.vivo} rapida={props.rapida} readVisual={props.readVisual} openVisual={props.openVisual} owner={props.visualScope ?? ""} visualBudget={props.visualBudget} />
           </AltoMonotono>
         )}
       </Show>
 
+      </div>
       <Show when={props.msg.historyRefs?.length}><HistoryDetails refs={props.msg.historyRefs!} turnId={props.msg.turno} /></Show>
       <Show when={props.msg.images?.length ? props.msg.images : null}>
         {(images) => <ImagenesEntregadas items={images()} />}
