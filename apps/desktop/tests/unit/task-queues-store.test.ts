@@ -66,3 +66,33 @@ test("old same-workspace task reopen cannot replace a fresh read", async () => {
   const fresh = f.queue.openSession("s1", "p1"); resolves[0]([message("obsolete")]); await old;
   resolves[1]([message("fresh")]); await fresh; assert.deepEqual(f.queue.items().map(item => item.id), ["fresh"]); f.dispose();
 });
+test("saved queue snapshots cannot overtake an earlier write for the same task", async () => {
+  const pending: { items: Encolado[]; commit: () => void }[] = []; let persisted: string[] = [];
+  const queue = createRoot(() => createTaskQueues({ scope: () => ({ workspace: "A", generation: 1, session: null, project: "p1" }), readQueue: async () => [],
+    writeQueue: async (_scope, items) => new Promise<void>(done => pending.push({ items, commit: () => { persisted = items.map(item => item.id); done(); } })), onSaveFailure: () => {} }));
+  const old = queue.persist("s1", "p1", [message("old")]); const newest = queue.persist("s1", "p1", [message("new")]);
+  assert.equal(pending.length, 1, "a newer snapshot waits for the older write instead of racing it");
+  pending[0].commit(); await old; await Promise.resolve(); assert.equal(pending.length, 2); pending[1].commit(); await newest;
+  assert.deepEqual(persisted, ["new"]); queue.dispose();
+});
+test("saving another workspace is independent of a delayed write", async () => {
+  let scope: QueueScope = { workspace: "A", generation: 1, session: null, project: "p1" };
+  const pending: { workspace: string | null; commit: () => void }[] = [];
+  const queue = createRoot(() => createTaskQueues({ scope: () => scope, readQueue: async () => [], writeQueue: async captured => new Promise<void>(done => pending.push({ workspace: captured.workspace, commit: done })), onSaveFailure: () => {} }));
+  const a = queue.persist("s1", "p1", [message("A")]); scope = { ...scope, workspace: "B", generation: 2 };
+  const b = queue.persist("s1", "p1", [message("B")]); assert.deepEqual(pending.map(write => write.workspace), ["A", "B"]);
+  pending[1].commit(); await b; pending[0].commit(); await a; queue.dispose();
+});
+test("a failed save is reported to its caller and does not stall newer edits", async () => {
+  let reject!: (error: unknown) => void; let writes = 0; const failure = new Error("save failed");
+  const queue = createRoot(() => createTaskQueues({ scope: () => ({ workspace: "A", generation: 1, session: null, project: "p1" }), readQueue: async () => [],
+    writeQueue: async () => ++writes === 1 ? new Promise<void>((_, no) => { reject = no; }) : undefined, onSaveFailure: () => {} }));
+  const first = queue.persist("s1", "p1", [message("old")]); const rejected = assert.rejects(first, error => error === failure);
+  const next = queue.persist("s1", "p1", [message("new")]); reject(failure); await rejected; await next; assert.equal(writes, 2); queue.dispose();
+});
+test("accepted queued saves survive view disposal without accepting new work", async () => {
+  const pending: (() => void)[] = [];
+  const queue = createRoot(() => createTaskQueues({ scope: () => ({ workspace: "A", generation: 1, session: null, project: "p1" }), readQueue: async () => [], writeQueue: async () => new Promise<void>(done => pending.push(done)), onSaveFailure: () => {} }));
+  const first = queue.persist("s1", "p1", [message("old")]), second = queue.persist("s1", "p1", [message("new")]);
+  queue.dispose(); await queue.persist("s1", "p1", [message("late")]); pending[0](); await first; await Promise.resolve(); assert.equal(pending.length, 2); pending[1](); await second;
+});
