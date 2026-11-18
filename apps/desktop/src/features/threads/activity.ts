@@ -92,8 +92,8 @@ export function createActivityProjection() {
       running.alias = draft;
       if (running.lastObserved) { draft.lastObserved = running.lastObserved; draft.lastObservedKind = running.lastObservedKind; }
       for (const id of running.saved) draft.saved.add(id);
-      records.set(scopeKey(workspace, to), [...previous, ...existing.filter(record => record !== running)]);
-    } else records.set(scopeKey(workspace, to), [...previous, ...existing]);
+      records.set(scopeKey(workspace, to), [...existing.filter(record => record !== running), ...previous]);
+    } else records.set(scopeKey(workspace, to), draft?.active || !running?.active ? [...existing, ...previous] : [...previous, ...existing]);
     records.delete(scopeKey(workspace, from));
   }
   return { begin, observe, finish, reconcile, project, adopt,

@@ -164,3 +164,24 @@ test("dropping a thread and resetting service remove its presentation activity",
     assert.deepEqual(f.store.activities("s", f.store.messages()), []);
   } finally { f.dispose(); }
 });
+
+for (const startedOnSession of [false, true]) test(`adoption keeps the active draft after older closed session history (${startedOnSession ? "started" : "not started"})`, () => {
+  const model = createActivityProjection(), old = message("previous", { turno: "old", clave: "old:0" });
+  model.begin("A", "s", 1_000, []); model.observe("A", "s", [], [old]); model.finish("A", "s");
+  const oldKey = model.project("A", "s", [old])[0].key;
+  model.begin("A", "", 2_000, []);
+  const draft = message("draft output"); model.observe("A", "", [], [draft]);
+  const draftKey = model.project("A", "", [draft])[0].key;
+  const answer = message("session output");
+  if (startedOnSession) { model.begin("A", "s", 2_100, [old]); model.observe("A", "s", [], [answer]); }
+  model.adopt("A", "", "s");
+  const visible = [old, draft, ...(startedOnSession ? [answer] : [])];
+  const adopted = model.project("A", "s", visible);
+  assert.equal(adopted.find(activity => activity.key === oldKey)?.active, false);
+  assert.deepEqual(adopted.filter(activity => activity.active).map(activity => activity.key), [draftKey]);
+  assert.equal(model.finish("A", "s"), true);
+  assert.equal(model.project("A", "s", visible).some(activity => activity.active), false);
+  model.begin("A", "s", 3_000, visible);
+  const next = message("next output"); model.observe("A", "s", [], [next]); model.finish("A", "s");
+  assert.equal(model.project("A", "s", [...visible, next]).some(activity => activity.active), false);
+});
