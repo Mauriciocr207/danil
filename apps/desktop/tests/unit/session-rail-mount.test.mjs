@@ -1,0 +1,51 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { boot, sleep } from "../helpers/jsdom-app.mjs";
+import { RESPONSES } from "../helpers/mount-guard.mjs";
+
+const context = (id, org, extra = {}) => ({ context_id: id, org, org_name: org, plan: "paid", ...extra });
+const until = async (read) => {
+  for (let i = 0; i < 60; i++) { if (read()) return true; await sleep(50); }
+  return false;
+};
+
+test("D2a mounts context headers, opens later for one organization, and signs out every family of an email", async () => {
+  let status = { state: "connected", sessions: [
+    { family: "family-one", email: "one@example.com", available_contexts: 2, contexts: [context("a", "Org A"), context("b", "Org B", { workspaces: "later" })] },
+    { family: "family-one-new", email: "one@example.com", contexts: [context("c", "Org C")] },
+    { family: "family-two", email: "two@example.com", contexts: [context("d", "Org D")] },
+  ] };
+  const closed = [];
+  const logins = [];
+  const app = await boot("listo", "session-context-rail", {
+    ...RESPONSES,
+    danil_session_status: () => structuredClone(status),
+    danil_edge_fetch: ({ path, context: id }) => path === "/v1/identity/me" ? { status: 200, body: { id: id === "d" ? "person-two" : "person-one" } } : { status: 404, body: {} },
+    danil_sign_in: (args) => { logins.push(args); return structuredClone(status); },
+    danil_sign_out: ({ family }) => { closed.push(family); status = { ...status, sessions: status.sessions.filter((s) => s.family !== family) }; return structuredClone(status); },
+  });
+  const doc = app.w.document;
+  assert.ok(await until(() => doc.querySelectorAll("[data-account-header]").length === 4));
+  assert.ok(doc.querySelector('[data-workspace-tile="w"]'), "local workspace stays visible");
+  assert.ok(await until(() => doc.querySelector('[data-session-context="b"]')));
+  assert.equal(doc.querySelectorAll("[data-session-context]").length, 1, "later opens the chosen organization");
+  assert.ok(!doc.body.textContent.includes("Tu workspace Free"), "no Free row without E1/W1a data");
+  doc.activeElement?.dispatchEvent(new app.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await sleep(100);
+  doc.querySelector("[data-add-workspace]").click();
+  assert.ok(await until(() => [...doc.querySelectorAll('[role="menuitem"]')].some((b) => b.textContent === "Agregar cuenta u organización")));
+  assert.ok(doc.body.textContent.includes("Nuevos disponibles"));
+  [...doc.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent === "Agregar cuenta u organización").click();
+  assert.ok(await until(() => logins.length === 1));
+  assert.equal(logins[0].mode, "add");
+  doc.activeElement?.dispatchEvent(new app.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await sleep(100);
+  doc.querySelector('[data-account-header="a"]').click();
+  assert.ok(await until(() => [...doc.querySelectorAll('[role="menuitem"]')].some((b) => b.textContent === "Cerrar sesión de one@example.com")));
+  [...doc.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent === "Cerrar sesión de one@example.com").click();
+  assert.ok(await until(() => doc.querySelectorAll("[data-account-header]").length === 1));
+  assert.deepEqual(closed, ["family-one", "family-one-new"]);
+  assert.equal(doc.querySelector("[data-account-header]").dataset.accountHeader, "d");
+  assert.ok(doc.querySelector('[data-workspace-tile="w"]'));
+  assert.equal(doc.querySelector("[data-organization-menu]"), null);
+});

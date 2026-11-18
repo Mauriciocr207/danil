@@ -680,6 +680,7 @@ const steps = [
   ["With an account sharing a credential, the reason it cannot add another shows", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/shared-credential-note.test.mjs")], root],
   ["Waiting for the previous version is a notice and stopping it is confirmed", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/launcher-previous.test.mjs")], root],
   ["Danil accounts sign in through the browser, add up and sign out", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/danil-account-panel.test.mjs")], root],
+  ["Context rail menus mount with the D1 contract", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/session-rail-mount.test.mjs")], root],
   ["First run and the sidebar footer offer the Danil account", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/danil-sign-in-entry.test.mjs")], root],
   ["The first run continues locally without the retired workspace directory", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/account-welcome-first-run.test.mjs")], root],
   ["First-run Google Drive reconnects after disconnecting", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/onboarding-drive-reconnect.test.mjs")], root],

@@ -444,11 +444,12 @@
   "shell.agent_dock.no_folder": "Open a folder to see its installed agents and those from its repository.",
   "shell.workspaces.close_org": "Sign out of {name}",
   "shell.workspaces.close_email": "Sign out of {email}",
-  "shell.workspaces.add_session": "Add another account or organization",
+  "shell.workspaces.add_session": "Add account or organization",
   "shell.workspaces.sessions_limit": "Session limit reached",
   "shell.workspaces.sessions_auth": "The organization requires authentication",
   "shell.workspaces.sessions_cancelled": "Cancelled",
   "shell.workspaces.sessions_failed": "Could not complete",
   "shell.workspaces.free_workspace": "Your Free workspace",
-  "shell.workspaces.session_group": "{email} · {name}"
+  "shell.workspaces.session_group": "{email} · {name}",
+  "shell.workspaces.new_available": "New ones available"
 }

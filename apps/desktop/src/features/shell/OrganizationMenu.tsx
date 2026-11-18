@@ -1,9 +1,10 @@
+import type { OrganizationSelection, OrganizationState } from "@terminus/computers";
 import Check from "lucide-solid/icons/check";
 import { createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js";
 import { t } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { ITEM_DE_MENU } from "../../ui/Popover";
-import type { OrganizationSelection, OrganizationState } from "@terminus/computers";
+import { hasSessionGroups } from "./session-groups";
 
 /** Lo mismo que un `createSignal` sobre el store, sin que el store dependa de Solid. */
 export function useOrganizations(selection: OrganizationSelection) {
@@ -24,7 +25,7 @@ export function OrganizationWatch(props: { load: () => Promise<OrganizationSelec
       {(s) => {
         const { needed } = useOrganizations(s());
         createEffect(() => {
-          if (needed()) props.onNeeded();
+          if (needed() && !hasSessionGroups()) props.onNeeded();
         });
         return null;
       }}
@@ -38,13 +39,11 @@ export function OrganizationSection(props: { load: () => Promise<OrganizationSel
   return <Show when={selection()}>{(s) => <OrganizationMenu selection={s()} onClose={props.onClose} />}</Show>;
 }
 
-/**
- * La sección «Organización» del menú de la cuenta, encima de los workspaces. Con una sola,
- * su nombre; con varias, la lista con la activa marcada. Oculta si el servidor aún no la tiene.
- */
+/** El selector anterior solo se muestra sin un conjunto de contextos. */
 export default function OrganizationMenu(props: { selection: OrganizationSelection; onClose: () => void }) {
   const { state } = useOrganizations(props.selection);
   const ready = () => {
+    if (hasSessionGroups()) return null;
     const s = state();
     return s.kind === "ready" && s.items.length > 0 ? s : null;
   };

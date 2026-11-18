@@ -137,3 +137,63 @@ test("the initial engine selection cannot open an unadded organization workspace
   assert.equal(sessionStartTarget([{ id: "local" }], "unadded", new Set(), [{ ...group, added: new Set<string>() }]), "local");
   assert.equal(sessionStartTarget([{ id: "local" }], "unadded", new Set(), [{ ...group, added: null }]), null);
 });
+
+test("A8: signing out an email closes all its local families, without treating family as sid", async () => {
+  let current = structuredClone(status);
+  current.sessions!.push({ family: "local-random-third", email: "ONE@example.com", contexts: [context("extra")] });
+  const closed: string[] = [];
+  const invoke: ContextInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
+    if (command === "danil_sign_out") {
+      closed.push(String(args?.family));
+      current.sessions = current.sessions!.filter((f) => f.family !== args?.family);
+    }
+    return current as T;
+  };
+  const sessions = createSessionContexts(invoke, () => {});
+  await sessions.refresh();
+  await sessions.closeEmail("one@example.com", "one");
+  assert.deepEqual(closed, ["one", "local-random-third"]);
+  assert.deepEqual(sessions.groups()!.map((g) => g.family), ["two"]);
+});
+
+test("A8: all seeds only a settled nonempty machine source; later and old replies keep the prior seed", async () => {
+  const { sessionSeedInputs } = await import("../../src/features/shell/session-seeding.ts");
+  const { seedOf } = await import("../../src/features/shell/workspace-added-sync.ts");
+  const source = [{ id: "machine-one" }, { id: "machine-two" }];
+  const previous = new Set(["machine-one"]);
+  const hidden = new Set(["machine-two"]);
+  const all = sessionSeedInputs({ workspaces: "all" }, source, previous, hidden);
+  assert.deepEqual(seedOf(source, all.shown, all.hidden), ["machine-one", "machine-two"]);
+  assert.deepEqual([...hidden], ["machine-two"]);
+  const missing = sessionSeedInputs({ workspaces: "all" }, null, previous, hidden);
+  assert.deepEqual(seedOf([], missing.shown, missing.hidden), []);
+  for (const hint of [undefined, "later"] as const) {
+    const old = sessionSeedInputs({ workspaces: hint }, source, previous, hidden);
+    assert.deepEqual(seedOf(source, old.shown, old.hidden), ["machine-one"]);
+  }
+});
+
+test("A8: availability and selection are optional attributes, never an organization query", () => {
+  const selected = structuredClone(status);
+  selected.sessions![0].available_contexts = 2;
+  selected.sessions![0].contexts[0].workspaces = "later";
+  const groups = contextGroups(selected)!;
+  assert.equal(groups[0].available_contexts, 2);
+  assert.equal(groups[0].workspaces, "later");
+  assert.equal(groups[3].available_contexts, undefined);
+});
+
+test("identity without mode=add falls back to the previous login only for 404/501", async () => {
+  const calls: (Record<string, unknown> | undefined)[] = [];
+  const invoke: ContextInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
+    if (command === "danil_sign_in") {
+      calls.push(args);
+      if (args?.mode === "add") throw { status: 404, detail: "not_available_yet" };
+    }
+    return { state: "connected" } as T;
+  };
+  const sessions = createSessionContexts(invoke, () => {});
+  await sessions.addAccount();
+  assert.deepEqual(calls, [{ mode: "add" }, undefined]);
+  assert.equal(sessions.groups(), null);
+});

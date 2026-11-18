@@ -32,6 +32,7 @@ export function SessionAddEntries(props: { sessions: Rail; signedIn: boolean; on
       if (props.sessions.groups()?.length || props.signedIn) { props.onStep(); props.sessions.refresh(); }
       else void run(props.sessions.sessions.addAccount);
     }}>{t("shell.workspaces.add_danil")}</button>
+    <Show when={props.sessions.groups()?.some((g) => (g.available_contexts ?? 0) > 0)}><p role="status" class={NOTE}>{t("shell.workspaces.new_available")}</p></Show>
     <Show when={(props.sessions.groups()?.length ?? 0) > 0}>
       <button type="button" role="menuitem" class={ITEM_DE_MENU} disabled={busy()} onClick={() => void run(props.sessions.sessions.addAccount)}>{t("shell.workspaces.add_session")}</button>
     </Show>
@@ -39,8 +40,8 @@ export function SessionAddEntries(props: { sessions: Rail; signedIn: boolean; on
   </>;
 }
 
-export function SessionAddStep(props: { sessions: Rail; query: string; onQuery: (s: string) => void; onClose: () => void; onOpen: (id: string) => void }) {
-  const groups = () => props.sessions.groups() ?? [];
+export function SessionAddStep(props: { sessions: Rail; context?: string | null; query: string; onQuery: (s: string) => void; onClose: () => void; onOpen: (id: string) => void }) {
+  const groups = () => (props.sessions.groups() ?? []).filter((g) => !props.context || g.context_id === props.context);
   const size = () => groups().reduce((n, g) => n + (g.available?.length ?? 0), 0);
   return <div data-danil-workspaces="">
     <Show when={size() >= SEARCH_FROM}><WorkspaceSearch value={props.query} onInput={props.onQuery} /></Show>

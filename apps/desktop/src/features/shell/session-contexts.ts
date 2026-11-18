@@ -1,6 +1,6 @@
-export type SessionContext = { context_id: string; org: string; org_name: string | null; plan: string | null };
-export type SessionFamily = { family: string; email: string | null; contexts: SessionContext[] };
-export type ContextGroup = SessionContext & { family: string; email: string | null };
+export type SessionContext = { context_id: string; org: string; org_name: string | null; plan: string | null; workspaces?: "all" | "later" };
+export type SessionFamily = { family: string; email: string | null; contexts: SessionContext[]; available_contexts?: number };
+export type ContextGroup = SessionContext & { family: string; email: string | null; available_contexts?: number };
 export type SessionStatus = { state: string; sessions?: SessionFamily[]; default_context?: string | null };
 export type ContextReply = { status: number; body?: unknown };
 export type ContextInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -11,7 +11,7 @@ export function contextGroups(status: SessionStatus | null): ContextGroup[] | nu
   return status.sessions.flatMap((s) => s.contexts.flatMap((c) => {
     if (!c.context_id || !c.org || seen.has(c.context_id)) return [];
     seen.add(c.context_id);
-    return [{ ...c, family: s.family, email: s.email }];
+    return [{ ...c, family: s.family, email: s.email, available_contexts: s.available_contexts }];
   }));
 }
 
@@ -66,11 +66,22 @@ export function createSessionContexts(invoke: ContextInvoke, changed: () => void
     await refresh();
   }
   return {
-    refresh, send, close, ready: () => ready, connected: () => connected,
+    refresh, send, close,
+    closeEmail: async (email: string | null, fallbackFamily: string) => {
+      const ids = email ? families.filter((f) => f.email?.trim().toLowerCase() === email.trim().toLowerCase()).map((f) => f.family) : [fallbackFamily];
+      for (const family of ids) await close({ family });
+    },
+    ready: () => ready, connected: () => connected,
     groups: () => unsupported ? null : groups,
     families: () => families,
     addAccount: async () => {
-      const result = await invoke<{ error?: string | null }>("danil_sign_in", { mode: "add" });
+      let result: { error?: string | null };
+      try { result = await invoke("danil_sign_in", { mode: "add" }); }
+      catch (e) {
+        const refusal = e as { detail?: string; status?: number } | null;
+        if (refusal?.detail !== "not_available_yet" && refusal?.status !== 404 && refusal?.status !== 501) throw e;
+        result = await invoke("danil_sign_in");
+      }
       await refresh();
       if (result.error) throw { detail: result.error };
     },

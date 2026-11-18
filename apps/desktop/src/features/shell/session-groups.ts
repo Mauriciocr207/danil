@@ -5,6 +5,7 @@ import { escribirPref, leerPref } from "../../lib/prefs.ts";
 import { listen } from "../../lib/serviceEvents.ts";
 import { danilAvailable, readDanil } from "../machines/index.ts";
 import { type ContextGroup, createSessionContexts } from "./session-contexts.ts";
+import { sessionSeedInputs } from "./session-seeding.ts";
 import { createAddedSync } from "./workspace-added-sync.ts";
 import { ADDED_KEY, edgeAddedTransport, prefsAddedStore } from "./workspace-added-transport.ts";
 
@@ -18,6 +19,7 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
   const changed = () => bump((n) => n + 1);
   const sessions = createSessionContexts(invoke, changed);
   const groups = () => (revision(), sessions.groups());
+  const [laterContext, setLaterContext] = createSignal<string | null>(null);
   const records = new Map<string, { person: string | null; asking: boolean; sync: ReturnType<typeof createAddedSync> }>();
   const known = new Set<string>();
   const active = (id: string) => groups()?.find((g) => g.context_id === id);
@@ -25,14 +27,16 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
   const ensure = (g: ContextGroup) => {
     const existing = records.get(g.context_id);
     if (existing?.person || existing?.asking) return;
+    if (!existing && g.workspaces === "later") setLaterContext(g.context_id);
     const record = existing ?? { person: null as string | null, asking: false, sync: null as unknown as ReturnType<typeof createAddedSync> };
     if (!existing) record.sync = createAddedSync({
       transport: edgeAddedTransport((method, path, body) => sessions.send(g.context_id, method, path, body)),
       store,
       scope: () => record.person && active(g.context_id) ? { person: record.person, organization: g.org } : null,
       available: () => active(g.context_id) ? danilAvailable(g.org) : null,
-      shown: () => new Set([...leerPref<string[]>("workspaces.order", []), ...(capabilities().railWorkspaces?.() ?? []).map((w) => w.id)]),
-      hidden, onSeeded, onChange: changed,
+      shown: () => sessionSeedInputs(active(g.context_id), danilAvailable(g.org), new Set([...leerPref<string[]>("workspaces.order", []), ...(capabilities().railWorkspaces?.() ?? []).map((w) => w.id)]), hidden()).shown,
+      hidden: () => sessionSeedInputs(active(g.context_id), danilAvailable(g.org), new Set(), hidden()).hidden,
+      onSeeded, onChange: changed,
     });
     records.set(g.context_id, record);
     record.asking = true;
@@ -63,7 +67,7 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
     setInterval(() => void sessions.refresh(), 30_000);
   }
   return {
-    sessions, groups: rows, known, ready: () => (revision(), sessions.ready()), connected: () => (revision(), sessions.connected()),
+    sessions, groups: rows, known, laterContext, acknowledgeLater: () => setLaterContext(null), ready: () => (revision(), sessions.ready()), connected: () => (revision(), sessions.connected()),
     add: (context: string, id: string) => records.get(context)?.sync.add(id),
     remove: (context: string, id: string) => records.get(context)?.sync.remove(id),
     refresh: () => { for (const g of groups() ?? []) void readDanil(g.org); },

@@ -1,6 +1,6 @@
 import Eye from "lucide-solid/icons/eye";
 import Plus from "lucide-solid/icons/plus";
-import { type Component, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { t } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
@@ -31,6 +31,11 @@ export default function AddWorkspaceMenu(props: {
 }) {
   const [open, setOpen] = createSignal(false);
   const [step, setStep] = createSignal<"menu" | "danil">("menu");
+  const [context, setContext] = createSignal<string | null>(null);
+  createEffect(() => {
+    const id = props.sessions.laterContext();
+    if (id) { setContext(id); setStep("danil"); setOpen(true); props.sessions.acknowledgeLater(); }
+  });
   const [query, setQuery] = createSignal("");
   const close = () => {
     setOpen(false);
@@ -64,9 +69,9 @@ export default function AddWorkspaceMenu(props: {
       <PopoverContent role="menu" class="w-64 p-1" onKeyDown={menuArrows}>
         <Show
           when={step() === "menu"}
-          fallback={props.sessions.groups() !== null ? <SessionAddStep sessions={props.sessions} query={query()} onQuery={setQuery} onClose={close} onOpen={props.onOpen} /> : <DanilStep danil={props.danil} query={query()} onQuery={setQuery} tasksOf={props.tasksOf} badge={props.badge} onClose={close} />}
+          fallback={props.sessions.groups() !== null ? <SessionAddStep sessions={props.sessions} context={context()} query={query()} onQuery={setQuery} onClose={close} onOpen={props.onOpen} /> : <DanilStep danil={props.danil} query={query()} onQuery={setQuery} tasksOf={props.tasksOf} badge={props.badge} onClose={close} />}
         >
-          <Show when={usesSessionMenu(props.sessions, props.danil.signedIn)} fallback={<DanilAddEntry danil={props.danil} onStep={() => setStep("danil")} />}><SessionAddEntries sessions={props.sessions} signedIn={props.danil.signedIn} onStep={() => setStep("danil")} /></Show>
+          <Show when={usesSessionMenu(props.sessions, props.danil.signedIn)} fallback={<DanilAddEntry danil={props.danil} onStep={() => (setContext(null), setStep("danil"))} />}><SessionAddEntries sessions={props.sessions} signedIn={props.danil.signedIn} onStep={() => (setContext(null), setStep("danil"))} /></Show>
           <button
             type="button"
             role="menuitem"
