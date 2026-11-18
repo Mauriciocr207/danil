@@ -1,6 +1,6 @@
 import { createMemo, createSignal, type Setter, untrack } from "solid-js";
 import { anexarDeltas, hasOlder, hasRecentGap, HistoryPager, lotesDeDeltas, mensajesDelHilo, transcripcion, type ChatEvent, type HandoverState, type Msg, type OlderState, type Session, type TranscriptOrigin, type Turn } from "../chat/index.ts";
-import { conservarEnOrden, conservarPorClave } from "../../lib/sessionRefresh.ts";
+import { createOptimisticHistory, type OptimisticHistoryState } from "./optimistic-history.ts";
 import { createActivityProjection } from "./activity.ts";
 import { transcriptEvent, type TranscriptMetadata } from "./transcript-events.ts";
 
@@ -26,10 +26,7 @@ export function createThreadsStore(deps: {
     const options = deps.route(id), workspace = deps.scope.workspace();
     return { ...options, headers: { ...options?.headers, ...(workspace ? { "x-terminus-workspace": workspace } : {}) } };
   };
-  type Optimistic = { original: Msg; row: Msg; acknowledged?: number };
-  type Hilo = { base: Msg[]; vivo: Msg[]; guardados?: ReadonlySet<string>; optimistic?: Optimistic[]; readRevision?: number };
-  let revision = 0;
-  const reads = new WeakMap<Session, { id: string; generation: number; revision: number }>();
+  type Hilo = OptimisticHistoryState & { base: Msg[]; vivo: Msg[]; guardados?: ReadonlySet<string> };
   const SIN_HILO: Hilo = { base: [], vivo: [] };
   const workspaceThreads = new Map<string, Record<string, Hilo>>();
   const [hilos, setHilos] = createSignal<Record<string, Hilo>>({});
@@ -74,6 +71,14 @@ export function createThreadsStore(deps: {
       return { ...hs, [session]: { ...h, base: next } };
     });
   };
+  const optimisticHistory = createOptimisticHistory<Hilo>({
+    current: () => untrack(hilos), disposed: () => disposed, generation: deps.scope.generation, writeBase: asentar,
+    update: setHilos, settle: (fn) => {
+      setHilos(fn);
+      for (const [workspace, threads] of workspaceThreads) workspaceThreads.set(workspace, fn(threads));
+    },
+  });
+  const { appendOptimistic, acknowledgeOptimistic, reviseOptimistic, rejectOptimistic } = optimisticHistory;
   type IdsDeTurnos = ReadonlySet<string>;
   const releer = (session: string, leida: Msg[], vaciarVivo: boolean, antepuesta = false, guardados?: IdsDeTurnos, cola?: IdsDeTurnos, readRevision?: number) => {
     if (disposed) return;
@@ -98,15 +103,7 @@ export function createThreadsStore(deps: {
                 ? { ...m, questionRequestId: ataduras.get(m.turno) }
                 : m,
             );
-      // Una lectura anterior al ack no puede saber que el envío ya quedó en disco.
-      // La identidad durable confirma una fila; el texto nunca identifica un envío.
-      const optimistic = (previo?.optimistic ?? []).filter(entry =>
-        !(entry.row.turno && persistidos.has(entry.row.turno)) &&
-        !(entry.acknowledged !== undefined && readRevision !== undefined && readRevision > entry.acknowledged));
-      const previousBase = previo?.optimistic?.length
-        ? (previo.base).filter(row => !previo.optimistic?.some(entry => entry.row === row)) : previo?.base ?? [];
-      const persisted = (antepuesta ? conservarPorClave : conservarEnOrden)(previousBase, atada);
-      const base = optimistic.length ? [...persisted, ...optimistic.map(entry => entry.row)] : persisted;
+      const { base, optimistic, readRevision: appliedRevision } = optimisticHistory.reconcile(previo, atada, persistidos, antepuesta, readRevision);
       activity.reconcile(deps.scope.workspace(), session, previo?.base ?? [], base, vaciarVivo);
       const vivo = vaciarVivo
         ? []
@@ -114,7 +111,7 @@ export function createThreadsStore(deps: {
       const mismoVivo = vivo.length === vivoPrevio.length;
       const tramos = guardados ?? previo?.guardados;
       if (previo && base === previo.base && mismoVivo && tramos === previo.guardados && optimistic.length === (previo.optimistic?.length ?? 0) && readRevision === undefined) return hs;
-      return { ...hs, [session]: { base, vivo: mismoVivo ? vivoPrevio : vivo, guardados: tramos, optimistic, readRevision: readRevision ?? previo?.readRevision } };
+      return { ...hs, [session]: { base, vivo: mismoVivo ? vivoPrevio : vivo, guardados: tramos, optimistic, readRevision: appliedRevision } };
     });
   };
   const idsDeTurnos = (turns: readonly Turn[]) => new Set(turns.flatMap((t) => (t.id ? [t.id] : [])));
@@ -144,21 +141,12 @@ export function createThreadsStore(deps: {
     setEstadoAntiguos(all => (all[id] ?? "idle") === pager.older ? all : { ...all, [id]: pager.older });
   };
   const [colaSuelta, setColaSuelta] = createSignal<Readonly<Record<string, Msg[]>>>({});
-  const historyOperations = new WeakMap<HistoryPager<Session["turns"][number]>, { recovery?: Session }>();
   const historiaDe = (id: string) => {
     const hay = historias.get(id);
     if (hay) return hay;
     const pager: HistoryPager<Session["turns"][number]> = new HistoryPager({
-      read: async (before) => {
-        const operation = historyOperations.get(pager);
-        const result = await leerTarea(proyectosDeHistoria.get(id) ?? deps.project(), id, before);
-        // A rewritten older page recovers at the tail; only the store may accept
-        // that snapshot, with the same ACK/generation checks as any other read.
-        if (before === null && operation && historyOperations.get(pager) === operation && !disposed && reads.get(result)?.generation === deps.scope.generation()) {
-          operation.recovery = result; pager.close();
-        }
-        return result;
-      },
+      read: (before) => optimisticHistory.readPage(pager, before,
+        () => leerTarea(proyectosDeHistoria.get(id) ?? deps.project(), id, before)),
       onChange: () => marcarAntiguos(id, pager),
     });
     historias.set(id, pager);
@@ -167,12 +155,10 @@ export function createThreadsStore(deps: {
   const leerTarea = async (project: string, id: string, before: number | null = null) => {
     if (disposed) throw new DOMException("Conversation disposed", "AbortError");
     proyectosDeHistoria.set(id, project);
-    const provenance = { id, generation: deps.scope.generation(), revision: ++revision };
     const options = route(id);
-    const result = deps.scope.paged()
-      ? await invoke<Session>("load_history", { project, id, before }, options)
-      : await invoke<Session>("load_session", { project, id, history_request: { version: 1, before } }, options);
-    reads.set(result, provenance);
+    const result = await optimisticHistory.read(id, () => deps.scope.paged()
+      ? invoke<Session>("load_history", { project, id, before }, options)
+      : invoke<Session>("load_session", { project, id, history_request: { version: 1, before } }, options));
     if (result.history?.version === 1) {
       result.turns = result.turns.map(turn => ({ ...turn,
         history_refs: turn.history_refs?.map(ref => ({ ...ref, project, session: id })),
@@ -182,25 +168,12 @@ export function createThreadsStore(deps: {
   };
   async function cargarAntiguos(project: string, id: string): Promise<(() => void) | null> {
     const pager = historias.get(id);
-    if (!pager || pager.older === "loading") return null;
-    const operation: { recovery?: Session } = {};
-    historyOperations.set(pager, operation);
+    if (!pager) return null;
     proyectosDeHistoria.set(id, project);
-    const generation = deps.scope.generation();
-    const poner = await pager.fetchOlder();
-    if (disposed || generation !== deps.scope.generation() || historyOperations.get(pager) !== operation) return null;
-    if (operation.recovery) {
-      loadResult(id, operation.recovery, false, generation, true);
-      return null;
-    }
-    pintarHistoria(id, pager, false);
-    if (!poner) return null;
-    return () => {
-      if (disposed || generation !== deps.scope.generation() || historyOperations.get(pager) !== operation) return;
-      poner();
-      pintarHistoria(id, pager, true);
-    };
+    return optimisticHistory.older(pager, prepend => pintarHistoria(id, pager, prepend),
+      (session, generation) => { loadResult(id, session, false, generation, true); });
   }
+
   function pintarHistoria(id: string, pager: HistoryPager<Session["turns"][number]>, antepuesta: boolean, clear = false, leidos?: ReadonlySet<string>, readRevision?: number) {
     const loaded = pager.loaded;
     if (!loaded) return;
@@ -210,12 +183,8 @@ export function createThreadsStore(deps: {
   }
   function loadResult(id: string, session: Session, clear: boolean, generation: number, latest = false) {
     if (disposed || generation !== deps.scope.generation()) return false;
-    const read = reads.get(session);
-    if (read && (read.id !== id || read.generation !== deps.scope.generation() || read.revision < (untrack(hilos)[id]?.readRevision ?? 0))) return false;
-    // Without durable IDs in the send ACK, only a read begun after every pending
-    // send settled can safely replace optimistic rows with persisted history.
-    const pending = untrack(hilos)[id]?.optimistic ?? [];
-    if (pending.some(entry => entry.acknowledged === undefined || !read || read.revision <= entry.acknowledged)) return false;
+    if (!optimisticHistory.accepts(id, session, generation)) return false;
+    const read = optimisticHistory.provenance(session);
     anotar(setApagadas, id, session.offline?.machine ?? null);
     setTraspasos((all) => {
       const previo = all[id];
@@ -237,7 +206,7 @@ export function createThreadsStore(deps: {
       return { ...all, [id]: ahora };
     });
     const pager = historiaDe(id);
-    if (latest) { historyOperations.delete(pager); pager.close(); pager.loaded = undefined; }
+    if (latest) { optimisticHistory.close(pager); pager.loaded = undefined; }
     const loaded = pager.accept(session.turns, session.history, { reading: leyendoLejos.has(id) });
     setColaSuelta((all) => {
       if (hasRecentGap(loaded)) return { ...all, [id]: transcripcion(session.turns, session.history?.start ?? 0) };
@@ -271,53 +240,12 @@ export function createThreadsStore(deps: {
   function appendPersisted(session: string, messages: Msg[]) {
     if (!disposed && messages.length) asentar(session, before => [...before, ...messages]);
   }
-  function appendOptimistic(session: string, messages: Msg[]) {
-    if (disposed || !messages.length) return;
-    appendPersisted(session, messages);
-    setHilos(all => ({ ...all, [session]: { ...all[session], optimistic: [
-      ...(all[session].optimistic ?? []), ...messages.map(row => ({ original: row, row })),
-    ] } }));
-  }
-  function acknowledgeOptimistic(session: string, messages: Msg[]) {
-    if (disposed) return;
-    const acknowledged = ++revision;
-    const acknowledge = (all: Record<string, Hilo>) => {
-      const thread = all[session];
-      if (!thread?.optimistic?.some(entry => messages.includes(entry.original))) return all;
-      return { ...all, [session]: { ...thread, optimistic: thread.optimistic.map(entry =>
-        messages.includes(entry.original) ? { ...entry, acknowledged } : entry) } };
-    };
-    setHilos(acknowledge);
-    for (const [workspace, threads] of workspaceThreads) workspaceThreads.set(workspace, acknowledge(threads));
-  }
-
   function commitUniqueTurn(session: string, message: Msg) {
     if (!disposed) asentar(session, before => before.some(row => row.turno === message.turno) ? before : [...before, message]);
   }
   function replaceTurn(session: string, message: Msg) {
     if (!disposed) asentar(session, before => [...before.filter(row => !message.turno || row.turno !== message.turno), message]);
   }
-  function reviseOptimistic(session: string, target: Msg, patch: Pick<Msg, "respuestas" | "author">) {
-    if (disposed) return;
-    const entry = untrack(hilos)[session]?.optimistic?.find(row => row.original === target);
-    const previous = entry?.row ?? target, next = { ...previous, ...patch };
-    if (entry) entry.row = next;
-    if (!disposed) asentar(session, before => before.map(row => row === previous ? next : row));
-  }
-  function rejectOptimistic(session: string, messages: Msg[]) {
-    if (disposed) return;
-    const reject = (all: Record<string, Hilo>) => {
-      const thread = all[session];
-      if (!thread) return all;
-      const rejected = thread.optimistic?.filter(entry => messages.includes(entry.original)) ?? [];
-      const base = thread.base.filter(row => !messages.includes(row) && !rejected.some(entry => entry.row === row));
-      if (base.length === thread.base.length && !rejected.length) return all;
-      return { ...all, [session]: { ...thread, base, optimistic: thread.optimistic?.filter(entry => !rejected.includes(entry)) } };
-    };
-    setHilos(reject);
-    for (const [workspace, threads] of workspaceThreads) workspaceThreads.set(workspace, reject(threads));
-  }
-
   function question(session: string, fields: Pick<Msg, "turno" | "preguntas" | "questionRequestId" | "agent">, workspace = deps.scope.workspace()) {
     if (disposed) return;
     anexar(session, before => {
