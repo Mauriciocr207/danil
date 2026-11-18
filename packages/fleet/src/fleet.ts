@@ -400,13 +400,19 @@ export class Fleet {
     const order = this.machines().map((m) => m.id);
     const servers = order.filter((id) => this.serves(this.info(id), workspace));
     if (servers.length) return servers;
+    // Lo que una máquina contestó en `list_workspaces` manda; las hijas son de todos.
+    const lists = (id: string) => !!this.listings.get(id)?.some((w) => w.id === workspace);
+    const listed = order.filter((id) => lists(id) || this.info(id)?.child === true);
+    if (order.some(lists)) return listed;
+    // Una máquina de organización cuya lista ya se conoce no toma lo que no lista.
+    const known = (id: string) => this.info(id)?.kind === "organization" && this.listings.has(id);
     if (this.registry) {
       const w = this.registry.find((x) => x.id === workspace);
-      return order.filter((id) => (w?.computers.includes(id) ?? false) || this.info(id)?.child === true || (this.info(id)?.linked?.has(workspace) ?? false) || this.serves(this.info(id), workspace));
+      return order.filter((id) => !known(id) && ((w?.computers.includes(id) ?? false) || this.info(id)?.child === true || (this.info(id)?.linked?.has(workspace) ?? false)));
     }
     return order.filter((id) => {
       const linked = this.info(id)?.linked ?? null;
-      return linked === null || linked.has(workspace) || this.serves(this.info(id), workspace);
+      return !known(id) && (linked === null || linked.has(workspace));
     });
   }
 

@@ -115,3 +115,16 @@ test('a Danil tile says so to who cannot see its mark; a local one does not', as
   assert.equal(tileLabel('Mío', false, null, t), 'Mío');
   assert.equal(tileLabel('Mío', false, 'Espera', t), 'Mío: Espera');
 });
+
+test('regression: on entering, a Danil workspace the person did not add is not the open one', async () => {
+  const { openOnStart } = await import('../../src/features/shell/danil-rail.ts');
+  const list = [{ id: 'local' }, { id: 'acme' }, { id: 'ops' }, { id: 'old' }];
+  const available = [{ id: 'acme', name: 'Acme' }, { id: 'ops', name: 'Ops' }, { id: 'labs', name: 'Labs' }];
+  assert.equal(openOnStart(list, 'ops', new Set(), { available, added: new Set(['labs', 'acme']) }), 'acme', 'the first added in the rail');
+  assert.equal(openOnStart(list, 'ops', new Set(), { available, added: new Set(['labs']) }), 'labs', 'an added one the rail did not know yet');
+  assert.equal(openOnStart(list, 'ops', new Set(['local']), { available, added: new Set() }), 'old', 'with none added, the first local not hidden');
+  assert.equal(openOnStart(list, 'acme', new Set(), { available, added: new Set(['acme']) }), null, 'an added one stays open');
+  assert.equal(openOnStart(list, 'local', new Set(), { available, added: new Set() }), null, 'a local one stays open');
+  assert.equal(openOnStart(list, 'ops', new Set(), { available: null, added: new Set() }), null, 'without the source nothing changes');
+  assert.equal(openOnStart([{ id: 'ops' }], 'ops', new Set(), { available, added: new Set() }), null, 'with nowhere else to go it stays');
+});

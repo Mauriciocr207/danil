@@ -85,7 +85,7 @@ export default function WorkspaceColumn(props: {
 }) {
   const ws = createRail();
   const hidden = createHiddenWorkspaces();
-  const { danil, view: danilView, visible, hiddenRows } = columnDanil(hidden);
+  const { danil, view: danilView, visible, hiddenRows } = columnDanil(hidden, ws);
   // Los ocultos y los de Danil sin agregar solo se ven mientras están abiertos.
   const visibles = () => visible(ws.lista() ?? [], ws.activo() ?? null);
   let list: HTMLDivElement | undefined;

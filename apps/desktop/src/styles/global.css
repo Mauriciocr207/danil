@@ -216,7 +216,7 @@
   --color-surface-raised: #ffffff;
   /* El borde de un workspace de Danil en el riel: reemplaza al normal, nunca se suma. */
   --color-danil-mark-from: #6539f5;
-  --color-danil-mark-to: #a77bff;
+  --color-danil-mark-to: #8f5ff8;
   /* El globo de la persona lleva un tinte de marca y el de un agente se queda
      en `surface-raised`, pegado al fondo: lo que escribe la persona es lo que
      tiene que saltar al recorrer el hilo. Cada tema mezcla su propio primario

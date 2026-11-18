@@ -136,7 +136,7 @@
   "shell.workspaces.stale": "Lista guardada: no se pudo leer la cuenta",
   "shell.workspaces.hide": "Ocultar de la barra",
   "shell.workspaces.add_hidden_state": "Agregar workspace. Un workspace oculto: {state}",
-  "shell.workspaces.add_danil": "Agregar workspace",
+  "shell.workspaces.add_danil": "Agregar workspace de Danil",
   "shell.workspaces.add_named": "Agregar {name}",
   "shell.workspaces.add_row": "Agregar",
   "shell.workspaces.danil_empty": "No hay más workspaces de Danil en esta organización",
