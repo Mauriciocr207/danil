@@ -44,7 +44,7 @@ export function RegistroDeTrabajo(props: {
   const todos = createMemo(() => [...avance().flatMap((a) => a.pasos), ...props.pasos]);
   const presentation = createMemo(() => presentActivity({ active: props.corriendo, stopping: props.stopping, blocked: props.blocked, paused: props.animando === false, action: props.latestAction, label: props.label }));
   const rotulo = () => presentation().label;
-  const hasContent = () => todos().length > 0 || avance().length > 0 || Boolean(props.razonamiento?.length);
+  const hasContent = () => todos().length > 0 || avance().some(chunk => chunk.msg.razonamiento?.length || (!chunk.outside && chunk.msg.text)) || Boolean(props.razonamiento?.length);
   const hasChanges = () => props.onVerCambios && partesDelTramo(todos(), props.corriendo).some(part => part.clase === "editar");
   const duracion = () =>
     !props.corriendo && props.duracion ? t("chat.work.duration", { duration: props.duracion }) : null;
@@ -72,7 +72,7 @@ export function RegistroDeTrabajo(props: {
     <>
       <span role="status" aria-live="polite" aria-atomic="true" class="sr-only">{props.stopping ? t("chat.turn.stopping") : presentation().animate ? t("chat.turn.working_aria") : ""}</span>
       <Show
-        when={todos().length > 0 || avance().length > 0 || props.razonamiento?.length || props.corriendo || props.observed}
+        when={hasContent() || props.corriendo || props.observed}
         fallback={<p class="m-0 mb-2 px-1 py-1.5 text-xs text-neutral-500">{duracion()}</p>}
       >
         <div class={cn("flex flex-wrap items-center gap-2", !desplegado() && "mb-2")}>
@@ -102,9 +102,7 @@ export function RegistroDeTrabajo(props: {
                       <Reasoning bloques={bloques()} />
                     )}
                   </Show>
-                  <div class="px-1 py-1 text-sm text-neutral-500">
-                    <Show when={!tramo().outside}><Markdown>{tramo().msg.text}</Markdown></Show>
-                  </div>
+                  <Show when={!tramo().outside}><div class="px-1 py-1 text-sm text-neutral-500"><Markdown>{tramo().msg.text}</Markdown></div></Show>
                 </>
               )}
             </Index>

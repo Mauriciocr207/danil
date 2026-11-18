@@ -282,6 +282,7 @@
   "chat.activity.syncing": "Synchronizing activity…",
   "chat.activity.title": "Activity",
   "chat.activity.running": "In progress",
+  "chat.activity.continuing": "Continuing…",
   "chat.activity.finished": "Activity finished",
   "chat.activity.responding": "Responding…",
   "chat.activity.delegated": "Created task {title}",
