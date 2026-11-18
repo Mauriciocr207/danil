@@ -376,7 +376,7 @@
     "src/web/window-session.tsx:solid/reactivity": 3
   },
   "lines": {
-    "src/app/App.tsx": 7868,
+    "src/app/App.tsx": 7870,
     "src/app/main.tsx": 114,
     "src/features/artifacts/ArtifactViewer.tsx": 71,
     "src/features/artifacts/Document.tsx": 200,
@@ -587,7 +587,7 @@
     "src/features/projects/index.ts": 2,
     "src/features/projects/memory-account.ts": 128,
     "src/features/projects/profiles.ts": 77,
-    "src/features/projects/recent.ts": 137,
+    "src/features/projects/recent.ts": 151,
     "src/features/projects/remoteClone.ts": 87,
     "src/features/projects/store.ts": 104,
     "src/features/projects/taskAuthors.ts": 47,
