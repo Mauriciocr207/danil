@@ -5175,8 +5175,11 @@ export default function App() {
           const machine = target ? machines().find((row) => row.id === target) : undefined;
           if (dormida || naceDormida || !machine || machine.local || !machine.on || machine.connection !== "unknown") return mandarTurno();
           const waitingId = abierta ?? provisional ?? claveBorrador;
-          threads.markMachineWait(waitingId, { machine: machine.id, phase: "connecting" });
-          return mandarTurno().finally(() => threads.markMachineWait(waitingId, null));
+          const wait = { machine: machine.id, phase: "connecting" } as const;
+          threads.markMachineWait(waitingId, wait);
+          return mandarTurno().finally(() => {
+            if (machineWaits()[waitingId] === wait) threads.markMachineWait(waitingId, null);
+          });
         },
       });
       const id = traspaso.answer;
