@@ -11,10 +11,13 @@ type Dependencies = {
   queue: { message: (scope: ConversationScope, id: string) => { text: string; attachments?: readonly string[] } | undefined; select: (scope: ConversationScope, id: string) => boolean; release: (scope: ConversationScope, id: string) => void; failed: (scope: ConversationScope, id: string, error: unknown) => void };
 };
 const EMPTY: HandoffView = { stopping: false, pending: null, error: null, released: false };
-type Operation = { scope: ConversationScope; view: HandoffView; promise?: Promise<void>; acknowledged: boolean; terminal: boolean };
-/** Local interruption intent and queue references; execution remains with the runtime. */
+type Barrier = { kind: "in-flight"; promise: Promise<void> } | { kind: "acknowledged" | "declined" } | { kind: "failed"; error: unknown };
+type Cancelling = { kind: "cancelling"; scope: ConversationScope; barrier: Barrier; terminal: "unseen" | "observed"; queueItemId: string | null };
+type Entry = Cancelling | { kind: "ready" | "awaiting-start"; scope: ConversationScope; queueItemId: string }
+  | { kind: "submitting"; scope: ConversationScope; queueItemId: string; error: unknown | null };
+/** Local cancellation barriers and queue references; execution remains with the runtime. */
 export function createConversationHandoff(deps: Dependencies) {
-  const entries = new Map<string, Operation>();
+  const entries = new Map<string, Entry>();
   const [revision, setRevision] = createSignal(0);
   let disposed = false;
   const key = (scope: ConversationScope) => JSON.stringify([scope.workspace, scope.generation, scope.project, scope.session]);
@@ -23,87 +26,114 @@ export function createConversationHandoff(deps: Dependencies) {
     return !disposed && now.workspace === scope.workspace && now.generation === scope.generation;
   };
   const publish = () => setRevision(value => value + 1);
-  const captured = (scope: ConversationScope): ConversationScope => ({ ...scope,
-    route: scope.route ? { headers: { ...scope.route.headers } } : undefined });
-  const operation = (scope: ConversationScope) => {
+  const capture = (scope: ConversationScope): ConversationScope => ({ ...scope, route: scope.route ? { headers: { ...scope.route.headers } } : undefined });
+  const live = (entry: Entry) => current(entry.scope) && entries.get(key(entry.scope)) === entry;
+  function settle(entry: Cancelling) {
+    if (!live(entry) || entry.terminal !== "observed" || (entry.barrier.kind !== "acknowledged" && entry.barrier.kind !== "declined")) return;
+    batch(() => {
+      if (entry.queueItemId) {
+        const next: Entry = { kind: "ready", scope: entry.scope, queueItemId: entry.queueItemId };
+        entries.set(key(entry.scope), next); publish(); deps.queue.release(next.scope, next.queueItemId);
+      } else { entries.delete(key(entry.scope)); publish(); }
+    });
+  }
+  function beginCancellation(scope: ConversationScope, queueItemId: string | null): Promise<void> {
+    let finish!: () => void;
+    const promise = new Promise<void>(resolve => { finish = resolve; });
     const previous = entries.get(key(scope));
-    if (previous) return previous;
-    const created: Operation = { scope: captured(scope), view: { ...EMPTY }, acknowledged: false, terminal: false };
-    entries.set(key(scope), created); return created;
-  };
-  const live = (entry: Operation) => current(entry.scope) && entries.get(key(entry.scope)) === entry;
-  function release(entry: Operation) {
-    if (!entry.acknowledged || !entry.terminal || entry.view.error !== null || entry.view.released) return;
-    const pending = entry.view.pending;
-    entry.view = { ...entry.view, stopping: false, released: true }; publish();
-    if (pending) deps.queue.release(entry.scope, pending.queueItemId);
-    else { entries.delete(key(entry.scope)); publish(); }
+    const entry: Cancelling = { kind: "cancelling", scope: capture(scope), barrier: { kind: "in-flight", promise }, terminal: "unseen", queueItemId };
+    let selected = true;
+    batch(() => {
+      entries.set(key(scope), entry); publish();
+      if (queueItemId && !deps.queue.select(entry.scope, queueItemId)) {
+        selected = false; if (previous) entries.set(key(scope), previous); else entries.delete(key(scope)); publish();
+      }
+    });
+    if (!selected) { finish(); return promise; }
+    void (async () => {
+      try {
+        const reply = await deps.runtime.stop(entry.scope);
+        if (!live(entry)) return;
+        entry.barrier = { kind: reply === false ? "declined" : "acknowledged" }; publish();
+        if (reply === false && !entry.queueItemId) { entries.delete(key(entry.scope)); publish(); }
+        else settle(entry);
+      } catch (error) {
+        if (!live(entry)) return;
+        entry.barrier = { kind: "failed", error }; publish();
+        if (entry.queueItemId) deps.queue.failed(entry.scope, entry.queueItemId, error);
+      } finally { finish(); }
+    })();
+    return promise;
+  }
+  function requestStop(scope: ConversationScope): Promise<void> {
+    if (!current(scope)) return Promise.resolve();
+    const entry = entries.get(key(scope));
+    if (entry?.kind === "cancelling") {
+      if (entry.barrier.kind === "in-flight") return entry.barrier.promise;
+      if (entry.barrier.kind === "acknowledged") return Promise.resolve();
+    }
+    if (!deps.runtime.active(scope)) return Promise.resolve();
+    // A dispatched handoff is history, not a replacement for this new stop.
+    const queued = entry?.kind === "cancelling" || entry?.kind === "ready" ? entry.queueItemId : null;
+    return beginCancellation(scope, queued);
+  }
+  function replaceWithQueued(scope: ConversationScope, id: string): Promise<void> {
+    if (!current(scope)) return Promise.resolve();
+    const entry = entries.get(key(scope));
+    if (entry?.kind === "cancelling" && entry.barrier.kind !== "failed") {
+      const completion = entry.barrier.kind === "in-flight" ? entry.barrier.promise : Promise.resolve();
+      if (entry.queueItemId === id) return completion;
+      batch(() => { if (deps.queue.select(entry.scope, id)) { entry.queueItemId = id; publish(); settle(entry); } });
+      return completion;
+    }
+    if (entry?.kind !== "cancelling" && entry?.queueItemId === id) return Promise.resolve();
+    if (deps.runtime.active(scope)) return beginCancellation(scope, id);
+    batch(() => {
+      const next: Entry = { kind: "ready", scope: capture(scope), queueItemId: id };
+      entries.set(key(scope), next); publish();
+      if (deps.queue.select(next.scope, id)) deps.queue.release(next.scope, id);
+      else { if (entry) entries.set(key(scope), entry); else entries.delete(key(scope)); publish(); }
+    });
+    return Promise.resolve();
   }
   function observe(fact: HandoffFact) {
     if (!current(fact.scope)) return;
     const entry = entries.get(key(fact.scope));
     if (!entry) return;
-    const pending = entry.view.pending;
-    if (fact.kind === "terminal") {
-      entry.terminal = true; release(entry);
-    } else if (fact.kind === "dispatching" && pending && fact.itemIds.includes(pending.queueItemId) && entry.view.released) {
-      entry.view = { ...entry.view, stopping: false, pending: { ...pending, phase: "submitting" } }; publish();
-    } else if (fact.kind === "accepted" && pending?.phase === "submitting") {
-      entry.view = { ...entry.view, pending: { ...pending, phase: "awaiting-start" }, error: null }; publish();
-    } else if (fact.kind === "started" && pending && pending.phase !== "waiting-close") {
-      entries.delete(key(entry.scope)); publish();
-    } else if (fact.kind === "queue-removed" && pending?.queueItemId === fact.queueItemId) {
-      entry.view = { ...entry.view, pending: null }; if (!entry.view.stopping) entries.delete(key(entry.scope)); publish();
-    } else if (fact.kind === "rejected" && pending?.phase === "submitting" && entry.view.error === null) {
-      entry.view = { ...entry.view, error: fact.error }; publish();
-      deps.queue.failed(entry.scope, pending.queueItemId, fact.error);
+    if (fact.kind === "terminal" && entry.kind === "cancelling") { entry.terminal = "observed"; settle(entry); }
+    else if (fact.kind === "dispatching" && entry.kind === "ready" && fact.itemIds.includes(entry.queueItemId)) {
+      entries.set(key(entry.scope), { kind: "submitting", scope: entry.scope, queueItemId: entry.queueItemId, error: null }); publish();
+    } else if (fact.kind === "accepted" && entry.kind === "submitting") {
+      entries.set(key(entry.scope), { kind: "awaiting-start", scope: entry.scope, queueItemId: entry.queueItemId }); publish();
+    } else if (fact.kind === "started" && (entry.kind === "submitting" || entry.kind === "awaiting-start")) { entries.delete(key(entry.scope)); publish(); }
+    else if (fact.kind === "queue-removed" && entry.queueItemId === fact.queueItemId) {
+      if (entry.kind === "cancelling" && entry.barrier.kind !== "failed") { entry.queueItemId = null; settle(entry); }
+      else entries.delete(key(entry.scope));
+      publish();
+    } else if (fact.kind === "rejected" && entry.kind === "submitting" && entry.error === null) {
+      entry.error = fact.error; publish(); deps.queue.failed(entry.scope, entry.queueItemId, fact.error);
     }
   }
-  function requestStop(scope: ConversationScope): Promise<void> {
-    if (!current(scope)) return Promise.resolve();
-    const entry = operation(scope);
-    if (entry.view.stopping && entry.promise) return entry.promise;
-    if (!deps.runtime.active(entry.scope)) { entry.acknowledged = true; observe({ kind: "terminal", scope: entry.scope }); return Promise.resolve(); }
-    entry.acknowledged = false; entry.terminal = false;
-    entry.view = { ...entry.view, stopping: true, error: null }; publish();
-    entry.promise = (async () => {
-      try {
-        const reply = await deps.runtime.stop(entry.scope);
-        if (!live(entry)) return;
-        if (reply === false) { entry.acknowledged = true; entry.view = { ...entry.view, stopping: false }; if (!entry.view.pending) entries.delete(key(entry.scope)); publish(); release(entry); return; }
-        entry.acknowledged = true; release(entry);
-      }
-      catch (error) {
-        if (!live(entry) || entry.view.released) return;
-        entry.view = { ...entry.view, stopping: false, error }; publish();
-        if (entry.view.pending) deps.queue.failed(entry.scope, entry.view.pending.queueItemId, error);
-      }
-    })();
-    return entry.promise;
+  function view(scope: ConversationScope): HandoffView {
+    revision();
+    const entry = current(scope) ? entries.get(key(scope)) : undefined;
+    if (!entry) return EMPTY;
+    if (entry.kind === "cancelling") return {
+      stopping: entry.barrier.kind === "in-flight" || entry.barrier.kind === "acknowledged",
+      pending: entry.queueItemId ? { queueItemId: entry.queueItemId, phase: "waiting-close" } : null,
+      error: entry.barrier.kind === "failed" ? entry.barrier.error : null, released: false,
+    };
+    return { stopping: false, pending: { queueItemId: entry.queueItemId, phase: entry.kind === "ready" ? "waiting-close" : entry.kind },
+      error: entry.kind === "submitting" ? entry.error : null, released: true };
   }
-  function replaceWithQueued(scope: ConversationScope, id: string): Promise<void> {
-    if (!current(scope)) return Promise.resolve();
-    const entry = operation(scope);
-    if (entry.view.pending?.queueItemId === id && !entry.view.error) return entry.promise ?? Promise.resolve();
-    if (entry.view.pending && entry.view.pending.phase !== "waiting-close") return entry.promise ?? Promise.resolve();
-    const wasActive = deps.runtime.active(entry.scope);
-    batch(() => {
-      entry.view = { ...entry.view, pending: { queueItemId: id, phase: "waiting-close" }, error: null, released: false }; publish();
-      if (!deps.queue.select(entry.scope, id)) { entries.delete(key(entry.scope)); publish(); }
-      else if (!wasActive) { entry.acknowledged = true; observe({ kind: "terminal", scope: entry.scope }); }
-    });
-    return wasActive && entries.get(key(scope)) === entry ? requestStop(entry.scope) : Promise.resolve();
-  }
-  const view = (scope: ConversationScope): HandoffView => { revision(); return current(scope) ? entries.get(key(scope))?.view ?? EMPTY : EMPTY; };
   function presentation(scope: ConversationScope): HandoffPresentation {
-    const pending = view(scope).pending;
-    if (!pending) return null;
+    const state = view(scope), pending = state.pending;
+    if (!pending || state.error !== null) return null;
     if (pending.phase !== "waiting-close") return { phase: pending.phase };
     const message = deps.queue.message(scope, pending.queueItemId);
     return message ? { phase: "waiting-close", pendingMessage: message } : null;
   }
   return { requestStop, replaceWithQueued, observe, view, presentation,
     blocked: (scope: ConversationScope) => { const state = view(scope); return state.stopping || !!state.pending && !state.released; },
-    reset: () => { entries.clear(); publish(); },
-    dispose: () => { disposed = true; entries.clear(); publish(); } };
+    reset: () => { entries.clear(); publish(); }, dispose: () => { disposed = true; entries.clear(); publish(); } };
 }

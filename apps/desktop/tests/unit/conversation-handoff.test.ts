@@ -17,7 +17,7 @@ function fixture() {
       queue: { message: (_scope, id) => queued.has(id) ? { text: queued.get(id)! } : undefined, select: (_scope, id) => { selected.push(id); return queued.has(id); }, release: (_scope, id) => { released.push(id); },
         failed: (_scope, id) => { failures.push(id); } } });
     return { handoff, stops, released, selected, failures, queued, resolve, reject, move: (workspace: string, generation: number) => { current = { workspace, generation }; },
-      idle: () => { active = false; }, dispose: () => { handoff.dispose(); dispose(); } };
+      idle: () => { active = false; }, activate: () => { active = true; }, dispose: () => { handoff.dispose(); dispose(); } };
   });
 }
 test("stop intent is immediate with a blocked RPC and duplicate gestures issue one request", async () => {
@@ -128,4 +128,38 @@ test("a rejected stop preserves the original object in the real queue through a 
   assert.equal(f.handoff.view(scope).pending, null); assert.equal(f.handoff.view(scope).stopping, true);
   f.handoff.observe({ kind: "terminal", scope }); assert.equal(f.handoff.view(scope).stopping, true);
   f.resolve(); await pending; assert.equal(f.handoff.view(scope).stopping, false); assert.deepEqual(f.released, []); f.dispose();
+});
+
+ test("a queued input attached after terminal still waits for the original stop RPC", async () => {
+  const f = fixture(), stopping = f.handoff.requestStop(scope); f.idle(); f.handoff.observe({ kind: "terminal", scope });
+  const replacement = f.handoff.replaceWithQueued(scope, "one");
+  assert.deepEqual(f.released, []); assert.equal(f.stops.length, 1); assert.equal(f.handoff.blocked(scope), true);
+  f.resolve(); await Promise.all([stopping, replacement]); assert.deepEqual(f.released, ["one"]); f.dispose();
+});
+ test("changing the replacement after terminal preserves the same pending cancellation barrier", async () => {
+  const f = fixture(), first = f.handoff.replaceWithQueued(scope, "one"); f.idle(); f.handoff.observe({ kind: "terminal", scope });
+  const second = f.handoff.replaceWithQueued(scope, "two");
+  assert.deepEqual(f.released, []); assert.equal(f.stops.length, 1);
+  f.resolve(); await Promise.all([first, second]); assert.deepEqual(f.released, ["two"]); f.dispose();
+});
+for (const order of ["terminal-first", "ack-first"] as const) test(`stopping a submitted successor creates its own cancellation: ${order}`, async () => {
+  const f = fixture(); f.idle(); await f.handoff.replaceWithQueued(scope, "one");
+  f.handoff.observe({ kind: "dispatching", scope, itemIds: ["one"] }); f.handoff.observe({ kind: "accepted", scope }); f.activate();
+  const stopping = f.handoff.requestStop(scope);
+  f.handoff.observe({ kind: "started", scope });
+  assert.equal(f.handoff.blocked(scope), true); assert.equal(f.handoff.view(scope).pending, null);
+  if (order === "terminal-first") { f.idle(); f.handoff.observe({ kind: "terminal", scope }); assert.equal(f.handoff.blocked(scope), true); f.resolve(); await stopping; }
+  else { f.resolve(); await stopping; assert.equal(f.handoff.blocked(scope), true); f.idle(); f.handoff.observe({ kind: "terminal", scope }); }
+  assert.equal(f.handoff.blocked(scope), false); assert.equal(f.handoff.view(scope).stopping, false);
+  assert.deepEqual(f.released, ["one"]); f.dispose();
+});
+
+test("stop then a newly typed queued input shares the original RPC barrier in the real dispatcher", async () => {
+  const f = integrated(); await f.queue.openSession("s", "p");
+  const stopping = f.handoff.requestStop(scope); f.terminal();
+  const original = { id: "typed-after-stop", text: "new user intent", provider: "codex", model: null, effort: null, permission_mode: null, attachments: [] };
+  f.queue.enqueue(original); const replacement = f.handoff.replaceWithQueued(scope, original.id);
+  assert.equal(f.queue.items()[0], original); assert.equal(f.sends(), 0);
+  assert.equal((f.handoff.presentation(scope) as { pendingMessage: unknown }).pendingMessage, original);
+  f.stopAck(); await Promise.all([stopping, replacement]); assert.equal(f.sends(), 1); f.dispose();
 });

@@ -5714,6 +5714,8 @@ export default function App() {
         attachments,
         space: escritorio(),
       });
+    const session = sessionId(), intent = handoffAt(session);
+    if (session && intent?.stopping && !intent.pending && !text.trimStart().startsWith("!")) void handoff.replaceWithQueued(conversationScope(session), id);
     return id;
   }
 
