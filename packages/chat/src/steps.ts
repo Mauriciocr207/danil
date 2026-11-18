@@ -50,6 +50,14 @@ export const isQuestionFile = (target: string | null | undefined) => target?.inc
 const JOINABLE: ReadonlySet<string> = new Set<StepKind>(["read", "search", "edit", "web", "plan", "other"]);
 export const joinableKind = (kind: string) => JOINABLE.has(kind);
 
+/**
+ * Whether a step joins the row before it. An MCP call never joins and nothing
+ * joins it: each call keeps its own row with its mark and its service.
+ */
+export function joinableStep<T>(kind: string, step: T, row: readonly T[], isMcp: (step: T) => boolean) {
+  return joinableKind(kind) && !isMcp(step) && !row.some(isMcp);
+}
+
 /** Steps in a row of the same kind become one row, while `canJoin` allows it. */
 export function joinSteps<T, K extends string>(
   steps: readonly T[],

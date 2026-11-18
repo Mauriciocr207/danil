@@ -3,8 +3,8 @@
  * y `features/chat/transcript.ts`): sus avances, las herramientas que usó (qué leyó,
  * qué ejecutó) y la respuesta. Sin React Native: se prueba en Node.
  */
-import { bareCommand, classify, fileName, isQuestionFile, joinSteps, type StepKind } from "@terminus/chat/steps";
-import { commandSource, type CommandSource } from "@terminus/chat/tools";
+import { bareCommand, classify, fileName, isQuestionFile, joinableStep, joinSteps, type StepKind } from "@terminus/chat/steps";
+import { commandSource, isMcpTool, type CommandSource } from "@terminus/chat/tools";
 import type { HistoryRef, Turn, TurnTool } from "@terminus/protocol";
 import { quotaResolves, type QuotaChange, type TurnFailure } from "./failureNotice.ts";
 
@@ -54,7 +54,8 @@ export type Line =
 
 export const stepOf = (name: string, target: string | null, ok: boolean | null = null, running = false): Step => ({ kind: classify(name), name, target, ok, running });
 
-export const groupSteps = (steps: readonly Step[]): StepRow[] => joinSteps(steps, (step) => step.kind);
+export const groupSteps = (steps: readonly Step[]): StepRow[] =>
+  joinSteps(steps, (step) => step.kind, (kind, step, row) => joinableStep(kind, step, row, (s) => isMcpTool(s.name)));
 
 export { bareCommand, classify, fileName };
 

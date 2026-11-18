@@ -62,6 +62,12 @@ export function toolSource(name: string, call?: McpCall | null): ToolSource | nu
 }
 
 /**
+ * Si un paso es una llamada MCP, por su `mcpApp` o solo por su nombre
+ * (`mcp__srv__tool`). Es la regla con la que ningún cliente la agrupa.
+ */
+export const isMcpTool = (name: string, call?: McpCall | null) => toolSource(name, call) !== null;
+
+/**
  * El servicio de un comando de shell: la marca y su nombre accesible. No lleva
  * rótulo escrito en la fila —el programa ya nombra el servicio—, así que es un
  * tipo aparte de `ToolSource`.

@@ -15,9 +15,9 @@
  * máquina, y por eso van en mono al lado del verbo—: traducirlos rompería el
  * emparejamiento con lo que manda `runtime/chat/`.
  */
-import { bareCommand, classify, fileName, joinableKind, joinSteps, stepCounts, type CountedStep, type StepCount, type StepKind } from "@terminus/chat/steps";
+import { bareCommand, classify, fileName, joinableStep, joinSteps, stepCounts, type CountedStep, type StepCount, type StepKind } from "@terminus/chat/steps";
 import { commandSummary } from "@terminus/chat/command";
-import { readableToolName, toolSource, type ToolSource } from "@terminus/chat/tools";
+import { isMcpTool, readableToolName, toolSource, type ToolSource } from "@terminus/chat/tools";
 import { manifiesto, t } from "./i18n.ts";
 
 /** Qué clase de acto fue. Decide el verbo y el ícono de la fila. */
@@ -171,7 +171,7 @@ export function agrupar(pasos: Paso[]): Fila[] {
     (p) => p.clase,
     (clase, p, fila) => {
       const neutra = NEUTRA[clase];
-      return neutra !== undefined && joinableKind(neutra) && p.detalle === null && !p.mcpApp && fila.every((q) => q.detalle === null);
+      return neutra !== undefined && joinableStep(neutra, p, fila, (q) => isMcpTool(q.nombre, q.mcpApp)) && p.detalle === null && fila.every((q) => q.detalle === null);
     },
   ).map(({ kind, steps }) => ({ clase: kind, pasos: steps }));
 }
