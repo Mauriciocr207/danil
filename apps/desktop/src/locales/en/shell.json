@@ -136,7 +136,7 @@
   "shell.workspaces.stale": "Saved list: the account could not be read",
   "shell.workspaces.hide": "Hide from the bar",
   "shell.workspaces.add_hidden_state": "Add workspace. A hidden workspace: {state}",
-  "shell.workspaces.add_danil": "Add Danil workspace",
+  "shell.workspaces.add_danil": "Add workspace",
   "shell.workspaces.add_named": "Add {name}",
   "shell.workspaces.add_row": "Add",
   "shell.workspaces.danil_empty": "No more Danil workspaces in this organization",
@@ -441,5 +441,17 @@
   "shell.agent_dock.workspace_empty": "No workspace agents yet.",
   "shell.agent_dock.project_empty": "This folder has no installed agents.",
   "shell.agent_dock.repo_empty": "The repository declares no agents in `.agents/agents/`.",
-  "shell.agent_dock.no_folder": "Open a folder to see its installed agents and those from its repository."
+  "shell.agent_dock.no_folder": "Open a folder to see its installed agents and those from its repository.",
+  "shell.workspaces.close_org": "Sign out of {name}",
+  "shell.workspaces.close_email": "Sign out of {email}",
+  "shell.workspaces.add_session": "Add account or organization",
+  "shell.workspaces.sessions_auth": "The organization requires authentication",
+  "shell.workspaces.sessions_cancelled": "Cancelled",
+  "shell.workspaces.sessions_failed": "Could not complete",
+  "shell.workspaces.free_workspace": "Your Free workspace",
+  "shell.workspaces.session_group": "{email} · {name}",
+  "shell.workspaces.new_available": "There are new workspaces to add",
+  "shell.workspaces.empty_no_org": "You do not have a Danil organization yet",
+  "shell.workspaces.empty_no_access": "You do not have access to this organization’s workspaces",
+  "shell.workspaces.empty_generic": "No Danil workspaces are available"
 }

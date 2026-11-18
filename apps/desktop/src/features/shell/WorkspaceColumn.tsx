@@ -2,22 +2,25 @@ import SettingsIcon from "lucide-solid/icons/settings";
 import { children, createEffect, createSignal, For, type JSX, onCleanup, Show } from "solid-js";
 import { t } from "../../lib/i18n";
 import { createNavigationReorder } from "../../lib/navigation-order";
-import { KeyedList } from "../../ui/KeyedList";
-import { cn } from "../../lib/utils";
 import { capabilities, type OtherAccount, type OtherWorkspace } from "../../lib/platform";
-import { generacionDeLogo, urlDeLogo } from "./logo-src";
+import { cn } from "../../lib/utils";
 import { ITEM_DE_MENU, Popover, PopoverAnchor, PopoverContent } from "../../ui/Popover";
-import { RETARDO_TOOLTIP, TooltipContent, TooltipRoot, TooltipTrigger } from "../../ui/Tooltip";
-import { taskLabel } from "../projects/TaskStatus";
 import { SignalDot, taskSignalTone } from "../../ui/SignalDot";
-import { cerrarConEscape, createRail } from "../settings/workspaces-store";
+import { RETARDO_TOOLTIP, TooltipContent, TooltipRoot, TooltipTrigger } from "../../ui/Tooltip";
 import type { RailWorkspace } from "../machines/engine-workspaces";
-import { topState, type AttentionState, type WorkspaceAttention } from "./attention";
-import KeepAwake from "./KeepAwake";
-import ProfileMenu from "./ProfileMenu";
+import { taskLabel } from "../projects/TaskStatus";
+import { cerrarConEscape, createRail } from "../settings/workspaces-store";
+import { AccountHeader } from "./AccountHeader";
 import AddWorkspaceMenu, { menuArrows } from "./AddWorkspaceMenu";
-import { createHiddenWorkspaces, keepSlots } from "./hidden-workspaces";
+import { type AttentionState, topState, type WorkspaceAttention } from "./attention";
 import { columnDanil, danilMenuOf, tileLabel } from "./danil-rail";
+import { createHiddenWorkspaces, keepSlots } from "./hidden-workspaces";
+import KeepAwake from "./KeepAwake";
+import { generacionDeLogo, urlDeLogo } from "./logo-src";
+import ProfileMenu from "./ProfileMenu";
+import { SessionWorkspaceRows } from "./SessionWorkspaceRows";
+import { sessionRail } from "./session-groups";
+import { sessionStartTarget, sessionVisible } from "./session-rail-view";
 
 /** Las iniciales de las dos primeras palabras; una sola palabra da una letra. */
 export function monogram(name: string) {
@@ -87,7 +90,22 @@ export default function WorkspaceColumn(props: {
   const hidden = createHiddenWorkspaces();
   const { danil, view: danilView, visible, hiddenRows } = columnDanil(hidden, ws);
   // Los ocultos y los de Danil sin agregar solo se ven mientras están abiertos.
-  const visibles = () => visible(ws.lista() ?? [], ws.activo() ?? null);
+  const sessions = sessionRail(hidden.ids, (ids) => ids.forEach(hidden.show));
+  const visibles = () => sessions.groups() === null ? visible(ws.lista() ?? [], ws.activo() ?? null) : sessionVisible(ws.lista() ?? [], ws.activo() ?? null, hidden.ids(), sessions.groups() ?? [], sessions.known);
+  createEffect(() => {
+    const open = ws.activo();
+    if (sessions.groups() === null || !open || !sessions.known.has(open)) return;
+    const rows = visibles();
+    if (!rows.some((w) => w.id === open) && rows[0]) void ws.cambiarA(rows[0].id);
+  });
+  let sessionsSettled = false;
+  createEffect(() => {
+    const groups = sessions.groups();
+    if (sessionsSettled || !groups?.length || groups.some((g) => !g.available || !g.added) || !ws.activo()) return;
+    sessionsSettled = true;
+    const next = sessionStartTarget(ws.lista() ?? [], ws.activo() ?? null, hidden.ids(), groups);
+    if (next) void ws.cambiarA(next);
+  });
   let list: HTMLDivElement | undefined;
   const reorder = createNavigationReorder({
     scope: () => ws.activo() ?? "",
@@ -204,58 +222,6 @@ export default function WorkspaceColumn(props: {
   // Las otras cuentas de Danil de este navegador (solo la web): sus workspaces van debajo, por cuenta.
   const accounts = capabilities().webAccounts;
   const others = () => accounts?.others() ?? [];
-  const [accountMenu, setAccountMenu] = createSignal<string | null>(null);
-  cerrarConEscape(() => accountMenu() !== null, () => setAccountMenu(null));
-
-  /** La cuenta de un grupo: la inicial de su correo; su menú la quita o vuelve a entrar. */
-  const AccountHeader = (p: { id: string; email: string | null; extra: boolean; signedIn: boolean; stale?: boolean }) => {
-    const label = () => t("shell.workspaces.account", { email: p.email ?? "" });
-    return (
-      <Popover open={accountMenu() === p.id} onOpenChange={(open) => setAccountMenu(open ? p.id : null)} placement="right-start" gutter={4}>
-        <PopoverAnchor class="w-full">
-          <TooltipRoot openDelay={RETARDO_TOOLTIP} placement="right" gutter={6} disabled={accountMenu() === p.id}>
-            <TooltipTrigger
-              as="button"
-              type="button"
-              data-account-header={p.id}
-              class="mt-2 mb-0.5 flex w-full items-center gap-1 px-3 text-left outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-primary"
-              aria-label={label()}
-              onClick={() => setAccountMenu(p.id)}
-            >
-              <span aria-hidden="true" class="grid size-4 shrink-0 place-items-center rounded-full bg-neutral-200 text-[0.5625rem] font-semibold text-neutral-700">
-                {monogram(p.email ?? "?").slice(0, 1)}
-              </span>
-              <span aria-hidden="true" class="h-px flex-1 bg-border" />
-            </TooltipTrigger>
-            <TooltipContent>{p.email}</TooltipContent>
-          </TooltipRoot>
-        </PopoverAnchor>
-        <PopoverContent role="menu" class="w-64 p-1">
-          <p class="m-0 truncate px-2 pt-1 pb-1 text-caption font-medium text-neutral-500">{p.email}</p>
-          <Show when={p.stale && p.signedIn}>
-            <p class="m-0 px-2 pb-1 text-caption text-neutral-500">{t("shell.workspaces.stale")}</p>
-          </Show>
-          <Show when={!p.signedIn}>
-            <button role="menuitem" class={ITEM_DE_MENU} onClick={() => (setAccountMenu(null), accounts?.add(p.email))}>
-              {t("shell.workspaces.sign_in_again")}
-            </button>
-          </Show>
-          <Show when={p.extra}>
-            <button
-              role="menuitem"
-              class={ITEM_DE_MENU}
-              onClick={() => {
-                setAccountMenu(null);
-                if (window.confirm(t("shell.workspaces.remove_confirm", { email: p.email ?? "" }))) void accounts?.remove(p.id);
-              }}
-            >
-              {t("shell.workspaces.remove_account")}
-            </button>
-          </Show>
-        </PopoverContent>
-      </Popover>
-    );
-  };
 
   /** Un workspace de otra cuenta: abrirlo recarga la página con esa cuenta; con la sesión caducada, pide volver a entrar. */
   const OtherTile = (p: { w: OtherWorkspace; account: OtherAccount }) => {
@@ -298,10 +264,11 @@ export default function WorkspaceColumn(props: {
     >
       <div ref={list} class="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-x-hidden overflow-y-auto pt-2 pb-2">
         <Show when={accounts && others().length > 0}>
-          <AccountHeader id={accounts!.current.user_id} email={accounts!.current.email} extra={accounts!.current.extra} signedIn />
+          <AccountHeader accounts={accounts} id={accounts!.current.user_id} email={accounts!.current.email} extra={accounts!.current.extra} signedIn />
         </Show>
-        <KeyedList each={visibles()} by={w => w.id}>{w => <Tile w={w()} />}</KeyedList>
+        <SessionWorkspaceRows sessions={sessions} rows={visibles()} render={(w) => <Tile w={w()} />} />
         <AddWorkspaceMenu
+          sessions={sessions}
           hidden={hiddenRows(ws.lista() ?? [])}
           danil={danilMenuOf(danil, danilView(), (id) => void ws.cambiarA(id))}
           open={ws.activo() ?? null}
@@ -315,7 +282,7 @@ export default function WorkspaceColumn(props: {
         <For each={others()}>
           {(account) => (
             <>
-              <AccountHeader id={account.user_id} email={account.email} extra={account.extra} signedIn={account.signedIn} stale={account.stale} />
+              <AccountHeader accounts={accounts} id={account.user_id} email={account.email} extra={account.extra} signedIn={account.signedIn} stale={account.stale} />
               <For each={account.workspaces}>{(w) => <OtherTile w={w} account={account} />}</For>
             </>
           )}
