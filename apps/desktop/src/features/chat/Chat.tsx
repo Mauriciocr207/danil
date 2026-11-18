@@ -1722,6 +1722,13 @@ export default function Chat(props: ChatProps) {
       at: typeof message.at === "number" ? message.at : undefined,
     }];
   });
+  // Presentation only: a completed row can remount while the transcript settles.
+  const activityLifecycle = createMemo(() => `${props.busy ? "1" : "0"}:${props.conversacion}`);
+  const activityCompletion = createMemo(on(activityLifecycle, (current, previous) => {
+    let available = current.startsWith("0:") && previous?.startsWith("1:") === true && previous.slice(2) === current.slice(2);
+    return { take: () => { const pending = Boolean(available); available = false; return pending; } };
+  }));
+  const lastActivity = createMemo(() => { const items = bloques(); for (let i = items.length - 1; i >= 0; i--) if (items[i].tipo !== "msg") return items[i]; return undefined; });
   const esLaTiraViva = (bloque: Bloque) => Boolean(props.busy) && bloque === bloques().at(-1);
   // Pasos que llegan tras la respuesta abren otro tramo, y el de la respuesta deja de correr.
   const registroCorre = (bloque: Bloque) => fromWork(bloque, (t) => esElVivo(t.msg), false) && esLaTiraViva(bloque);
@@ -2967,6 +2974,7 @@ export default function Chat(props: ChatProps) {
                       respuestas={(msg) => msg.turno ? respondido().get(msg.turno) ?? null : null}
                       vivo={fromWork(b(), (t) => esElVivo(t.msg), false)}
                       corriendo={registroCorre(b())}
+                      completion={b() === lastActivity() ? activityCompletion() : undefined}
                       animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.encendiendo}
                       abiertoElTrabajo={Boolean(trabajos()[claveFila(b())])}
                       onAlternarTrabajo={() => {
@@ -3008,6 +3016,7 @@ export default function Chat(props: ChatProps) {
                       pasos={pasosDe(b())?.pasos ?? []}
                       avance={pasosDe(b())?.avance}
                       corriendo={esLaTiraViva(b())}
+                      completion={b() === lastActivity() ? activityCompletion() : undefined}
                       animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.encendiendo}
                       abierto={trabajos()[claveFila(b())]}
                       onAlternar={(abierto) => {
@@ -3676,6 +3685,7 @@ function RegistroDeTrabajo(props: {
   /** Lo que el turno hizo y dijo antes de su respuesta; se pliega con los pasos. */
   avance?: Avance[];
   corriendo: boolean;
+  completion?: { take: () => boolean };
   duracion?: string | null;
   abierto?: boolean;
   onAlternar: (abierto: boolean) => void;
@@ -3706,7 +3716,7 @@ function RegistroDeTrabajo(props: {
       aria-hidden="true"
     />
   );
-  const girando = () => <ActivityDots paused={!props.corriendo || props.animando === false} />;
+  const girando = () => <ActivityDots active={props.corriendo} completion={props.completion} paused={props.animando === false} />;
   const tiempo = () => (
     <Show when={duracion()}>
       <span class="pointer-events-none shrink-0 text-xs whitespace-nowrap text-neutral-500">{duracion()}</span>
@@ -3723,9 +3733,10 @@ function RegistroDeTrabajo(props: {
         fallback={<p class="m-0 mb-2 px-1 py-1.5 text-xs text-neutral-500">{duracion()}</p>}
       >
         <div class={cn("flex flex-wrap items-center gap-2", !desplegado() && "mb-2")}>
-          <Show when={hasContent()} fallback={<span class={FILA_DEL_TRAMO}>{girando()}<span>{rotulo()}</span>{tiempo()}</span>}>
+          <Show when={!hasContent()}><span class={FILA_DEL_TRAMO}><span class="activity-label inline-flex min-w-0 items-center">{girando()}<span>{rotulo()}</span></span>{tiempo()}</span></Show>
+          <Show when={hasContent()}>
             <button type="button" aria-expanded={desplegado()} aria-controls={panelId} onClick={() => props.onAlternar(!desplegado())} class={FILA_DEL_TRAMO}>
-              {girando()}<span class="min-w-0 truncate">{rotulo()}</span>{tiempo()}{chevron()}
+              <span class="activity-label inline-flex min-w-0 items-center">{girando()}<span class="min-w-0 truncate" data-activity-label="">{rotulo()}</span></span>{tiempo()}{chevron()}
             </button>
           </Show>
           <Show when={hasChanges()}>
@@ -3739,7 +3750,7 @@ function RegistroDeTrabajo(props: {
               {(tramo) => (
                 <>
                   <Show when={tramo().pasos.length > 0}>
-                    <LineaDeTiempo pasos={tramo().pasos} presentation="inline" />
+                    <LineaDeTiempo pasos={tramo().pasos}  />
                   </Show>
                   {/* La fila de siempre y no prosa suelta: dentro del pliegue
                       una ráfaga sin su rótulo se lee como algo que el agente dijo. */}
@@ -3755,7 +3766,7 @@ function RegistroDeTrabajo(props: {
               )}
             </Index>
             <Show when={props.pasos.length > 0}>
-              <LineaDeTiempo pasos={props.pasos} presentation="inline" />
+              <LineaDeTiempo pasos={props.pasos}  />
             </Show>
             <Show when={props.razonamiento?.length ? props.razonamiento : null}>{(blocks) => <Reasoning bloques={blocks()} />}</Show>
       <Index each={todos()}>
@@ -3796,6 +3807,7 @@ function TrabajoDeAgente(props: {
   vivo: boolean;
   /** El estado del turno manda incluso si falta el cierre de una herramienta. */
   corriendo: boolean;
+  completion?: { take: () => boolean };
   animando: boolean;
   /** Si ESTE turno tiene su registro desplegado. Ver `trabajos` en `Chat`. */
   abiertoElTrabajo: boolean;
@@ -3842,6 +3854,7 @@ function TrabajoDeAgente(props: {
           pasos={props.pasos}
           avance={props.avance}
           corriendo={props.corriendo}
+          completion={props.completion}
           duracion={duracion()}
           abierto={props.abiertoElTrabajo}
           onAlternar={props.onAlternarTrabajo}
