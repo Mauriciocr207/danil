@@ -26,3 +26,8 @@ test("el registro crudo de piezas no ofrece enlace bajo la respuesta", () => {
   assert.equal(msg?.text, "Listo");
   assert.deepEqual(msg?.historyRefs, []);
 });
+
+test("otros campos recortados no ofrecen enlace a JSON crudo", () => {
+  const [msg] = transcript([{ role: "assistant", text: "Listo", history_refs: [ref("/reasoning"), ref("/shell")] }]);
+  assert.deepEqual(msg?.historyRefs, []);
+});

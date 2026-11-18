@@ -665,10 +665,11 @@ export function transcripcion(turns: Turn[], start = 0): Msg[] {
     const propio: Msg = {
       role: t.role as Msg["role"],
       text: relevo ? relevo.texto : t.text,
-      // El JSON crudo de las herramientas y del registro de piezas no se lee en
-      // el chat: solo se ofrece lo que le falta a la conversación, como un texto
-      // demasiado largo. Un enlace a JSON bajo la respuesta es ruido.
-      historyRefs: t.history_refs?.filter((ref) => ref.pointer !== "/tools" && ref.pointer !== "/pieces"),
+      // Del turno recortado solo vuelve el texto, que se pinta como la respuesta.
+      // Los demás campos grandes (herramientas, piezas, razonamiento…) solo se
+      // podían abrir como JSON crudo bajo la respuesta: nadie lo lee y es ruido.
+      // El dato sigue entero en la tarea.
+      historyRefs: t.history_refs?.filter((ref) => ref.pointer === "/text"),
       ...(relevo ? { relevo: { titulo: relevo.titulo } } : {}),
       task_mentions: t.task_mentions,
       // Un aviso de cierre —una interrupción— vive en el turno, no en el evento
