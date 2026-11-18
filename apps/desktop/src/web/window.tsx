@@ -79,7 +79,8 @@ export function mountWindow(base: Base, mounted: Mounted) {
       });
     },
     onEvents: (_id, events, gap, context) => {
-      active.events(_id, events, { ...context, gap });
+      // A connection transition requests fresh reads; only a journal page can report missing output.
+      active.events(_id, events, context ? { ...context, gap } : { resync: gap });
     },
     onSlice: () => bump(n => n + 1),
   });

@@ -956,7 +956,7 @@ export function createRouter(config: RouterConfig) {
   };
 
   /** Eventos de otra máquina: `attention` sale como la lista de todas. */
-  function events(machine: string, list: { name: string; payload: unknown }[], context?: { cursor?: number | null; runtime?: string; replay?: boolean; replayId?: string; gap?: boolean }) {
+  function events(machine: string, list: { name: string; payload: unknown }[], context?: { cursor?: number | null; runtime?: string; replay?: boolean; replayId?: string; gap?: boolean; resync?: boolean }) {
     // Un cambio de tarea, carpeta, portafolio o espacio (`cli-changed`)
     // invalida el intervalo: la relectura que dispara el evento debe consultar
     // la VM aunque acabemos de leer su lista.
