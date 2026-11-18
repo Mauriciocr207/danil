@@ -7,6 +7,7 @@ import { createEffect, createSignal, on, onCleanup, Show } from "solid-js";
 import { t } from "../../lib/i18n";
 import { Button } from "../../ui/Button";
 import { cn } from "../../lib/utils";
+import { isDanilWorkspace } from "../machines";
 import { createDanilAccounts, type DanilAccounts } from "./danil-accounts";
 import { said } from "./danil-session";
 import { changeProblem, connectedSessions, setWorkspaceAccount, syncLine } from "./danil-sessions";
@@ -14,9 +15,7 @@ import { LICENSE_REQUIRED, requestAccessInBrowser, TerminusLicense } from "./Ter
 
 type Mode = "idle" | "confirm-unlink";
 
-/**
- * `placement`: `card` en Workspaces; `section` dentro de Cuenta de Danil.
- */
+/** `placement`: `card` en Workspaces; `section` dentro de Cuenta de Danil. Un local nunca ofrece iniciar sesión. */
 export default function WorkspaceAccount(props: { workspace: string; name: string; placement?: "card" | "section"; onChanged?: (problem: string | null) => void; state?: DanilAccounts }) {
   const accounts = props.state ?? createDanilAccounts({ workspace: () => props.workspace });
   let generation = 0;
@@ -94,7 +93,7 @@ export default function WorkspaceAccount(props: { workspace: string; name: strin
         <Show
           when={hasAccount()}
           fallback={
-            <Show when={!signedIn().length}>
+            <Show when={!signedIn().length && isDanilWorkspace(props.workspace)}>
               <div class="flex flex-wrap items-center gap-2">
                 <Button size="sm" variant="outline" disabled={accounts.busy() || adding()} onClick={() => void signIn()}>
                   {t("danil.account.sign_in")}

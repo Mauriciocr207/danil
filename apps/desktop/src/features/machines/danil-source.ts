@@ -76,3 +76,12 @@ export function readDanil(organization: string | null): Promise<void> {
   reading.set(organization, read);
   return read.finally(() => reading.delete(organization));
 }
+
+/** Si `workspace` es de Danil: lo lista una máquina `kind=organization`. Un local nunca lo es. */
+export function isDanilWorkspace(workspace: string): boolean {
+  revision();
+  const current = fleet;
+  if (!current) return false;
+  const organizations = new Set(current.machines().flatMap((m) => (m.kind === "organization" && m.organizationId ? [m.organizationId] : [])));
+  return [...organizations].some((org) => !!current.available(org)?.some((w) => w.id === workspace));
+}
