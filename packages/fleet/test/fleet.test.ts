@@ -1042,3 +1042,17 @@ test("relay replay provenance and journal cursor survive panel ID encoding", () 
   assert.deepEqual(seen, [{ cursor: 41, runtime: "engine-one", replay: true, replayId: "subscription-one" }]);
   fleet.close();
 });
+
+test("an explicit journal event sequence survives ID encoding without inventing one from its page cursor", () => {
+  const seen: unknown[] = [];
+  const { fleet, link } = setup({ cmp_vm: {} }, [VM], { onEvents: (_machine, events) => seen.push(...events) });
+  fleet.subscribeEvents();
+  link("cmp_vm").push({ cursor: 99, runtime: "engine-one", events: [
+    { seq: 70, name: "chat", payload: { session: "t1", kind: "delta", text: "first" } },
+    { name: "chat", payload: { session: "t1", kind: "delta", text: "second" } },
+  ] });
+  assert.deepEqual(seen, [
+    { seq: 70, name: "chat", payload: { session: "cmp_vm~t1", kind: "delta", text: "first" } },
+    { name: "chat", payload: { session: "cmp_vm~t1", kind: "delta", text: "second" } },
+  ]); fleet.close();
+});
