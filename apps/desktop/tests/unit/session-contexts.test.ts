@@ -309,3 +309,39 @@ test("a context removed by a status refresh loses its Danil tiles while the othe
   assert.deepEqual(rows.map((w) => w.id), ["local", "b", "free", "c"]);
   assert.deepEqual([...hidden], ["hidden"]);
 });
+
+test("empty reasons from native status, web headers or bodies are empty states, including future values", async () => {
+  const { createSessionEmptyState, emptyReasonKey, normalizeEmptyReason, replyEmptyReason } = await import("../../src/features/shell/session-empty.ts");
+  for (const [value, key] of [
+    ["no_organization", "shell.workspaces.empty_no_org"],
+    ["organization_access_denied", "shell.workspaces.empty_no_access"],
+    ["no_workspace_access", "shell.workspaces.empty_no_access"],
+    ["unknown", "shell.workspaces.empty_generic"],
+    ["future_reason", "shell.workspaces.empty_generic"],
+  ]) {
+    const reason = normalizeEmptyReason(value)!;
+    assert.equal(emptyReasonKey(reason), key);
+    assert.equal(replyEmptyReason({ status: 200, body: { empty_reason: value } }), reason);
+    assert.equal(replyEmptyReason({ status: 200, headers: { get: () => value } }), reason);
+    const state = createSessionEmptyState();
+    state.update({ empty_reason: value });
+    assert.equal(state.reason(), reason);
+  }
+});
+
+test("403 becomes an empty state and D1's removed status drops only that context with its cause", async () => {
+  let current = structuredClone(status);
+  const invoke: ContextInvoke = async <T>(command: string) => command === "danil_edge_fetch" ? { status: 403, body: { code: "organization_access_denied" } } as T : current as T;
+  const sessions = createSessionContexts(invoke, () => {});
+  await sessions.refresh();
+  const denied = await sessions.send("a", "GET", "/v1/workspaces");
+  assert.equal(denied.status, 403);
+  assert.equal(denied.body, undefined);
+  assert.equal(sessions.emptyReason("a"), "organization_access_denied");
+  current = { ...current, removed: [{ context_id: "a", org: "a", reason: "organization_access_denied" }] };
+  await sessions.refresh();
+  assert.deepEqual(sessions.groups()!.map((g) => g.context_id), ["b", "free", "c"]);
+  assert.deepEqual(sessions.removed(), [{ context_id: "a", org: "a", reason: "organization_access_denied" }]);
+  await sessions.refresh();
+  assert.equal(sessions.removed().length, 1, "repeated status does not duplicate a removal notice");
+});

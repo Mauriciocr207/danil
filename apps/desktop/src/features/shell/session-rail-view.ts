@@ -8,8 +8,8 @@ export function sessionVisible<T extends { id: string; name: string; logo: strin
 }
 
 /** `free` solo lo puede aportar la unión de E1 y W1a; el nombre o la máquina no lo clasifican. */
-export function freeSessionRow(group: Pick<SessionRailGroup, "plan" | "free">) {
-  return group.plan === "free" ? group.free ?? null : null;
+export function freeSessionRow(group: Pick<SessionRailGroup, "plan" | "free" | "empty_reason">) {
+  return !group.empty_reason && group.plan === "free" ? group.free ?? null : null;
 }
 
 export function sessionStartTarget(list: readonly { id: string }[], open: string | null, hidden: ReadonlySet<string>, groups: readonly SessionRailGroup[]): string | null {

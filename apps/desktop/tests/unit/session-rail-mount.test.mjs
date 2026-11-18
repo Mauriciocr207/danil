@@ -47,6 +47,11 @@ test("D2a mounts context headers, opens later for one organization, and signs ou
   status.sessions[0].contexts = status.sessions[0].contexts.filter((c) => c.context_id !== "a");
   app.emit("danil-connect", structuredClone(status));
   assert.ok(await until(() => doc.querySelectorAll("[data-account-header]").length === 3));
+  status.sessions[1].contexts = [];
+  status.removed = [{ context_id: "c", org: "Org C", reason: "organization_access_denied" }];
+  app.emit("danil-connect", structuredClone(status));
+  assert.ok(await until(() => doc.querySelectorAll("[data-account-header]").length === 2));
+  assert.ok(await until(() => doc.querySelector('[data-removed-context="c"]')?.textContent === "No tienes acceso a los workspaces de esta organización"), "D1's removal cause stays visible in the add menu");
   doc.activeElement?.dispatchEvent(new app.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await sleep(100);
   doc.querySelector('[data-account-header="b"]').click();

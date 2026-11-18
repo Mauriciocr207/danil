@@ -11,7 +11,9 @@ import { DanilAddEntry, type DanilMenu, DanilStep, DanilSwitchRows } from "./Dan
 import { matchesName } from "./hidden-workspaces";
 import { menuArrows, showKeepingFocus } from "./menu-focus";
 import { SessionAddEntries, SessionAddStep, usesSessionMenu } from "./SessionAddMenu";
+import { SessionEmptyNotice } from "./SessionEmptyNotice";
 import type { sessionRail } from "./session-groups";
+import { openRequestedSessionMenu } from "./session-menu-open";
 import WorkspaceSearch, { SEARCH_FROM } from "./WorkspaceSearch";
 
 export { menuArrows };
@@ -34,10 +36,7 @@ export default function AddWorkspaceMenu(props: {
   const [open, setOpen] = createSignal(false);
   const [step, setStep] = createSignal<"menu" | "danil">("menu");
   const [context, setContext] = createSignal<string | null>(null);
-  createEffect(() => {
-    const id = props.sessions.laterContext();
-    if (id) { setContext(id); setStep("danil"); setOpen(true); props.sessions.acknowledgeLater(); }
-  });
+  createEffect(() => openRequestedSessionMenu(props.sessions, { context: setContext, step: setStep, open: setOpen }));
   const [query, setQuery] = createSignal("");
   const close = () => {
     setOpen(false);
@@ -70,6 +69,7 @@ export default function AddWorkspaceMenu(props: {
         <Show when={waiting()}>{(s) => <Dynamic component={props.badge} state={s()} class="absolute -top-1 -right-1" />}</Show>
       </PopoverTrigger>
       <PopoverContent role="menu" class="w-64 p-1" onKeyDown={menuArrows}>
+        <SessionEmptyNotice sessions={props.sessions} />
         <Show
           when={step() === "menu"}
           fallback={props.sessions.groups() !== null ? <SessionAddStep sessions={props.sessions} context={context()} query={query()} onQuery={setQuery} onClose={close} onOpen={props.onOpen} /> : <DanilStep danil={props.danil} query={query()} onQuery={setQuery} tasksOf={props.tasksOf} badge={props.badge} onClose={close} />}
