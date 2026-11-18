@@ -1444,11 +1444,11 @@ export default function Chat(props: ChatProps) {
         // índice donde nació evita que su pliegue cambie de identidad justo al
         // llegar la respuesta, que es también cuando más cambia su contenido.
         const bloque: BloqueDeTrabajo = { tipo: "trabajo", pasos, msg: m, i: ultimo?.tipo === "pasos" ? ultimo.i : i };
-        // La respuesta de un turno cerrado se lleva su avance al pliegue.
+        // Los mensajes públicos conservan su lugar fuera del registro al releer.
         const avance: Avance[] = [];
         for (let previo = out.at(-1); m.turno && previo?.tipo === "trabajo" && previo.msg.avanceDe === m.turno; previo = out.at(-1)) {
           out.pop();
-          avance.unshift({ pasos: previo.pasos, msg: previo.msg });
+          avance.unshift({ pasos: previo.pasos, msg: previo.msg, outside: true });
           bloque.i = previo.i;
         }
         if (avance.length) bloque.avance = avance;
