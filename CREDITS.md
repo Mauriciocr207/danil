@@ -27,7 +27,9 @@ endorsement. It is separate from the license of Danil and from Simple Icons.
 [Simple Icons](https://simpleicons.org) (CC0). The Git mark is the exception:
 it is the [Git Logo](https://git-scm.com/community/logos) by Jason Long,
 licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/), and
-its attribution lives next to its entry. Each mark belongs to its owner; it
+its attribution lives next to its entry. The WorkOS mark is not in Simple
+Icons: it is the logomark from the [WorkOS brand page](https://workos.com/brand),
+used unmodified in black or white as its guidelines require. Each mark belongs to its owner; it
 identifies the service (nominative use) and does not imply endorsement.
 
 ## Fonts bundled in the app

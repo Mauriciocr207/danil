@@ -13,7 +13,7 @@
  */
 
 export type ToolMarkId =
-  | "github" | "git" | "bitbucket" | "gitlab" | "atlassian" | "notion" | "figma" | "excalidraw" | "mcp" | "drive" | "zotero" | "drawio" | "typst" | "libreoffice" | "cua" | "danil" | "supabase" | "slack" | "linear" | "sentry" | "vercel" | "docker" | "postgresql" | "playwright" | "stripe" | "cloudflare" | "googlecloud" | "aws";
+  | "github" | "git" | "bitbucket" | "gitlab" | "atlassian" | "notion" | "figma" | "excalidraw" | "mcp" | "drive" | "zotero" | "drawio" | "typst" | "libreoffice" | "cua" | "danil" | "supabase" | "slack" | "linear" | "sentry" | "vercel" | "docker" | "postgresql" | "playwright" | "stripe" | "cloudflare" | "googlecloud" | "aws" | "workos";
 
 export type ToolMarkPath = { d: string; fill: string | null };
 
@@ -60,6 +60,7 @@ export const TOOL_LABELS: Record<ToolMarkId, string> = {
   cloudflare: "Cloudflare",
   googlecloud: "Google Cloud",
   aws: "AWS",
+  workos: "WorkOS",
 };
 
 /**
@@ -97,6 +98,7 @@ const ALIASES: Record<ToolMarkId, readonly string[]> = {
   cloudflare: ["cloudflare", "workers", "wrangler"],
   googlecloud: ["googlecloud", "google-cloud", "gcp", "gcloud", "gsutil"],
   aws: ["aws", "amazon", "amazonwebservices", "s3"],
+  workos: ["workos"],
 };
 
 const BY_ALIAS = new Map<string, ToolMarkId>();
