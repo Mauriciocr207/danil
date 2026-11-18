@@ -6,7 +6,7 @@ export { MAX_CHAT_VISUALS };
 export type ChatVisual = { kind: "visual"; file: string; title: string; id: string };
 export type VisualPart = ChatVisual | { kind: "markdown"; markdown: string };
 
-export function splitChatVisuals(text: string, streaming: boolean): VisualPart[] {
+export function splitChatVisuals(text: string, _streaming: boolean): VisualPart[] {
   if (!text.includes("::terminus-visual")) return [{ kind: "markdown", markdown: text }];
   const parts: VisualPart[] = [];
   let cursor = 0;
@@ -15,7 +15,7 @@ export function splitChatVisuals(text: string, streaming: boolean): VisualPart[]
   for (const line of text.matchAll(/^::terminus-visual[^\r\n]*/gm)) {
     const start = line.index;
     const end = start + line[0].length;
-    if (count === MAX_CHAT_VISUALS || (streaming && end === text.length)) continue;
+    if (count === MAX_CHAT_VISUALS) continue;
     const directive = parseVisualDirective(line[0]);
     if (!directive) continue;
     const containsLine = (node: { position?: { start: { offset?: number }; end: { offset?: number } } }) =>

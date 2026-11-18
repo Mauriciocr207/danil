@@ -11,7 +11,7 @@ import "../helpers/catalog.ts";
 import type { Msg } from "../../src/features/chat/Chat.tsx";
 import { lotesDeDeltas } from "../../src/features/chat/deltaFrames.ts";
 import { anexarDelta, anexarDeltas, type Delta } from "../../src/features/chat/transcript.ts";
-import { splitChatVisuals } from "../../src/features/chat/visualDirective.ts";
+import { MAX_CHAT_VISUALS, splitChatVisuals } from "../../src/features/chat/visualDirective.ts";
 import { splitNextSteps } from "../../src/lib/nextSteps.ts";
 import { bloquesDeMarkdown, partidorDeBloques } from "../../src/ui/markdown-blocks.ts";
 
@@ -90,6 +90,50 @@ test("las partes de visuales y respuestas rápidas no cambian con el atajo", () 
   }
   assert.equal(splitNextSteps("Hecho.\n<NEXT_STEPS>\n- [ ] Uno", true)[1]?.kind, "next_steps");
   assert.deepEqual(splitNextSteps("Hecho.\n<NEXT_ST", true), [{ kind: "markdown", id: "markdown:0", markdown: "Hecho.\n" }]);
+});
+
+test("una directiva completa al final del streaming aparece sin esperar done", () => {
+  for (const directive of [
+    '::terminus-visual{file="chart-a.html"}',
+    '::terminus-visual{file="chart-a.html" title="Uno"}',
+    '::terminus-visual{file="chart-a.html" title="Un \\"título\\""}',
+  ]) {
+    const text = `Mira:\n\n${directive}`;
+    const streaming = splitChatVisuals(text, true);
+    assert.equal(streaming.filter((part) => part.kind === "visual").length, 1, directive);
+    assert.deepEqual(streaming, splitChatVisuals(text, false));
+    assert.deepEqual(streaming.filter((part) => part.kind === "visual"),
+      splitChatVisuals(`${text}\n`, true).filter((part) => part.kind === "visual"));
+  }
+});
+
+test("ningún prefijo incompleto de la directiva se ejecuta mientras llega", () => {
+  const directive = '::terminus-visual{file="chart-a.html" title="Uno"}';
+  for (let end = 0; end < directive.length; end++) {
+    const text = `Mira:\n\n${directive.slice(0, end)}`;
+    assert.deepEqual(splitChatVisuals(text, true), [{ kind: "markdown", markdown: text }]);
+  }
+});
+
+test("una directiva al final del streaming sigue siendo texto dentro de código, citas o listas", () => {
+  const directive = '::terminus-visual{file="chart-a.html"}';
+  for (const text of [
+    `\`\`\`text\n${directive}`,
+    `~~~~text\n${directive}`,
+    `> Mira:\n${directive}`,
+    `- Mira:\n${directive}`,
+    `    ${directive}`,
+  ]) assert.deepEqual(splitChatVisuals(text, true), [{ kind: "markdown", markdown: text }]);
+});
+
+test("el límite de visuales incluye la última directiva durante el streaming", () => {
+  const directives = Array.from({ length: MAX_CHAT_VISUALS + 1 }, (_, i) =>
+    `::terminus-visual{file="chart-${i}.html"}`);
+  const atLimit = splitChatVisuals(directives.slice(0, MAX_CHAT_VISUALS).join("\n\n"), true);
+  assert.equal(atLimit.filter((part) => part.kind === "visual").length, MAX_CHAT_VISUALS);
+  const overLimit = splitChatVisuals(directives.join("\n\n"), true);
+  assert.equal(overLimit.filter((part) => part.kind === "visual").length, MAX_CHAT_VISUALS);
+  assert.ok(overLimit.some((part) => part.kind === "markdown" && part.markdown.includes(directives[MAX_CHAT_VISUALS])));
 });
 
 const autor = { kind: "agent" } as unknown as Delta["author"];
