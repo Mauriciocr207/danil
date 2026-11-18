@@ -327,10 +327,13 @@ export class Fleet {
    * más las que su fila dice que lo tienen (el workspace de una organización no
    * está en el registro de quien no es su dueña); sin registro, las que lo
    * tienen vinculado. Nunca según quién contestó al final.
+   * Si alguna fila lo sirve por una organización, solo esas: vive en su servidor.
    */
   membersOf(workspace: string | null): string[] {
     if (!workspace) return [];
     const order = this.machines().map((m) => m.id);
+    const servers = order.filter((id) => serves(this.info(id), workspace));
+    if (servers.length) return servers;
     if (this.registry) {
       const w = this.registry.find((x) => x.id === workspace);
       return order.filter((id) => (w?.computers.includes(id) ?? false) || this.info(id)?.child === true || (this.info(id)?.linked?.has(workspace) ?? false) || serves(this.info(id), workspace));

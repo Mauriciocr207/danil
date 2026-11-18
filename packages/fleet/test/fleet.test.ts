@@ -304,6 +304,18 @@ test("one endpoint serves every organization workspace of the member, and no oth
   assert.deepEqual(fleet.membersOf(foundation.id), []);
 });
 
+test("regression: an organization workspace goes only to the machines that serve it, never to a personal VM that lists no links", () => {
+  const org = { id: "fqgx1w8m", name: "Danil Workspace" };
+  const endpoint: MachineInfo = { id: "cmp_nube", name: "Nube IA", wakes: false, linked: new Set<string>(), organization: { id: "org_01", workspaces: [org] } };
+  const { fleet } = setup({}, [VM, endpoint, MAC]);
+  assert.deepEqual(fleet.membersOf(org.id), ["cmp_nube"], "without a registry, a machine with no link list does not serve it");
+  assert.deepEqual(fleet.membersOf("w"), ["cmp_vm", "cmp_mac"], "a workspace no organization serves keeps today's rule");
+  fleet.setMachines([VM, endpoint, { ...MAC, child: true }]);
+  fleet.setRegistry([{ id: "w", name: "W", projects: [], computers: ["cmp_vm"] } as never]);
+  assert.deepEqual(fleet.membersOf(org.id), ["cmp_nube"], "with a registry, a child machine does not take it either");
+  assert.deepEqual(fleet.membersOf("w"), ["cmp_vm", "cmp_mac"]);
+});
+
 test("machines are added, removed and renamed live without reconnecting the others", async () => {
   const { fleet, made, changes } = setup({ cmp_vm: { answers: { list_live_sessions: [row("t1")] } } }, [VM, MAC]);
   await fleet.read({ machine: "cmp_vm", workspace: "w", command: "list_live_sessions", args: { project: "p1" } });
