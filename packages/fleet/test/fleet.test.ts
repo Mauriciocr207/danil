@@ -351,6 +351,17 @@ test("a list_workspaces read of an organization machine becomes its listing, and
   assert.deepEqual(heard, ["cmp_org"], "after stop, nothing more is heard");
 });
 
+test("regression: a workspace a personal machine lists never goes to the organization machine that does not list it", () => {
+  const org: MachineInfo = { id: "cmp_org", name: "Danil Server", wakes: false, kind: "organization", organizationId: "org_A" };
+  const personal: MachineInfo = { id: "cmp_vm", name: "Danil VM", wakes: false, kind: "personal" };
+  const { fleet } = setup({}, [org, personal]);
+  fleet.setListing("cmp_org", [{ id: "ws_acme", name: "Acme" }]);
+  fleet.setListing("cmp_vm", [{ id: "mine", name: "Mía" }]);
+  assert.deepEqual(fleet.membersOf("mine"), ["cmp_vm"], "only the machine that lists it");
+  assert.deepEqual(fleet.membersOf("ws_acme"), ["cmp_org"]);
+  assert.deepEqual(fleet.membersOf("unknown"), ["cmp_vm"], "an organization machine whose list is known does not take what it does not list");
+});
+
 test("machines are added, removed and renamed live without reconnecting the others", async () => {
   const { fleet, made, changes } = setup({ cmp_vm: { answers: { list_live_sessions: [row("t1")] } } }, [VM, MAC]);
   await fleet.read({ machine: "cmp_vm", workspace: "w", command: "list_live_sessions", args: { project: "p1" } });

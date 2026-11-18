@@ -1031,3 +1031,18 @@ test("remote GitHub account status distinguishes absent command from real author
     fleet.close();
   }
 });
+
+test("regression: on the web a workspace of the personal machine is created there, never on the organization server", async () => {
+  const org = fakeLink({ list_workspaces: { workspaces: [{ id: "ws_acme", name: "Acme" }], active: "ws_acme" } });
+  const personal = fakeLink({ list_workspaces: { workspaces: [{ id: "mine", name: "Mía" }], active: "mine" } });
+  const links = { cmp_org: org, cmp_vm: personal };
+  const fleet = new Fleet({ self: null, connect: (info) => links[info.id as keyof typeof links], deadlines: { read: 40, action: 200, intent: 400 } });
+  const router = createRouter({ self: null, fleet, native: null });
+  fleet.setMachines([
+    { id: "cmp_org", name: "Danil Server", wakes: false, kind: "organization", organizationId: "org_A" },
+    { id: "cmp_vm", name: "Danil VM", wakes: false, kind: "personal" },
+  ]);
+  await router.handle("list_workspaces", {});
+  assert.equal(router.createsOn("mine")?.machine, "cmp_vm", "the composer proposes the machine that has it");
+  assert.equal(router.createsOn("ws_acme")?.machine, "cmp_org", "and the organization's workspace goes to its server");
+});

@@ -136,7 +136,7 @@
   "shell.workspaces.stale": "Saved list: the account could not be read",
   "shell.workspaces.hide": "Hide from the bar",
   "shell.workspaces.add_hidden_state": "Add workspace. A hidden workspace: {state}",
-  "shell.workspaces.add_danil": "Add workspace",
+  "shell.workspaces.add_danil": "Add Danil workspace",
   "shell.workspaces.add_named": "Add {name}",
   "shell.workspaces.add_row": "Add",
   "shell.workspaces.danil_empty": "No more Danil workspaces in this organization",

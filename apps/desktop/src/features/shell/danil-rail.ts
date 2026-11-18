@@ -1,3 +1,4 @@
+import { createEffect } from "solid-js";
 import type { DanilMenu } from "./DanilAddMenu";
 import { railHidden, railVisible } from "./hidden-workspaces.ts";
 import { type DanilRail, danilRail } from "./workspace-added-wiring.ts";
@@ -39,9 +40,33 @@ export function danilMenuOf(danil: DanilRail, view: DanilView, open: (id: string
 }
 
 /** Lo que la columna del riel usa de los de Danil, sobre sus ocultos locales. */
-export function columnDanil(hidden: { ids: () => ReadonlySet<string>; show: (id: string) => void }) {
+/**
+ * Al entrar, el abierto no puede ser uno de Danil que la persona no agregó (el motor de la
+ * organización lo propone por su cuenta): pasa al primer agregado del riel o, si no hay, al
+ * primer local. `null` si el abierto vale o todavía no se sabe.
+ */
+export function openOnStart(list: readonly { id: string }[], open: string | null, hidden: ReadonlySet<string>, danil: DanilView): string | null {
+  const { available, added } = danil;
+  if (!open || !available || !added) return null;
+  const ids = new Set(available.map((w) => w.id));
+  if (!ids.has(open) || added.has(open)) return null;
+  const first = list.find((w) => ids.has(w.id) && added.has(w.id)) ?? available.find((w) => added.has(w.id));
+  return (first ?? list.find((w) => !ids.has(w.id) && !hidden.has(w.id)))?.id ?? null;
+}
+
+export function columnDanil(hidden: { ids: () => ReadonlySet<string>; show: (id: string) => void }, ws?: { lista: () => readonly { id: string }[] | null; activo: () => string | null; cambiarA: (id: string) => unknown }) {
   const danil = danilRail(hidden.ids, (ids) => ids.forEach(hidden.show));
   const view = (): DanilView => ({ available: danil.available(), added: danil.added() });
+  // Una sola vez, en cuanto se sabe: después, lo que la persona abre manda.
+  let settled = false;
+  createEffect(() => {
+    if (settled || !ws) return;
+    const current = view();
+    if (!current.available || !current.added || !ws.activo()) return;
+    settled = true;
+    const next = openOnStart(ws.lista() ?? [], ws.activo(), hidden.ids(), current);
+    if (next) void ws.cambiarA(next);
+  });
   const make = (w: { id: string; name: string }) => ({ id: w.id, name: w.name, logo: null as string | null });
   return {
     danil,
