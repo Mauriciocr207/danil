@@ -1,9 +1,7 @@
+import { observedActivityUpdate, type ActivityObservationKind, type ObservedTurnActivity as TurnActivity } from "../../lib/activityObservation.ts";
 import type { Msg } from "../chat/index.ts";
-
-import type { TurnActivity } from "../../lib/turnActivity.ts";
 export type { TurnActivity } from "../../lib/turnActivity.ts";
-
-type RecordOfActivity = { key: string; active: boolean; startedAt: number | null; saved: Set<string>; baseline: readonly string[] | null; alias?: RecordOfActivity };
+type RecordOfActivity = { key: string; active: boolean; startedAt: number | null; saved: Set<string>; baseline: readonly string[] | null; lastObserved: Msg | null; lastObservedKind: ActivityObservationKind | null; alias?: RecordOfActivity };
 const scopeKey = (workspace: string | null, session: string) => JSON.stringify([workspace, session]);
 // `transcripcion` assigns every persisted piece `${turn id}:${piece}`.
 const savedTurn = (message: Msg) => {
@@ -11,7 +9,6 @@ const savedTurn = (message: Msg) => {
   return separator > 0 ? message.clave!.slice(0, separator) : message.avanceDe || message.turno;
 };
 const epoch = (value: number | null) => value !== null && Number.isFinite(value) && value > 0 ? value : null;
-
 /** Projection provenance, never execution state: only explicit lifecycle facts open/close it. */
 export function createActivityProjection() {
   let serial = 0;
@@ -29,7 +26,7 @@ export function createActivityProjection() {
     const key = scopeKey(workspace, session);
     const known = before?.map(savedTurn).filter((id): id is string => Boolean(id));
     const baseline = before === null || (before.length > 0 && !known?.length) ? null : known ?? [];
-    records.set(key, [...list(workspace, session), { key: `${key}:activity:${++serial}`, active: true, startedAt: epoch(startedAt), saved: new Set(), baseline }]);
+    records.set(key, [...list(workspace, session), { key: `${key}:activity:${++serial}`, active: true, startedAt: epoch(startedAt), saved: new Set(), baseline, lastObserved: null, lastObservedKind: null }]);
     return true;
   }
   function observe(workspace: string | null, session: string, before: readonly Msg[], after: readonly Msg[]) {
@@ -40,9 +37,12 @@ export function createActivityProjection() {
       if (owners.has(message)) return;
       const previous = before[index];
       const inherited = before.length === after.length && !positions.has(message) && previous ? owners.get(previous) : undefined;
-      const owner = inherited ?? (active?.active ? active : undefined);
+      const owner = inherited?.alias ?? inherited ?? (active?.active ? active : undefined);
       if (!owner || positions.has(message)) return;
       owners.set(message, owner);
+      const kind = observedActivityUpdate(message, previous);
+      if (owner.active && kind) { owner.lastObserved = message; owner.lastObservedKind = kind; }
+      else if (owner.lastObserved === previous) owner.lastObserved = message;
       if (message.tramo) owner.saved.add(message.tramo);
       if (message.turno) owner.saved.add(message.turno);
     });
@@ -80,7 +80,7 @@ export function createActivityProjection() {
       if (!record.active && !output) return [];
       const duration = [...messages].reverse().find(message => message.role === "agent" && message.duration_ms !== undefined)?.duration_ms;
       return [{ key: record.key, anchor: output ?? null, anchorIndex: output ? visible.indexOf(output) : visible.length,
-        active: record.active, startedAt: record.startedAt, durationMs: duration ?? null, messages }];
+        active: record.active, startedAt: record.startedAt, durationMs: duration ?? null, messages, observation: record.lastObserved && record.lastObservedKind ? { message: record.lastObserved, kind: record.lastObservedKind } : null }];
     });
   }
   function adopt(workspace: string | null, from: string, to: string) {
@@ -90,6 +90,7 @@ export function createActivityProjection() {
     const draft = previous.at(-1), running = existing.at(-1);
     if (draft?.active && running?.active) {
       running.alias = draft;
+      if (running.lastObserved) { draft.lastObserved = running.lastObserved; draft.lastObservedKind = running.lastObservedKind; }
       for (const id of running.saved) draft.saved.add(id);
       records.set(scopeKey(workspace, to), [...previous, ...existing.filter(record => record !== running)]);
     } else records.set(scopeKey(workspace, to), [...previous, ...existing]);
@@ -99,5 +100,4 @@ export function createActivityProjection() {
     drop: (workspace: string | null, session: string) => records.delete(scopeKey(workspace, session)),
     clear: () => records.clear() };
 }
-
 export { activityElapsed } from "../../lib/turnActivity.ts";
