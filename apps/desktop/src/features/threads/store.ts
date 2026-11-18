@@ -1,6 +1,7 @@
-import { createMemo, createSignal, type Setter, untrack } from "solid-js";
-import { anexarDeltas, hasOlder, hasRecentGap, HistoryPager, lotesDeDeltas, mensajesDelHilo, transcripcion, type ChatEvent, type HandoverState, type Msg, type OlderState, type Session, type TranscriptOrigin, type Turn } from "../chat/index.ts";
+import { batch, createMemo, createSignal, type Setter, untrack } from "solid-js";
+import { anexarDeltas, hasOlder, hasRecentGap, HistoryPager, lotesDeDeltas, mensajesDelHilo, transcripcion, type ChatEvent, type HandoverState, type Msg, type OlderState, type Session, type TranscriptOrigin } from "../chat/index.ts";
 import { createOptimisticHistory, type OptimisticHistoryState } from "./optimistic-history.ts";
+import { createAssistantHistory, idsDeTurnos } from "./assistant-history.ts";
 import { createActivityProjection } from "./activity.ts";
 import { transcriptEvent, type TranscriptMetadata } from "./transcript-events.ts";
 
@@ -20,6 +21,7 @@ export function createThreadsStore(deps: {
   const { invoke } = deps;
   let disposed = false;
   const activity = createActivityProjection();
+  const assistantHistory = createAssistantHistory(deps.scope);
   const [activityRevision, setActivityRevision] = createSignal(0);
   const activityChanged = () => setActivityRevision(value => value + 1);
   const route = (id: string) => {
@@ -114,7 +116,6 @@ export function createThreadsStore(deps: {
       return { ...hs, [session]: { base, vivo: mismoVivo ? vivoPrevio : vivo, guardados: tramos, optimistic, readRevision: appliedRevision } };
     });
   };
-  const idsDeTurnos = (turns: readonly Turn[]) => new Set(turns.flatMap((t) => (t.id ? [t.id] : [])));
   const [origenes, setOrigenes] = createSignal<Readonly<Record<string, TranscriptOrigin | null>>>({});
   const [apagadas, setApagadas] = createSignal<Readonly<Record<string, string>>>({});
   const [machineWaits, setMachineWaits] = createSignal<Readonly<Record<string, MachineWait>>>({});
@@ -152,19 +153,11 @@ export function createThreadsStore(deps: {
     historias.set(id, pager);
     return pager;
   };
-  const leerTarea = async (project: string, id: string, before: number | null = null) => {
-    if (disposed) throw new DOMException("Conversation disposed", "AbortError");
+  const leerTarea = (project: string, id: string, before: number | null = null) => {
     proyectosDeHistoria.set(id, project);
-    const options = route(id);
-    const result = await optimisticHistory.read(id, () => deps.scope.paged()
-      ? invoke<Session>("load_history", { project, id, before }, options)
-      : invoke<Session>("load_session", { project, id, history_request: { version: 1, before } }, options));
-    if (result.history?.version === 1) {
-      result.turns = result.turns.map(turn => ({ ...turn,
-        history_refs: turn.history_refs?.map(ref => ({ ...ref, project, session: id })),
-      }));
-    }
-    return result;
+    return optimisticHistory.read(project, id, () => deps.scope.paged()
+      ? invoke<Session>("load_history", { project, id, before }, route(id))
+      : invoke<Session>("load_session", { project, id, history_request: { version: 1, before } }, route(id)));
   };
   async function cargarAntiguos(project: string, id: string): Promise<(() => void) | null> {
     const pager = historias.get(id);
@@ -177,8 +170,7 @@ export function createThreadsStore(deps: {
   function pintarHistoria(id: string, pager: HistoryPager<Session["turns"][number]>, antepuesta: boolean, clear = false, leidos?: ReadonlySet<string>, readRevision?: number) {
     const loaded = pager.loaded;
     if (!loaded) return;
-    const leida = transcripcion(loaded.turns, loaded.start);
-    if (hasRecentGap(loaded)) leida.push({ role: "system", text: "", meta: "history_gap", clave: "history_gap" });
+    const leida = assistantHistory.paint(id, loaded);
     releer(id, leida, clear, antepuesta, idsDeTurnos(loaded.turns), leidos, hasRecentGap(loaded) ? undefined : readRevision);
   }
   function loadResult(id: string, session: Session, clear: boolean, generation: number, latest = false) {
@@ -214,6 +206,8 @@ export function createThreadsStore(deps: {
       const { [id]: _, ...resto } = all;
       return resto;
     });
+    deltasPorCuadro.vaciar();
+    assistantHistory.prepare(id, loaded, untrack(hilos)[id]?.base ?? [], untrack(hilos)[id]?.vivo ?? [], clear);
     pintarHistoria(id, pager, false, clear, idsDeTurnos(session.turns), read?.revision);
     if (read) setHilos(all => ({ ...all, [id]: { ...all[id], readRevision: read.revision } }));
     const origen = session.transcript ?? null;
@@ -223,6 +217,7 @@ export function createThreadsStore(deps: {
     return true;
   }
   const soltarHilo = (session: string) => {
+    assistantHistory.drop(session);
     deltasPorCuadro.vaciar();
     if (activity.drop(deps.scope.workspace(), session)) activityChanged();
     setHilos((hs) => {
@@ -256,10 +251,7 @@ export function createThreadsStore(deps: {
     }, workspace);
   }
   function replay(session: string, workspace = deps.scope.workspace()) {
-    if (!disposed) anexar(session, before => {
-      const kept = before.filter(row => row.role === "user");
-      return kept.length === before.length ? before : kept;
-    }, workspace);
+    if (!disposed) anexar(session, before => assistantHistory.replay(session, before, workspace), workspace);
   }
   function finishSteps(session: string) {
     if (!disposed) anexar(session, before => before.some(row => row.paso?.corriendo)
@@ -268,15 +260,20 @@ export function createThreadsStore(deps: {
   function event(payload: ChatEvent, metadata: TranscriptMetadata) {
     if (disposed || !["delta", "reasoning", "image", "tool", "tool_done", "notice", "task_launched", "segment_saved", "command_output", "command_running"].includes(payload.kind)) return;
     if (payload.kind === "task_launched" && (!payload.task || !payload.id)) return;
-    if (payload.kind === "segment_saved" && !payload.id) return;
+    if (payload.kind === "segment_saved" && (!payload.id || ((!payload.workspace || payload.workspace === deps.scope.workspace()) && !assistantHistory.segment(payload.session, payload.id, untrack(hilos)[payload.session]?.base ?? [])))) return;
     if (payload.kind === "image" && (payload.detail?.kind !== "output" || !payload.detail.images?.length)) return;
     const workspace = payload.workspace ?? deps.scope.workspace();
     if (payload.kind === "delta") {
       deltasPorCuadro.meter(payload.session, workspace ?? undefined, { text: payload.text, messageId: payload.message_id,
         startsMessage: payload.starts_message, author: metadata.author, model: metadata.model });
-    } else anexar(payload.session, before => transcriptEvent(before, payload, metadata), workspace);
+    } else batch(() => {
+      anexar(payload.session, before => transcriptEvent(before, payload, metadata), workspace);
+      const pager = historias.get(payload.session);
+      if (payload.kind === "segment_saved" && workspace === deps.scope.workspace() && pager) pintarHistoria(payload.session, pager, false);
+    });
   }
   function saveWorkspace(previous: string | null) {
+    assistantHistory.clear();
     deltasPorCuadro.vaciar();
     for (const pager of historias.values()) pager.close();
     if (previous) workspaceThreads.set(previous, Object.fromEntries(Object.entries(untrack(hilos)).filter(([id]) => deps.liveThreads().has(`${previous}/${id}`))));
@@ -284,7 +281,7 @@ export function createThreadsStore(deps: {
   function activateWorkspace(workspace: string | null) { if (!disposed) setHilos(workspace ? workspaceThreads.get(workspace) ?? {} : {}); }
   function resetService() {
     deltasPorCuadro.vaciar(); workspaceThreads.clear();
-    activity.clear(); activityChanged();
+    assistantHistory.clear(); activity.clear(); activityChanged();
     setHilos(before => Object.fromEntries(Object.entries(before).map(([id, thread]) => [id, { ...thread, vivo: [] }])));
   }
   function adoptDraft(id: string) {
@@ -308,7 +305,7 @@ export function createThreadsStore(deps: {
   }
   return {
     activities: (id: string, visible: readonly Msg[]) => { activityRevision(); return activity.project(deps.scope.workspace(), id, visible); },
-    beginActivity: (id: string, startedAt: number | null) => { if (disposed) return; const thread = untrack(hilos)[id]; if (activity.begin(deps.scope.workspace(), id, startedAt, thread ? mensajesDelHilo(thread) : id === "" ? [] : null)) activityChanged(); },
+    beginActivity: (id: string, startedAt: number | null) => { if (disposed) return; assistantHistory.begin(id); const thread = untrack(hilos)[id]; if (activity.begin(deps.scope.workspace(), id, startedAt, thread ? mensajesDelHilo(thread) : id === "" ? [] : null)) activityChanged(); },
     finishActivity: (id: string, workspace = deps.scope.workspace()) => { if (!disposed && activity.finish(workspace, id)) activityChanged(); },
     rows: hilos, current: hiloAbierto, messages: msgs, loading: cargandoHilo, origins: origenes, offline: apagadas, machineWaits, handovers: traspasos,
     olderAvailable: conAntiguos, recentAvailable: conRecientes, olderStatus: estadoAntiguos, recentTail: colaSuelta,
@@ -322,6 +319,6 @@ export function createThreadsStore(deps: {
     finishLoading: (id: string) => { if (!disposed) setCargandoHilo(before => before === id ? null : before); },
     reading: (id: string, active: boolean) => { if (active) leyendoLejos.add(id); else leyendoLejos.delete(id); },
     drop: soltarHilo,
-    dispose: () => { disposed = true; activity.clear(); deltasPorCuadro.vaciar(); for (const pager of historias.values()) pager.close(); },
+    dispose: () => { disposed = true; assistantHistory.clear(); activity.clear(); deltasPorCuadro.vaciar(); for (const pager of historias.values()) pager.close(); },
   };
 }

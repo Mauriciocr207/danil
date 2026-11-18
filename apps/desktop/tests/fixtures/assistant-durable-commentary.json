@@ -1,0 +1,48 @@
+{
+  "role": "agent",
+  "id": "saved-commentary",
+  "text": "Voy a mostrar solo la última acción del modelo en la cabecera, dejando el resto dentro del desplegable. También ensancharé un poco el brillo y lo haré ligeramente más rápido.Verified final result in the fixture.",
+  "duration_ms": 96126,
+  "pieces": [
+    {
+      "text": "Voy a mostrar solo la última acción del modelo en la cabecera, dejando el resto dentro del desplegable. También ensancharé un poco el brillo y lo haré ligeramente más rápido."
+    },
+    {
+      "tool": 0
+    },
+    {
+      "tool": 1
+    },
+    {
+      "tool": 2
+    },
+    {
+      "tool": 3
+    },
+    {
+      "text": "Verified final result in the fixture."
+    }
+  ],
+  "tools": [
+    {
+      "name": "Read",
+      "target": "fixture.txt",
+      "ok": true
+    },
+    {
+      "name": "Read",
+      "target": "fixture.txt",
+      "ok": true
+    },
+    {
+      "name": "Read",
+      "target": "fixture.txt",
+      "ok": true
+    },
+    {
+      "name": "Read",
+      "target": "fixture.txt",
+      "ok": true
+    }
+  ]
+}
