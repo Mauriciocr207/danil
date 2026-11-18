@@ -158,11 +158,11 @@ test("una tarea de una máquina apagada abre sin fallo y mandarle algo la encien
   // dice el renglón del turno, donde después dirá «Pensando».
   assert.ok(text(app).includes("sigue"), "el mensaje no se ve enviado");
   assert.equal(doc.querySelector("[data-machine-notice]"), null, "el aviso de arriba sigue diciendo que se enciende");
-  const waking = doc.querySelector("[data-turn-waking]")?.closest('[role="status"]');
+  const waking = doc.querySelector('[role="status"][aria-label="Encendiendo vm"]');
   assert.ok(waking, "el renglón del turno no lleva la máquina");
-  assert.ok(waking.textContent.startsWith("Encendiendo vm…"), `el renglón dice «${waking.textContent}»`);
+  assert.ok(waking.textContent.startsWith("Encendiendo vm"), `el renglón dice «${waking.textContent}»`);
   await sleep(700);
-  assert.equal(doc.querySelector("[data-turn-waking]"), null, "el renglón sigue diciendo que se enciende");
+  assert.equal(doc.querySelector('[role="status"][aria-label="Encendiendo vm"]'), null, "el renglón sigue diciendo que se enciende");
   assert.equal(sends.length, 1, "el mensaje salió más de una vez");
   assert.equal(sends[0].session, "r1");
   assert.equal(doc.querySelector("[data-machine-notice]"), null, "el aviso sigue tras encenderla");
@@ -197,13 +197,13 @@ test("la primera línea de una tarea nueva en una máquina apagada se ve enviada
   assert.ok(hilo.includes("hola nueva"), `el mensaje no se ve enviado en la conversación: «${hilo.slice(0, 300)}»`);
   assert.equal(doc.querySelector("textarea")?.value, "", "el texto se quedó en la caja");
   assert.equal(doc.querySelector("[data-machine-notice]"), null, "el aviso de arriba dice que se enciende");
-  const waking = doc.querySelector("[data-turn-waking]")?.closest('[role="status"]');
+  const waking = doc.querySelector('[role="status"][aria-label="Encendiendo vm"]');
   assert.ok(waking, "el renglón del turno no lleva la máquina");
-  assert.ok(waking.textContent.startsWith("Encendiendo vm…"), `el renglón dice «${waking.textContent}»`);
+  assert.ok(waking.textContent.startsWith("Encendiendo vm"), `el renglón dice «${waking.textContent}»`);
 
   soltar();
   await sleep(400);
-  assert.equal(doc.querySelector("[data-turn-waking]"), null, "el renglón sigue diciendo que se enciende");
+  assert.equal(doc.querySelector('[role="status"][aria-label="Encendiendo vm"]'), null, "el renglón sigue diciendo que se enciende");
   assert.deepEqual(app.failures, []);
 });
 
