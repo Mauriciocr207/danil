@@ -24,6 +24,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  createUniqueId,
   For,
   Index,
   type JSX,
@@ -35,7 +36,6 @@ import {
   type Signal,
   Switch,
   untrack,
-  useContext,
 } from "solid-js";
 import { Dynamic, Portal } from "solid-js/web";
 import type { ThreadSearchTarget } from "./ThreadSearch";
@@ -164,8 +164,9 @@ import Alcance from "./Scope";
 import Suggestions, { type Suggestion } from "./Suggestions";
 import LineaDeTiempo, { SUPERFICIE_DE_EJECUCION } from "./Timeline";
 import EstadoDelTurno from "./TurnStatus";
+import { ActivityDots } from "./ActivityDots";
+import { coalesceLiveActivity, type ActivityBlock, type ActivityChunk } from "./activityBlocks";
 import { WithMentions } from "./WithMentions";
-import { Spinner } from "../../ui/Spinner";
 import { Interrupcion, LineaDeSistema, TraspasoDeProveedor, SiguioTrasElCupo } from "./components/thread/SystemMarkers";
 import { HoraDelTurno, LineaDeProveedor, BotonCopiar, CambioDeContexto } from "./components/thread/MessageDecorations";
 import { TextoConSiguientes, ImagenesEntregadas, type RespuestaRapida } from "./components/thread/AgentAnswer";
@@ -388,13 +389,8 @@ export type PermissionDecision = {
 };
 
 /** Un bloque de la transcripción: un mensaje, o una tira de pasos plegable. */
-type Bloque =
-  | { tipo: "msg"; msg: Msg; i: number }
-  | { tipo: "pasos"; pasos: Paso[]; i: number }
-  | { tipo: "trabajo"; pasos: Paso[]; msg: Msg; i: number; avance?: Avance[] };
-
-/** Un tramo de avance de un turno cerrado: lo que hizo y lo que dijo antes de responder. */
-type Avance = { pasos: Paso[]; msg: Msg };
+type Bloque = ActivityBlock<Msg>;
+type Avance = ActivityChunk<Msg>;
 
 type BloqueDeMensaje = Extract<Bloque, { tipo: "msg" }>;
 type BloqueDePasos = Extract<Bloque, { tipo: "pasos" }>;
@@ -1707,7 +1703,7 @@ export default function Chat(props: ChatProps) {
       else out.push({ tipo: "pasos", pasos: [paso], i });
     });
 
-    return out;
+    return coalesceLiveActivity(out, Boolean(props.busy));
   });
   const searchMessages = () => bloques().flatMap((block, index) => {
     const message = block.tipo === "pasos" ? null : block.msg;
@@ -1728,6 +1724,7 @@ export default function Chat(props: ChatProps) {
   const esLaTiraViva = (bloque: Bloque) => Boolean(props.busy) && bloque === bloques().at(-1);
   // Pasos que llegan tras la respuesta abren otro tramo, y el de la respuesta deja de correr.
   const registroCorre = (bloque: Bloque) => fromWork(bloque, (t) => esElVivo(t.msg), false) && esLaTiraViva(bloque);
+  const hasLiveActivity = () => { const last = bloques().at(-1); return Boolean(last && (registroCorre(last) || (esLaTiraViva(last) && pasosDe(last)))); };
 
   const clavesDeBloques = createBlockKeys();
   const claves = createMemo(on(() => props.conversacion, (conversacion, anterior) => {
@@ -2966,29 +2963,18 @@ export default function Chat(props: ChatProps) {
                       pasos={fromWork(b(), (t) => t.pasos, [])}
                       avance={fromWork(b(), (t) => t.avance ?? SIN_AVANCE, SIN_AVANCE)}
                       msg={fromWork(b(), (t) => t.msg, SIN_MENSAJE)}
-                      respuestas={fromWork(b(), (t) => (t.msg.turno ? respondido().get(t.msg.turno) ?? null : null), null)}
+                      respuestas={(msg) => msg.turno ? respondido().get(msg.turno) ?? null : null}
                       vivo={fromWork(b(), (t) => esElVivo(t.msg), false)}
                       corriendo={registroCorre(b())}
+                      animando={!props.esperando && !props.reintento && !props.enFondo && !props.encendiendo}
                       abiertoElTrabajo={Boolean(trabajos()[claveFila(b())])}
                       onAlternarTrabajo={() => {
                         const k = claveFila(trabajo());
                         setTrabajos({ ...trabajos(), [k]: !trabajos()[k] });
                       }}
-                      razonamientoAbierto={Boolean(razonamientos()[claveFila(b())])}
-                      onAlternarRazonamiento={() => {
-                        const k = claveFila(trabajo());
-                        setRazonamientos({ ...razonamientos(), [k]: !razonamientos()[k] });
-                      }}
-                      razonamientoDeTramo={(i) =>
-                        Boolean(razonamientos()[claveDeRazonamiento(claveFila(b()), i)])
-                      }
-                      onAlternarRazonamientoDeTramo={(i) => {
-                        const k = claveDeRazonamiento(claveFila(trabajo()), i);
-                        setRazonamientos({ ...razonamientos(), [k]: !razonamientos()[k] });
-                      }}
-                      preguntasAbiertas={!preguntasPlegadas()[claveDeTrabajo(fromWork(b(), (t) => t.msg, SIN_MENSAJE))]}
-                      onAlternarPreguntas={() => {
-                        const k = claveDeTrabajo(trabajo().msg);
+                      preguntasAbiertas={(msg) => !preguntasPlegadas()[claveDeTrabajo(msg)]}
+                      onAlternarPreguntas={(msg) => {
+                        const k = claveDeTrabajo(msg);
                         setPreguntasPlegadas({
                           ...preguntasPlegadas(),
                           [k]: !preguntasPlegadas()[k],
@@ -3019,12 +3005,16 @@ export default function Chat(props: ChatProps) {
                         un aviso que llegó con el turno cerrado no es trabajo. */}
                     <RegistroDeTrabajo
                       pasos={pasosDe(b())?.pasos ?? []}
+                      avance={pasosDe(b())?.avance}
                       corriendo={esLaTiraViva(b())}
+                      animando={!props.esperando && !props.reintento && !props.enFondo && !props.encendiendo}
                       abierto={trabajos()[claveFila(b())]}
                       onAlternar={(abierto) => {
                         setTrabajos({ ...trabajos(), [claveFila(bp())]: abierto });
                       }}
                     />
+                    <RespuestasDeAvance avance={pasosDe(b())?.avance ?? SIN_AVANCE} visualBudget={visualBudget} visualScope={props.visualScope} readVisual={props.readVisual} openVisual={props.openVisual} />
+                    <Index each={(pasosDe(b())?.avance ?? SIN_AVANCE).map(chunk => chunk.msg).filter(message => message.preguntas?.length)}>{(message) => <RegistroPreguntas items={message().preguntas!} respuestas={message().turno ? respondido().get(message().turno!) ?? null : null} abierta={!preguntasPlegadas()[claveDeTrabajo(message())]} onAlternar={() => { const key = claveDeTrabajo(message()); setPreguntasPlegadas({ ...preguntasPlegadas(), [key]: !preguntasPlegadas()[key] }); }} />}</Index>
                     </div>
                   )}
                 </Match>
@@ -3523,7 +3513,7 @@ export default function Chat(props: ChatProps) {
               />
             )}
           </Show>
-          <Show when={(props.busy || props.encendiendo) && !props.terminal}>
+          <Show when={(props.busy || props.encendiendo) && !props.terminal && (props.encendiendo || props.esperando || props.reintento || props.enFondo || !hasLiveActivity())}>
             <div class="col-start-1 min-w-0">
               <EstadoDelTurno
                 encendiendo={props.encendiendo ?? null}
@@ -3672,7 +3662,7 @@ export default function Chat(props: ChatProps) {
 
 /** La cabecera de un tramo, entera o partida (ver `RegistroDeTrabajo`). */
 const FILA_DEL_TRAMO =
-  "flex w-full min-w-0 items-center gap-2 rounded-sm py-1.5 text-left text-sm hover:bg-surface-muted";
+  "flex w-full min-w-0 items-center gap-2 rounded-sm py-1.5 text-left text-sm hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary";
 
 /**
  * Un tramo de trabajo: las herramientas seguidas entre dos textos del agente,
@@ -3688,19 +3678,19 @@ function RegistroDeTrabajo(props: {
   duracion?: string | null;
   abierto?: boolean;
   onAlternar: (abierto: boolean) => void;
-  /** Si el razonamiento del tramo `i` del avance está desplegado. Ver `razonamientos`. */
-  razonamientoDeTramo?: (i: number) => boolean;
-  onAlternarRazonamientoDeTramo?: (i: number) => void;
+  razonamiento?: Razonamiento[];
+  animando?: boolean;
   /** Con él, «Editó N archivos» abre los cambios en el panel de la tarea. */
   onVerCambios?: () => void;
 }) {
+  const panelId = createUniqueId();
   // Sin contar los pasos con error: fallar y reintentar es normal en un turno
   // correcto, y «1 con error» alarmaba. El fallo del turno va aparte.
   const avance = () => props.avance ?? SIN_AVANCE;
   const todos = createMemo(() => [...avance().flatMap((a) => a.pasos), ...props.pasos]);
   const rotulo = () =>
     cuentaDelTramo(todos(), props.corriendo) ??
-    (props.corriendo ? t("chat.work.running") : t("chat.work.title"));
+    t("chat.activity.title");
   const partes = createMemo(() => (props.onVerCambios ? partesDelTramo(todos(), props.corriendo) : []));
   const duracion = () =>
     !props.corriendo && props.duracion ? t("chat.work.duration", { duration: props.duracion }) : null;
@@ -3713,12 +3703,9 @@ function RegistroDeTrabajo(props: {
       aria-hidden="true"
     />
   );
-  const cara = useContext(WorkFace);
   const girando = () => (
     <Show when={props.corriendo}>
-      <Show when={cara()} fallback={<Spinner size={14} class="pointer-events-none animate-spin-lento text-primary" />}>
-        {(c) => <span class="pointer-events-none inline-flex shrink-0"><AstroAvatar name={c().name} status="working" body={c().body} avatar={c().avatar} size={16} /></span>}
-      </Show>
+      <ActivityDots paused={props.animando === false} />
     </Show>
   );
   const tiempo = () => (
@@ -3731,8 +3718,9 @@ function RegistroDeTrabajo(props: {
   // elemento de más se multiplica por los tramos del hilo (`open-task-cost`).
   return (
     <>
+      <span role="status" aria-live="polite" aria-atomic="true" class="sr-only">{props.corriendo ? t("chat.turn.working_aria") : ""}</span>
       <Show
-        when={todos().length > 0 || avance().length > 0}
+        when={todos().length > 0 || avance().length > 0 || props.razonamiento?.length || props.corriendo}
         fallback={<p class="m-0 mb-2 px-1 py-1.5 text-xs text-neutral-500">{duracion()}</p>}
       >
         {/* Con cambios que abrir, la fila se parte: el plegado la cubre por
@@ -3746,6 +3734,7 @@ function RegistroDeTrabajo(props: {
             <button
               type="button"
               aria-expanded={desplegado()}
+              aria-controls={panelId}
               onClick={() => props.onAlternar(!desplegado())}
               class={cn(FILA_DEL_TRAMO, "px-1", !desplegado() && "mb-2")}
             >
@@ -3760,6 +3749,7 @@ function RegistroDeTrabajo(props: {
             <button
               type="button"
               aria-expanded={desplegado()}
+              aria-controls={panelId}
               aria-label={[rotulo(), duracion()].filter(Boolean).join(" · ")}
               onClick={() => props.onAlternar(!desplegado())}
               class="absolute inset-0 flex items-center rounded-sm px-1 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
@@ -3791,38 +3781,30 @@ function RegistroDeTrabajo(props: {
         </Show>
 
         <Show when={desplegado()}>
-          <div class={cn(SUPERFICIE_DE_EJECUCION, "mb-2")}>
+          <div id={panelId} class={cn(SUPERFICIE_DE_EJECUCION, "mb-2")} data-turn-activity-content="">
             <Index each={avance()}>
-              {(tramo, tramoIndex) => (
+              {(tramo) => (
                 <>
                   <Show when={tramo().pasos.length > 0}>
-                    <LineaDeTiempo pasos={tramo().pasos} />
+                    <LineaDeTiempo pasos={tramo().pasos} presentation="inline" />
                   </Show>
                   {/* La fila de siempre y no prosa suelta: dentro del pliegue
                       una ráfaga sin su rótulo se lee como algo que el agente dijo. */}
                   <Show when={tramo().msg.razonamiento?.length ? tramo().msg.razonamiento : null}>
                     {(bloques) => (
-                      <Reasoning
-                        bloques={bloques()}
-                        vivo={false}
-                        abierto={props.razonamientoDeTramo?.(tramoIndex) ?? false}
-                        onAlternar={() => props.onAlternarRazonamientoDeTramo?.(tramoIndex)}
-                      />
+                      <Reasoning bloques={bloques()} />
                     )}
                   </Show>
                   <div class="px-1 py-1 text-sm text-neutral-500">
-                    <Markdown>{tramo().msg.text}</Markdown>
+                    <Show when={!tramo().outside}><Markdown>{tramo().msg.text}</Markdown></Show>
                   </div>
                 </>
               )}
             </Index>
             <Show when={props.pasos.length > 0}>
-              <LineaDeTiempo pasos={props.pasos} />
+              <LineaDeTiempo pasos={props.pasos} presentation="inline" />
             </Show>
-          </div>
-        </Show>
-      </Show>
-      {/* Fuera del pliegue y antes de la respuesta, como el modo inline de las apps de OpenAI: la respuesta habla de ella. */}
+            <Show when={props.razonamiento?.length ? props.razonamiento : null}>{(blocks) => <Reasoning bloques={blocks()} />}</Show>
       <Index each={todos()}>
         {(step) => (
           <Show when={!step().corriendo && step().mcpApp}>
@@ -3830,8 +3812,21 @@ function RegistroDeTrabajo(props: {
           </Show>
         )}
       </Index>
+          </div>
+        </Show>
+      </Show>
+
     </>
   );
+}
+
+/** Native stream messages have no semantic phase: their responses never enter the activity fold. */
+function RespuestasDeAvance(props: { avance: Avance[]; visualBudget: VisualBudget; visualScope?: string; readVisual?: (file: string) => Promise<string>; openVisual?: (file: string) => Promise<void> }) {
+  return <Index each={props.avance.filter(chunk => chunk.outside)}>{(chunk) => <>
+    <Show when={textoVisible(chunk().msg.text)}>{(text) => <TextoConSiguientes texto={text()} vivo={false} rapida={null} readVisual={props.readVisual} openVisual={props.openVisual} owner={props.visualScope ?? ""} visualBudget={props.visualBudget} />}</Show>
+    <Show when={chunk().msg.historyRefs?.length}><HistoryDetails refs={chunk().msg.historyRefs!} turnId={chunk().msg.turno} /></Show>
+    <Show when={chunk().msg.images?.length ? chunk().msg.images : null}>{(images) => <ImagenesEntregadas items={images()} />}</Show>
+  </>}</Index>;
 }
 
 function TrabajoDeAgente(props: {
@@ -3843,23 +3838,18 @@ function TrabajoDeAgente(props: {
   pasos: Paso[];
   avance: Avance[];
   msg: Msg;
-  respuestas: Respuesta[] | null;
+  respuestas: (msg: Msg) => Respuesta[] | null;
   /** Si este turno es el que está corriendo ahora mismo. */
   vivo: boolean;
   /** El estado del turno manda incluso si falta el cierre de una herramienta. */
   corriendo: boolean;
+  animando: boolean;
   /** Si ESTE turno tiene su registro desplegado. Ver `trabajos` en `Chat`. */
   abiertoElTrabajo: boolean;
   onAlternarTrabajo: () => void;
-  /** Si el razonamiento de ESTE mensaje está desplegado. Ver `razonamientos`. */
-  razonamientoAbierto: boolean;
-  onAlternarRazonamiento: () => void;
-  /** Lo mismo para las ráfagas que quedaron dentro del pliegue de trabajo. */
-  razonamientoDeTramo: (i: number) => boolean;
-  onAlternarRazonamientoDeTramo: (i: number) => void;
   /** Si las preguntas de ESTE turno están desplegadas. Nacen abiertas. */
-  preguntasAbiertas: boolean;
-  onAlternarPreguntas: () => void;
+  preguntasAbiertas: (msg: Msg) => boolean;
+  onAlternarPreguntas: (msg: Msg) => void;
   /** Solo se ofrece si el turno trae rango de código (`msg.code`). */
   onVerCambios?: () => void;
   /** El agente dueño del turno, cuando el mensaje no lo trae. */
@@ -3886,7 +3876,7 @@ function TrabajoDeAgente(props: {
    * «Trabajo» que al desplegarse no enseña nada.
    */
   const tieneRegistro = () =>
-    props.pasos.length > 0 || props.avance.length > 0 || props.msg.duration_ms !== undefined;
+    props.pasos.length > 0 || props.avance.length > 0 || Boolean(props.msg.razonamiento?.length) || props.corriendo || props.msg.duration_ms !== undefined;
   const duracion = () =>
     props.msg.duration_ms === undefined
       ? null
@@ -3902,39 +3892,27 @@ function TrabajoDeAgente(props: {
           duracion={duracion()}
           abierto={props.abiertoElTrabajo}
           onAlternar={props.onAlternarTrabajo}
-          razonamientoDeTramo={props.razonamientoDeTramo}
-          onAlternarRazonamientoDeTramo={props.onAlternarRazonamientoDeTramo}
+          razonamiento={props.msg.razonamiento}
+          animando={props.animando}
           onVerCambios={props.msg.code?.length ? props.onVerCambios : undefined}
         />
       </Show>
 
-      {/* Lo pensado va entre el trabajo y la respuesta: se lee como lo que
-          llevó a contestar, sin parecer la contestación. */}
-      <Show when={props.msg.razonamiento?.length ? props.msg.razonamiento : null}>
-        {(bloques) => (
-          <Reasoning
-            bloques={bloques()}
-            vivo={props.vivo && !texto()}
-            turnoActivo={props.vivo}
-            abierto={props.razonamientoAbierto}
-            onAlternar={props.onAlternarRazonamiento}
-          />
-        )}
-      </Show>
+      <RespuestasDeAvance avance={props.avance} visualBudget={props.visualBudget} visualScope={props.visualScope} readVisual={props.readVisual} openVisual={props.openVisual} />
 
       {/* Entre el registro y la respuesta, que es donde ocurrió: el
           agente preguntó a mitad del turno, por debajo de lo que hizo
           hasta entonces y por encima de lo que contestó con la respuesta
           ya en la mano. Fuera del pliegue — ver la cabecera de
           `RegistroPreguntas`. */}
-      <Show when={props.msg.preguntas?.length}>
-        <RegistroPreguntas
-          items={props.msg.preguntas!}
-          respuestas={props.respuestas}
-          abierta={props.preguntasAbiertas}
-          onAlternar={props.onAlternarPreguntas}
-        />
-      </Show>
+      <Index each={[...props.avance.map(chunk => chunk.msg), props.msg].filter(message => message.preguntas?.length)}>
+        {(message) => <RegistroPreguntas
+          items={message().preguntas!}
+          respuestas={props.respuestas(message())}
+          abierta={props.preguntasAbiertas(message())}
+          onAlternar={() => props.onAlternarPreguntas(message())}
+        />}
+      </Index>
 
       {/* Envuelto para que no encoja mientras el turno vive. El markdown
           se reparsea con cada token: una negrita sin cerrar se pinta
@@ -4027,10 +4005,7 @@ function claveDeBloque(i: string): string {
   return `bloque:${i}`;
 }
 
-/** El pliegue de una ráfaga que quedó dentro de un tramo de trabajo, por tramo. */
-function claveDeRazonamiento(fila: string, tramo: number): string {
-  return `${fila}:razonamiento:${tramo}`;
-}
+
 
 /** El mecanismo de preguntas no es una respuesta para la persona. */
 function textoVisible(texto: string) {

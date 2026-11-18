@@ -63,6 +63,7 @@ const rustSteps = [
 ];
 
 const steps = [
+  ["Live activity shares one disclosure without crossing known turn boundaries", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/chat-activity.test.ts")], root],
   ["Front modularization debt only decreases", process.execPath, [join(root, "scripts/guards/front-modularization.mjs")], root],
   ["Front modularization gates reject injected regressions", process.execPath, ["--test", join(root, "tests/unit/front-modularization.test.mjs")], root],
   ["Service capabilities are optional and versioned", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/web-service-capabilities.test.ts")], root],
