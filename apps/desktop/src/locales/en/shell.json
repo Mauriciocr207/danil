@@ -136,6 +136,7 @@
   "shell.workspaces.remove_confirm": "Remove {email} from this browser? Its workspaces stop showing here; nothing is deleted from the account.",
   "shell.workspaces.stale": "Saved list: the account could not be read",
   "shell.workspaces.hide": "Hide from the bar",
+  "shell.workspaces.add_hidden_state": "Add workspace. A hidden workspace: {state}",
   "shell.workspaces.hidden_title": "Hidden",
   "shell.workspaces.show": "Show {name} in the bar",
   "shell.sidebar.keep": "Keep it",
