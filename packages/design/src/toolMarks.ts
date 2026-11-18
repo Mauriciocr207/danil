@@ -107,12 +107,23 @@ for (const [id, keys] of Object.entries(ALIASES) as [ToolMarkId, readonly string
 /** Los sufijos que la gente agrega al declarar el servidor: `figma-escritorio` es Figma. */
 const SUFFIX = /([-_.](mcp|server|remote|local|cloud|host|desktop|escritorio|driver))+$/;
 
-/** Las formas en que se puede leer una clave: tal cual, sin sufijo y su primera palabra. */
+/**
+ * El prefijo de los conectores de claude.ai: `claude_ai_Google_Drive` es Drive.
+ * Sin quitarlo, la primera palabra es `claude` y ningún conector lleva marca.
+ */
+const CLAUDE_AI = /^claude[-_.]ai[-_.]/;
+
+/**
+ * Las formas en que se puede leer una clave: tal cual, con guiones en vez de
+ * guiones bajos (`google_drive` es `google-drive`), sin sufijo y su primera
+ * palabra.
+ */
 function keysOf(server: string) {
-  const base = server.trim().toLowerCase();
+  const base = server.trim().toLowerCase().replace(CLAUDE_AI, "");
+  const hyphen = base.replaceAll("_", "-");
   const bare = base.replace(SUFFIX, "");
   const first = base.split(/[^\p{L}\p{N}]+/u).filter(Boolean)[0] ?? base;
-  return [base, bare, first];
+  return [base, hyphen, bare, first];
 }
 
 /**
