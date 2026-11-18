@@ -6,8 +6,9 @@ import { HEADER_HEIGHT } from "../../lib/window";
 import type { SenderTask } from "../../lib/recipients";
 import { Button } from "../../ui/Button";
 import { asFailure, FailureNote } from "../../ui/Failure";
-import Sessions, { type SessionRow } from "../projects/Sessions";
+import Sessions, { readableSessionTitle, type SessionRow } from "../projects/Sessions";
 import { DelegatedSkeleton } from "./DelegatedSkeleton";
+import { DelegatedReference } from "./DelegatedReference";
 import { delegatedRailRows } from "./delegatedRail";
 import { type TaskTreeRow, taskDescendants } from "@terminus/tasks";
 import { taskPriority } from "@terminus/design";
@@ -55,18 +56,12 @@ export function DelegatedLaunch(props: {
   error?: unknown;
 }) {
   const row = () => props.rows.find(row => row.id === props.reference.task);
-  const referenceRow = (): SessionRow => ({
-    id: props.reference.task, folder: props.reference.folder, title: props.reference.title,
-    provider: props.reference.provider, model: props.reference.model ?? null, refs: [],
-    created_at: 0, updated_at: 0, turns: 0, parent: null, subagent: null,
-    esperando: false, stage: null, agent: null, parent_agent: null, chat_de_agente: false,
-  });
   return <div data-delegated-launch={props.reference.task} class="my-2 min-w-0 border-l border-border pl-2">
     <Show when={row() || !props.loading} fallback={<DelegatedSkeleton />}>
-      <DelegatedTaskList rows={[row() ?? referenceRow(), ...taskDescendants(props.rows, [row() ?? referenceRow()])]} list={props.list} readOnly={!row()} />
-      <Show when={!row()}><p class="m-0 px-2 pt-1 text-xs text-neutral-500">
-        {props.error ? t("chat.delegation.failed") : t("chat.delegation.unavailable")}
-      </p></Show>
+      <Show when={row()} fallback={<DelegatedReference id={props.reference.task} title={readableSessionTitle(props.reference.title)} provider={props.reference.provider} />}>
+        {(resolved) => <DelegatedTaskList rows={[resolved(), ...taskDescendants(props.rows, [resolved()])]} list={props.list} />}
+      </Show>
+      <Show when={!row() && props.error}><p class="m-0 px-2 pt-1 text-xs text-neutral-500">{t("chat.delegation.failed")}</p></Show>
     </Show>
   </div>;
 }

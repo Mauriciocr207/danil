@@ -63,6 +63,7 @@ const rustSteps = [
 ];
 
 const steps = [
+  ["Unresolved delegated references never fabricate task dates or native actions", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/delegated-reference.test.mjs")], root],
   ["Live activity shares one disclosure without crossing known turn boundaries", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/chat-activity.test.ts")], root],
   ["Turn activity keeps lifecycle provenance and known start epochs", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/thread-activity.test.ts")], root],
   ["Activity presentation follows observed updates and pending cancellation", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/activity-presentation.test.ts")], root],
