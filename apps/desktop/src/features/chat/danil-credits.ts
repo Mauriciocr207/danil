@@ -6,25 +6,22 @@ export const DANIL_CREDITS = Object.freeze({
   upstreamModelId: "deepseek/deepseek-v4.1-flash",
 } as const);
 
-/** El contrato completo y su esquema Zod pertenecen al BFF de Appv2. */
+/** El saldo ya validado para el contexto de la ventana. */
 export type DanilCreditsSource = {
-  readBalance: () => Promise<unknown>;
+  readBalance: (signal: AbortSignal) => Promise<number | null>;
   prepare?: (headers: Record<string, string>) => Promise<unknown>;
   subscribe?: (clear: () => void) => () => void;
   /** Abre la recarga en el navegador para la cuenta autenticada; sin ella no se ofrece. */
   recharge?: () => Promise<void>;
 };
 
-/** Proyección defensiva de los campos que muestra esta vista. */
-export function availableDanilCredits(value: unknown): number | null {
+/** Proyección del saldo de Treasury para la organización del workspace activo. */
+export function availableDanilCredits(value: unknown, organizationId: string): number | null {
   if (!value || typeof value !== "object") return null;
-  const reply = value as Record<string, unknown>;
-  const account = reply.account_id;
-  const identified = typeof account === "number" && Number.isSafeInteger(account) && account > 0;
-  if (!identified || reply.execution_available !== false || !reply.wallet) return null;
-  if (typeof reply.wallet !== "object") return null;
-  const wallet = reply.wallet as Record<string, unknown>;
-  if (typeof wallet.available_credits !== "number"
-    || !Number.isFinite(wallet.available_credits)) return null;
-  return wallet.available_credits;
+  const { organization_id, available } = value as { organization_id?: unknown; available?: unknown };
+  if (organization_id !== organizationId || !available || typeof available !== "object") return null;
+  const { currency, amount_micro } = available as { currency?: unknown; amount_micro?: unknown };
+  if (currency !== "MXN" || typeof amount_micro !== "string" || !/^(0|[1-9][0-9]{0,18})$/.test(amount_micro)) return null;
+  if (BigInt(amount_micro) > 9223372036854775807n) return null;
+  return Number(amount_micro) / 1_000_000;
 }

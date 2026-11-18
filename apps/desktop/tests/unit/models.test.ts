@@ -206,10 +206,10 @@ test("el proveedor gratuito sigue la lengua activa con la marca Danil", () => {
 
 import { availableDanilCredits, DANIL_CREDITS } from "../../src/features/chat/danil-credits.ts";
 
-const response = (available: number) => ({
-  account_id: 476,
-  wallet: { balance_credits: 120, available_credits: available, status: "active" },
-  execution_available: false,
+const billingOrg = "org_test";
+const response = (amount: unknown, currency = "MXN") => ({
+  organization_id: billingOrg,
+  available: { currency, amount_micro: amount },
 });
 
 test("Danil Credits conserva el ejecutor y el modelo que anuncia el engine", () => {
@@ -227,19 +227,19 @@ test("Danil Credits conserva el ejecutor y el modelo que anuncia el engine", () 
   assert.equal(opcionesDeModelos([surface], {}).length, 0);
 });
 
-test("the account wallet uses available credit and preserves a verified zero", () => {
-  assert.equal(availableDanilCredits(response(80)), 80);
-  assert.equal(availableDanilCredits(response(0)), 0);
-  assert.equal(availableDanilCredits({ ...response(80), account_id: "476" }), null);
-  assert.equal(availableDanilCredits({ ...response(0), wallet: null }), null);
+test("Treasury credits use the active organization and preserve a verified zero", () => {
+  assert.equal(availableDanilCredits(response("1000000000"), billingOrg), 1000);
+  assert.equal(availableDanilCredits(response("1205000"), billingOrg), 1.205);
+  assert.equal(availableDanilCredits(response("0"), billingOrg), 0);
+  assert.equal(availableDanilCredits(response("1000000"), "org_other"), null);
 });
 
 test("missing, failed or incompatible balance data never becomes zero", () => {
   for (const value of [undefined, null, {}, { balance: 99 },
-    { ...response(1), account_id: "" }, response(NaN), response(Infinity),
-    { ...response(1), execution_available: true },
-    { ...response(1), wallet: { available_credits: "20", status: "active" } }]) {
-    assert.equal(availableDanilCredits(value), null);
+    response(1), response("01"), response("-1"), response("1e3"),
+    response("9223372036854775808"), response("1", "USD"),
+    { ...response("0"), available: null }]) {
+    assert.equal(availableDanilCredits(value, billingOrg), null);
   }
   assert.equal(DANIL_CREDITS.modelId, "danil-credits/deepseek/deepseek-v4.1-flash");
   assert.equal(DANIL_CREDITS.upstreamModelId, "deepseek/deepseek-v4.1-flash");

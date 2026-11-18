@@ -82,6 +82,45 @@ test("Danil Credits shows its balance without a model, a payer or a fabricated a
 });
 
 
+test("Desktop reads the shared Treasury balance for linked workspaces", async () => {
+  const foundation = { ...W, id: "foundation", name: "Danil Foundation" };
+  const personal = { ...W, id: "personal", name: "Personal" };
+  let active = W.id;
+  let creditsReads = 0;
+  const { app, panel } = await open("ai-providers-treasury-balance", [], {
+    list_workspaces: () => ({ workspaces: [W, foundation, personal], active }),
+    danil_edge_fetch: ({ method, path }) => {
+      if (method === "GET" && path === "/v1/workspaces") return {
+        status: 200,
+        body: { items: [W, foundation].map(({ id, name }) => ({ id, name, org: "org_danil", engine_workspace_id: id })) },
+      };
+      if (method === "GET" && path === "/v1/credits/balance") {
+        creditsReads++;
+        return { status: 200, body: { organization_id: "org_danil", available: { currency: "MXN", amount_micro: "1000000000" } } };
+      }
+      return { status: 404, body: { code: "not_found" } };
+    },
+  });
+  try {
+    const status = () => panel().querySelector('[aria-label="Danil Credits"] [role="status"]').textContent;
+    assert.equal(status(), "1000 créditos");
+    active = foundation.id;
+    app.w.dispatchEvent(new app.w.CustomEvent("harness:workspace"));
+    await sleep(300);
+    assert.equal(status(), "1000 créditos");
+    assert.ok(creditsReads >= 2);
+    const linkedReads = creditsReads;
+    active = personal.id;
+    app.w.dispatchEvent(new app.w.CustomEvent("harness:workspace"));
+    await sleep(300);
+    assert.equal(status(), "No disponible");
+    assert.equal(creditsReads, linkedReads);
+    assert.deepEqual(app.failures, []);
+  } finally {
+    app.w.close();
+  }
+});
+
 test("the task selector leaves Credits unavailable without preparing the retired pilot", async () => {
   const id = "danil-credits/deepseek/deepseek-v4.1-flash";
   const provider = "opencode";

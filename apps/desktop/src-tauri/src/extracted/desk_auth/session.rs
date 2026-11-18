@@ -168,6 +168,7 @@ pub(crate) fn allowed(method: &str, path: &str) -> bool {
             | ("GET", "/v1/identity/me")
             | ("GET", "/v1/identity/organizations")
             | ("POST", "/v1/identity/organizations/select")
+            | ("GET", "/v1/credits/balance")
             | ("GET", "/v1/workspaces")
             | ("POST", "/v1/workspaces/select")
             | ("GET", "/v1/workspaces/preferences")

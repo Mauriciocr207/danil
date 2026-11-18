@@ -1,26 +1,26 @@
 import { createEffect, createResource, createSignal, onCleanup } from "solid-js";
 import { t } from "../../lib/i18n";
 import { capabilities } from "../../lib/platform";
-import { availableDanilCredits } from "./danil-credits";
+import { desktopCredits } from "./danil-credits-desktop";
 
-/** Saldo leído de la capacidad; un saldo desconocido se muestra como tal, nunca como cero. */
 export function createDanilCreditsBalance() {
   const [revision, setRevision] = createSignal(0);
+  const source = () => capabilities().danilCredits ?? (capabilities().nativeWindow ? desktopCredits : undefined);
   createEffect(() => {
-    const off = capabilities().danilCredits?.subscribe?.(() => setRevision((value) => value + 1));
-    if (off) onCleanup(off);
+    const stop = source()?.subscribe?.(() => setRevision((value) => value + 1));
+    if (stop) onCleanup(stop);
   });
+  let pending: AbortController | undefined;
+  onCleanup(() => pending?.abort());
   const [balance] = createResource(
-    () => {
-      const source = capabilities().danilCredits;
-      return source ? { source, revision: revision() } : undefined;
-    },
-    async ({ source }) => {
-      try { return availableDanilCredits(await source.readBalance()); }
-      catch { return null; }
+    () => source() && { source: source()!, revision: revision() },
+    ({ source }) => {
+      pending?.abort();
+      pending = new AbortController();
+      return source.readBalance(pending.signal).catch(() => null);
     },
   );
-  const amount = () => (balance.loading ? undefined : balance() ?? null);
+  const amount = () => !source() ? null : balance.loading ? undefined : balance() ?? null;
   const label = () => {
     const value = amount();
     if (value === undefined) return t("chat.services.loading");

@@ -5,12 +5,9 @@
  * Al iniciar o cerrar sesión (`danil-connect`) se vuelve a leer.
  */
 import { listenDanilConnectionChange } from "../../lib/danilConnectionEvents";
-import { cancelEdgeWrites, edgeFetch, onEdgeProblem } from "../../lib/edge";
+import { cancelEdgeWrites, edgeFetch, onEdgeProblem, ORGANIZATION_CHANGED } from "../../lib/edge";
 import { edgeOrganizationSource } from "./organization-edge";
 import { createOrganizationSelection, isOrganizationSelectionRequired, type OrganizationSelection } from "@terminus/computers";
-
-/** Evento de ventana tras cambiar de organización: quien guarde datos de la anterior los suelta. */
-export const ORGANIZATION_CHANGED = "danil:organization-changed";
 
 export function desktopOrganizations(): OrganizationSelection {
   const selection = createOrganizationSelection(
