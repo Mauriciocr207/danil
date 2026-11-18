@@ -87,16 +87,19 @@ test("Desktop reads the shared Treasury balance for linked workspaces", async ()
   const personal = { ...W, id: "personal", name: "Personal" };
   let active = W.id;
   let creditsReads = 0;
+  let organization = "org_danil";
+  const balance = (org) => ({ status: 200, body: { organization_id: org, available: { currency: "MXN", amount_micro: "1000000000" } } });
+  let reply = async () => balance("org_danil");
   const { app, panel } = await open("ai-providers-treasury-balance", [], {
     list_workspaces: () => ({ workspaces: [W, foundation, personal], active }),
     danil_edge_fetch: ({ method, path }) => {
       if (method === "GET" && path === "/v1/workspaces") return {
         status: 200,
-        body: { items: [W, foundation].map(({ id, name }) => ({ id, name, org: "org_danil", engine_workspace_id: id })) },
+        body: { items: [W, foundation].map(({ id, name }) => ({ id, name, org: organization, engine_workspace_id: id })) },
       };
       if (method === "GET" && path === "/v1/credits/balance") {
         creditsReads++;
-        return { status: 200, body: { organization_id: "org_danil", available: { currency: "MXN", amount_micro: "1000000000" } } };
+        return reply();
       }
       return { status: 404, body: { code: "not_found" } };
     },
@@ -115,6 +118,22 @@ test("Desktop reads the shared Treasury balance for linked workspaces", async ()
     await sleep(300);
     assert.equal(status(), "No disponible");
     assert.equal(creditsReads, linkedReads);
+
+    active = W.id;
+    app.w.dispatchEvent(new app.w.CustomEvent("harness:workspace"));
+    await sleep(300);
+    assert.equal(status(), "1000 créditos");
+
+    organization = "org_other";
+    let respond;
+    reply = () => new Promise((resolve) => { respond = resolve; });
+    app.w.dispatchEvent(new app.w.CustomEvent("danil:organization-changed"));
+    await sleep(100);
+    assert.equal(status(), "Cargando…");
+    assert.ok(respond, "the new organization triggered a balance read");
+    respond(balance("org_danil"));
+    await sleep(300);
+    assert.equal(status(), "No disponible");
     assert.deepEqual(app.failures, []);
   } finally {
     app.w.close();
