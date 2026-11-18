@@ -356,8 +356,7 @@ pub(super) fn request_context(
     let empty_reason = response
         .headers()
         .get("X-Danil-Empty-Reason")
-        .and_then(|h| h.to_str().ok())
-        .and_then(empty_reason);
+        .map(|h| h.to_str().ok().and_then(empty_reason).unwrap_or("unknown"));
     let discard = context.is_some() && !(200..300).contains(&status);
     Ok(Reply {
         status,
@@ -371,7 +370,7 @@ pub(super) fn request_context(
 
 pub(super) fn empty_reason(raw: &str) -> Option<&'static str> {
     if !(1..=64).contains(&raw.len()) || !raw.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
-        return None;
+        return Some("unknown");
     }
     Some(match raw {
         "organization_access_denied" => "organization_access_denied",
@@ -829,10 +828,9 @@ impl<V: Vault> Desk<V> {
         }
     }
 
-    /// Una llamada con el Bearer que conserva el status: solo un 401 se trata aquí
-    /// (renueva una vez y repite). Un 404 o un 501 llegan tal cual a quien llama.
-    /// Un segundo 401 cierra la sesión solo si lo da `identity`: el de otro servicio
-    /// (máquinas, operaciones, tickets) llega como status y la sesión sigue.
+    /// Un 401 fuerza un refresh y un solo reintento; red y 503 conservan la familia.
+    /// La cierran un refresh rechazado, `session_expired` repetido o un segundo 401
+    /// de `/sessions`; las demás familias no cambian.
     pub(crate) fn fetch(
         &self,
         method: &str,
@@ -855,28 +853,19 @@ impl<V: Vault> Desk<V> {
         let live = self.access()?;
         let reply = request_context(&url, method, Some(&live.access_token), body, key, context)?;
         self.finish_authenticated(&live, false)?;
-        if reply.status == 401 && path == "/v1/identity/sessions" {
-            return self
-                .finish_authenticated(&live, true)
-                .and(Err(Fail::NoSession));
-        }
         if reply.status != 401 || (context.is_some() && reply.code == Some("session_not_in_set")) {
             return Ok(reply);
         }
-        let live = match self.access_for(live.generation, Some(&live.access_token)) {
-            Ok(renewed) => renewed,
-            Err(_) if reply.code == Some("session_expired") => {
-                let _ = self.finish_authenticated(&live, true);
-                return Err(Fail::NoSession);
-            }
-            Err(fail) => return Err(fail),
-        };
+        let expired = reply.code == Some("session_expired");
+        let live = self.access_for(live.generation, Some(&live.access_token))?;
         let reply = request_context(&url, method, Some(&live.access_token), body, key, context)?;
         self.finish_authenticated(
             &live,
             reply.status == 401
                 && (reply.code == Some("session_expired")
-                    || (path.starts_with("/v1/identity/")
+                    || path == "/v1/identity/sessions"
+                    || (!expired
+                        && path.starts_with("/v1/identity/")
                         && !(context.is_some() && reply.code == Some("session_not_in_set")))),
         )?;
         Ok(reply)

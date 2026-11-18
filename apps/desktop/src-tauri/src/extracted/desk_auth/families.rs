@@ -42,8 +42,6 @@ struct Metadata {
     )]
     empty_reason: Option<String>,
     contexts: Vec<Context>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    retired_contexts: Vec<String>,
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Index {
@@ -338,7 +336,6 @@ impl<V: FamilyVault> Families<V> {
                 sub: profile["account"].as_str().map(str::to_owned),
                 email: profile["email"].as_str().map(str::to_owned),
                 empty_reason: None,
-                retired_contexts: Vec::new(),
                 contexts,
                 available_contexts: reply.body["available_contexts"].as_u64(),
             },
@@ -411,7 +408,6 @@ impl<V: FamilyVault> Families<V> {
                                     .filter(|c| {
                                         session::opaque_id(&c.context_id)
                                             && session::opaque_id(&c.org)
-                                            && !metadata.retired_contexts.contains(&c.context_id)
                                     })
                                     .take(20)
                                     .collect();
@@ -604,84 +600,81 @@ impl<V: FamilyVault> Families<V> {
         (self.changed)();
     }
     fn retire_context(&self, desk: &Arc<Desk<V>>, context: &str, reason: Option<&str>) {
-        let _mutation = lock(&self.mutations);
         let metadata = {
-            let mut set = lock(&self.set);
-            let Some(family) = set.families.iter_mut().find(|f| Arc::ptr_eq(&f.desk, desk)) else {
+            let set = lock(&self.set);
+            let Some(family) = set.families.iter().find(|f| Arc::ptr_eq(&f.desk, desk)) else {
                 return;
             };
-            let removed = family
-                .metadata
-                .contexts
-                .iter()
-                .find(|c| c.context_id == context)
-                .cloned();
-            family.metadata.contexts.retain(|c| c.context_id != context);
-            if !family
-                .metadata
-                .retired_contexts
-                .iter()
-                .any(|id| id == context)
-            {
-                family.metadata.retired_contexts.push(context.to_owned());
-            }
-            let metadata = family.metadata.clone();
-            if reason == Some("organization_access_denied") {
-                if let Some(removed) = removed {
-                    set.removed.push(json!({"context_id":removed.context_id,"org":removed.org,"reason":"organization_access_denied"}));
-                }
-            }
-            if set.default_context.as_deref() == Some(context) {
-                set.default_context = None;
-                set.default_family = None;
-            }
-            self.persist(&set);
-            metadata
+            family.metadata.clone()
         };
         let refreshed = desk.fetch("GET", "/v1/identity/sessions", None, "");
-        match refreshed {
+        let reply = match refreshed {
             Err(Fail::NoSession) => {
                 self.retire_family(desk);
                 return;
             }
-            Ok(reply) if reply.status == 401 => {
-                self.retire_family(desk);
-                return;
-            }
-            Ok(reply) if reply.status == 200 => {
-                if let Some(items) = reply.body["items"].as_array() {
-                    let item = items
-                        .iter()
-                        .find(|i| {
-                            metadata
-                                .session_id
-                                .as_deref()
-                                .is_some_and(|id| i["session_id"] == id)
-                        })
-                        .or_else(|| (items.len() == 1).then(|| &items[0]));
-                    if let Some(item) = item {
-                        if let Ok(mut contexts) =
-                            serde_json::from_value::<Vec<Context>>(item["contexts"].clone())
-                        {
-                            contexts.retain(|c| {
-                                c.context_id != context
-                                    && !metadata.retired_contexts.contains(&c.context_id)
-                                    && session::opaque_id(&c.context_id)
-                                    && session::opaque_id(&c.org)
-                            });
-                            let mut set = lock(&self.set);
-                            if let Some(family) =
-                                set.families.iter_mut().find(|f| Arc::ptr_eq(&f.desk, desk))
-                            {
-                                family.metadata.contexts = contexts.into_iter().take(20).collect();
-                            }
-                            self.persist(&set);
-                        }
-                    }
-                }
-            }
-            _ => {}
+            Ok(reply) if reply.status == 200 => reply,
+            _ => return,
+        };
+        let Some(items) = reply.body["items"].as_array() else {
+            return;
+        };
+        let item = items
+            .iter()
+            .find(|i| {
+                metadata
+                    .session_id
+                    .as_deref()
+                    .is_some_and(|id| i["session_id"] == id)
+            })
+            .or_else(|| (items.len() == 1).then(|| &items[0]));
+        let Some(item) = item else {
+            return;
+        };
+        let Ok(contexts) = serde_json::from_value::<Vec<Context>>(item["contexts"].clone()) else {
+            return;
+        };
+        if contexts.iter().any(|c| c.context_id == context) {
+            return;
         }
+        let _mutation = lock(&self.mutations);
+        let mut set = lock(&self.set);
+        let Some(family) = set.families.iter_mut().find(|f| Arc::ptr_eq(&f.desk, desk)) else {
+            return;
+        };
+        let removed = family
+            .metadata
+            .contexts
+            .iter()
+            .find(|c| c.context_id == context)
+            .cloned();
+        family.metadata.contexts = contexts
+            .into_iter()
+            .filter(|c| session::opaque_id(&c.context_id) && session::opaque_id(&c.org))
+            .take(20)
+            .map(|mut c| {
+                if c.workspaces.is_none() {
+                    c.workspaces = family
+                        .metadata
+                        .contexts
+                        .iter()
+                        .find(|old| old.context_id == c.context_id)
+                        .and_then(|old| old.workspaces.clone());
+                }
+                c
+            })
+            .collect();
+        if reason == Some("organization_access_denied") {
+            if let Some(removed) = removed {
+                set.removed.push(json!({"context_id":removed.context_id,"org":removed.org,"reason":"organization_access_denied"}));
+            }
+        }
+        if set.default_context.as_deref() == Some(context) {
+            set.default_context = None;
+            set.default_family = None;
+        }
+        self.persist(&set);
+        drop(set);
         (self.changed)();
     }
     fn prune_duplicates(&self) {

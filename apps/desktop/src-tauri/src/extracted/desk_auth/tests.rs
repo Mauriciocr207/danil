@@ -96,6 +96,9 @@ fn answer(mut stream: TcpStream, handler: &Handler, seen: &Mutex<Vec<Req>>) {
         n
     };
     let (status, mut value) = handler(&req, n);
+    if status == 0 {
+        return;
+    }
     // `__location` en la respuesta simulada sale como cabecera `Location`.
     let location = value
         .as_object_mut()
