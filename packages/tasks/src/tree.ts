@@ -118,3 +118,23 @@ export function taskDescendants<T extends TaskTreeRow>(rows: readonly T[], roots
   }
   return [...unique.values()].filter((row) => included.has(taskIdentity(row)) && !seeds.has(taskIdentity(row)));
 }
+
+/**
+ * How many subtasks go with `row` when it is deleted, as the confirmation announces them. A native child
+ * (`parent`) is deleted alone, and the engine leaves pinned descendants out with their subtree.
+ */
+export function familySubtasks<T extends TaskTreeRow>(
+  branches: readonly TaskBranch<T>[], row: T, pinned: (row: T) => boolean,
+): number {
+  if (row.parent) return 0;
+  const count = (branch: TaskBranch<T>): number => branch.hijas.filter(h => !pinned(h.tarea)).reduce((n, h) => n + 1 + count(h), 0);
+  const find = (list: readonly TaskBranch<T>[]): TaskBranch<T> | undefined => {
+    for (const branch of list) {
+      if (taskIdentity(branch.tarea) === taskIdentity(row)) return branch;
+      const inner = find(branch.hijas);
+      if (inner) return inner;
+    }
+  };
+  const branch = find(branches);
+  return branch ? count(branch) : 0;
+}

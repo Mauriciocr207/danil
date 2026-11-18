@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Lo que trae el navegador al puerto local.
 #[derive(Debug, PartialEq, Eq)]
@@ -85,10 +85,26 @@ impl Pkce {
 
 /// Lee una petición del navegador; `Some((lo que trae, state))` si es `/callback`.
 fn callback(stream: &mut TcpStream) -> Option<(Returned, String)> {
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
     let mut buffer = [0u8; 8192];
-    let read = stream.read(&mut buffer).ok()?;
-    parse_request_line(&String::from_utf8_lossy(&buffer[..read]))
+    let mut length = 0;
+    while length < buffer.len() {
+        stream
+            .set_read_timeout(Some(deadline.checked_duration_since(Instant::now())?))
+            .ok()?;
+        let read = stream.read(&mut buffer[length..]).ok()?;
+        if read == 0 {
+            return None;
+        }
+        length += read;
+        if buffer[..length]
+            .windows(4)
+            .any(|bytes| bytes == b"\r\n\r\n")
+        {
+            return parse_request_line(&String::from_utf8_lossy(&buffer[..length]));
+        }
+    }
+    None
 }
 
 pub(crate) fn parse_request_line(head: &str) -> Option<(Returned, String)> {

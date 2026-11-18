@@ -748,6 +748,7 @@ const steps = [
   ["A reply with a visual does not vanish from chat even if the turn is not saved or the visual cannot be read", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/chat-turn-unsaved.test.mjs")], root],
   ["The new task's project picker opens with the 8 most recent and folds the rest under «More projects…»", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/project-picker-recent.test.mjs")], root],
   ["A project hidden from the picker goes last under «More projects…», comes back with «Show», and no task changes; the row counts active tasks only", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/project-picker-hidden.test.mjs")], root],
+  ["Deleting tasks asks to accept only the members with listed losses, offers accept all and resets the review on a new inspection", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/delete-task-dialog.test.mjs")], root],
   ["Automatic background delivery enters the live turn once, including legacy engines", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/chat-steer-once.test.mjs")], root],
   ["Rejected automatic background delivery preserves the queue and explicit interruption", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/chat-steer-refused.test.mjs")], root],
   ["Queue arrow and keyboard interrupt before sending after both ack and terminal", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/queue-force-send.test.mjs")], root],
