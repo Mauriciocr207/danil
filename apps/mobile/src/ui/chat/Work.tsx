@@ -6,7 +6,7 @@ import { type ComponentRef, type ReactNode, memo, useCallback, useEffect, useMem
 import { ActivityIndicator, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { OPENED, type Follow, type Metrics, measuredFollow, shouldStick } from "../../lib/follow";
 import { lang, t, w } from "../../lib/i18n";
-import { type Line, type Step, type StepRow, type WorkLine, type WorkRun, elapsed, fileName, hitOf, opensBody, rowAccessibilityLabel, runningStep, showsVerb, statusNamesStep, workFocus } from "../../lib/steps";
+import { type Line, type Step, type StepRow, type WorkLine, type WorkRun, elapsed, fileName, hitOf, opensBody, rowAccessibilityLabel, runningStep, showsVerb, statusCommandMark, statusNamesStep, workFocus } from "../../lib/steps";
 import type { WorkSheetState } from "../../lib/workSheet";
 import { ToolBrandMark } from "../BrandMark";
 import { Icon, type IconName } from "../Icon";
@@ -202,6 +202,7 @@ export function TurnStatus({ run, since, waiting, rowsVisible = false }: { run: 
   const step = runningStep(run);
   const label = step ? runningLabel(step) : null;
   const subject = step && label?.subject && statusNamesStep(step, rowsVisible) ? label.subject : null;
+  const mark = step && subject ? statusCommandMark(step, rowsVisible) : null;
   if (waiting) {
     return (
       <View style={styles.status} accessibilityRole="text" testID="turn-status">
@@ -214,6 +215,7 @@ export function TurnStatus({ run, since, waiting, rowsVisible = false }: { run: 
     <View style={styles.status} accessibilityRole="text" testID="turn-status">
       <View style={[styles.dot, { backgroundColor: theme.primary }]} />
       <Text style={[styles.statusText, { color: theme.textMuted, flexShrink: 0 }]}>{label?.origin ? `${label.origin.label} · ` : ""}{label ? label.verb : `${t("state.working")}…`}</Text>
+      {mark ? <View style={styles.icon} accessible accessibilityRole="image" accessibilityLabel={mark.label}><ToolBrandMark server={mark.mark} size={14} color={theme.textMuted} /></View> : null}
       {subject ? <Text numberOfLines={1} style={[styles.mono, { flexShrink: 1, color: theme.textMuted }]}>{subject}</Text> : null}
       {since !== null ? <Text style={[styles.duration, { color: theme.textMuted }]}>{`· ${formatDuration(elapsed(since, Math.max(now, Date.now())))}`}</Text> : null}
     </View>

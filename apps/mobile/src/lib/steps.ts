@@ -4,6 +4,7 @@
  * qué ejecutó) y la respuesta. Sin React Native: se prueba en Node.
  */
 import { bareCommand, classify, fileName, isQuestionFile, joinSteps, type StepKind } from "@terminus/chat/steps";
+import { commandSource, type CommandSource } from "@terminus/chat/tools";
 import type { HistoryRef, Turn, TurnTool } from "@terminus/protocol";
 import { quotaResolves, type QuotaChange, type TurnFailure } from "./failureNotice.ts";
 
@@ -63,6 +64,14 @@ export { bareCommand, classify, fileName };
  * «Ejecutando · 12s». Con el grupo plegado, en el chat, sí lo nombra.
  */
 export const statusNamesStep = (step: Step, rowsVisible: boolean) => !(rowsVisible && step.kind === "run");
+
+/**
+ * La marca que la línea de estado pone delante del comando que nombra: la
+ * misma tabla que las filas. `null` si la línea no lo nombra o si el programa
+ * no tiene marca; entonces no va ningún icono extra.
+ */
+export const statusCommandMark = (step: Step, rowsVisible: boolean): CommandSource | null =>
+  step.kind === "run" && statusNamesStep(step, rowsVisible) ? commandSource(step.target) : null;
 
 /**
  * Una fila de comando es su marca más el comando, **sin verbo visible**: el
