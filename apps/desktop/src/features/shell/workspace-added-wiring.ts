@@ -24,6 +24,11 @@ const ORGANIZATION_CHANGED = "danil:organization-changed";
 declare const __DANIL_WEB_API__: import("../../web/session-config").WebSessionDeployment | undefined;
 
 let web: AddedTransport | null = null;
+/** Lo que el riel lista (Desk y web), como evidencia de la siembra: en la web no hay índice del motor. */
+let railIds: () => readonly string[] = () => [];
+export function setRailShown(read: () => readonly string[]) {
+  railIds = read;
+}
 
 /** La web da su transporte de cookie antes de montar la ventana: el crudo, para que un 403 de organización no abra el selector. */
 export function setAddedSyncWeb(send: WebSend) {
@@ -87,7 +92,7 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
     scope,
     available,
     // Lo que el riel pintaba en este equipo: su orden guardado y el índice del motor.
-    shown: () => new Set([...leerPref<string[]>("workspaces.order", []), ...(capabilities().railWorkspaces?.() ?? []).map((w) => w.id)]),
+    shown: () => new Set([...leerPref<string[]>("workspaces.order", []), ...(capabilities().railWorkspaces?.() ?? []).map((w) => w.id), ...railIds()]),
     hidden,
     onSeeded,
     onChange: () => bump((n) => n + 1),

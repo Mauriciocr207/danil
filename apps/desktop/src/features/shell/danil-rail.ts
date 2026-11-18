@@ -1,7 +1,7 @@
 import { createEffect } from "solid-js";
 import type { DanilMenu } from "./DanilAddMenu";
 import { railHidden, railVisible } from "./hidden-workspaces.ts";
-import { type DanilRail, danilRail } from "./workspace-added-wiring.ts";
+import { type DanilRail, danilRail, setRailShown } from "./workspace-added-wiring.ts";
 
 export type DanilView = { available: readonly { id: string; name: string }[] | null; added: ReadonlySet<string> | null };
 
@@ -56,7 +56,13 @@ export function openOnStart(list: readonly { id: string }[], open: string | null
 
 export function columnDanil(hidden: { ids: () => ReadonlySet<string>; show: (id: string) => void }, ws?: { lista: () => readonly { id: string }[] | null; activo: () => string | null; cambiarA: (id: string) => unknown }) {
   const danil = danilRail(hidden.ids, (ids) => ids.forEach(hidden.show));
-  const view = (): DanilView => ({ available: danil.available(), added: danil.added() });
+  if (ws) setRailShown(() => (ws.lista() ?? []).map((w) => w.id));
+  const view = (): DanilView => {
+    const available = danil.available();
+    // Sin agregados conocidos (cuenta sin evidencia), el riel muestra los de la organización, como antes.
+    const added = danil.added() ?? (available ? new Set(available.map((w) => w.id).filter((id) => !hidden.ids().has(id))) : null);
+    return { available, added };
+  };
   // Una sola vez, en cuanto se sabe: después, lo que la persona abre manda.
   let settled = false;
   createEffect(() => {
