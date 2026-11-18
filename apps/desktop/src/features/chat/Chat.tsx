@@ -43,6 +43,7 @@ import { sharedLazy } from "../../lib/sharedLazy";
 import { taskChatPresentation } from "./TaskChatPresentation";
 import type { OlderState } from "./history";
 import { createBlockKeys, estimateBlock } from "./threadRows";
+import type { TurnActivity } from "../../lib/turnActivity";
 import type { VirtualThreadApi } from "./VirtualThread";
 import { CHUNK, chunkAt, chunkIds, chunkOf, chunkStart, headChunk, tailChunk, type Lectura } from "./threadWindow";
 import { workLabel } from "../projects/branchLabel";
@@ -165,7 +166,7 @@ import Suggestions, { type Suggestion } from "./Suggestions";
 import LineaDeTiempo, { SUPERFICIE_DE_EJECUCION } from "./Timeline";
 import EstadoDelTurno from "./TurnStatus";
 import { ActivityDots } from "./ActivityDots";
-import { coalesceLiveActivity, visibleActivityMessages, type ActivityBlock, type ActivityChunk } from "./activityBlocks";
+import { coalesceLiveActivity, visibleActivityMessages, placeActivities, type PresentedActivityBlock, type ActivityChunk } from "./activityBlocks";
 import { WithMentions } from "./WithMentions";
 import { Interrupcion, LineaDeSistema, TraspasoDeProveedor, SiguioTrasElCupo } from "./components/thread/SystemMarkers";
 import { HoraDelTurno, LineaDeProveedor, BotonCopiar, CambioDeContexto } from "./components/thread/MessageDecorations";
@@ -389,7 +390,7 @@ export type PermissionDecision = {
 };
 
 /** Un bloque de la transcripción: un mensaje, o una tira de pasos plegable. */
-type Bloque = ActivityBlock<Msg>;
+type Bloque = PresentedActivityBlock<Msg>;
 type Avance = ActivityChunk<Msg>;
 
 type BloqueDeMensaje = Extract<Bloque, { tipo: "msg" }>;
@@ -441,6 +442,7 @@ export type ChatProps = {
    * la tarea nueva abre por donde iba la otra.
    */
   conversacion: string;
+  activities?: readonly TurnActivity<Msg>[];
   /** Una tarea que ya existe pero no tiene mensajes: se ve como «Nueva tarea». */
   sinEmpezar?: boolean;
   /** Dónde se dejó de leer la última vez que este hilo estuvo montado. */
@@ -1590,6 +1592,7 @@ export default function Chat(props: ChatProps) {
    * El turno que no cerró se queda fuera: un fallo es lo único de esa
    * tira que cambia lo que hay que hacer después, no entra en nada plegable.
    */
+  const activityOwners = createMemo(() => new Map((props.activities ?? []).flatMap(activity => activity.messages.map(message => [message, activity] as const))));
   const bloques = createMemo<Bloque[]>(() => {
     const out: Bloque[] = [];
     props.msgs.forEach((m, i) => {
@@ -1604,6 +1607,12 @@ export default function Chat(props: ChatProps) {
       // DENTRO de la pregunta que contesta, que es donde se lee lo que se
       // preguntó y lo que se decidió como una sola cosa.
       if (m.respuestas?.length) return;
+      if (activityOwners().has(m) && m.role === "agent") {
+        if (m.text || m.preguntas?.length || m.images?.length || m.historyRefs?.length || m.artefactos?.length)
+          out.push({ tipo: "trabajo", pasos: [], msg: m, i, responseOnly: true });
+        return;
+      }
+      if (activityOwners().has(m) && (m.paso || m.permission || (m.role === "system" && m.meta === "usó"))) return;
       // Terminus ya no avisa en el chat que una tarea lanzada terminó; las
       // filas que quedaron guardadas de antes tampoco se pintan.
       if (m.meta === "task_completed") return;
@@ -1703,7 +1712,7 @@ export default function Chat(props: ChatProps) {
       else out.push({ tipo: "pasos", pasos: [paso], i });
     });
 
-    return coalesceLiveActivity(out, Boolean(props.busy));
+    return placeActivities(props.activities?.length ? out : coalesceLiveActivity(out, Boolean(props.busy)), props.activities ?? []);
   });
   const searchMessages = () => bloques().flatMap((block, index) => {
     const messages = visibleActivityMessages(block).filter(message => ["user", "agent"].includes(message.role) && !message.shell && !message.permission);
@@ -1722,17 +1731,9 @@ export default function Chat(props: ChatProps) {
       at: typeof message.at === "number" ? message.at : undefined,
     }];
   });
-  // Presentation only: a completed row can remount while the transcript settles.
-  const activityLifecycle = createMemo(() => `${props.busy ? "1" : "0"}:${props.conversacion}`);
-  const activityCompletion = createMemo(on(activityLifecycle, (current, previous) => {
-    let available = current.startsWith("0:") && previous?.startsWith("1:") === true && previous.slice(2) === current.slice(2);
-    return { take: () => { const pending = Boolean(available); available = false; return pending; } };
-  }));
-  const lastActivity = createMemo(() => { const items = bloques(); for (let i = items.length - 1; i >= 0; i--) if (items[i].tipo !== "msg") return items[i]; return undefined; });
   const esLaTiraViva = (bloque: Bloque) => Boolean(props.busy) && bloque === bloques().at(-1);
   // Pasos que llegan tras la respuesta abren otro tramo, y el de la respuesta deja de correr.
   const registroCorre = (bloque: Bloque) => fromWork(bloque, (t) => esElVivo(t.msg), false) && esLaTiraViva(bloque);
-  const hasLiveActivity = () => { const last = bloques().at(-1); return Boolean(last && (registroCorre(last) || (esLaTiraViva(last) && pasosDe(last)))); };
 
   const clavesDeBloques = createBlockKeys();
   const claves = createMemo(on(() => props.conversacion, (conversacion, anterior) => {
@@ -1741,7 +1742,7 @@ export default function Chat(props: ChatProps) {
   const clavesDelHilo = createMemo(() => {
     claves();
     const lista = bloques();
-    const asignadas = clavesDeBloques.assign(lista.map((b) => props.msgs[b.i]?.clave ?? null));
+    const asignadas = clavesDeBloques.assign(lista.map((b) => b.activity ? `activity:${b.activity.key}` : props.msgs[b.i]?.clave ?? null));
     // Por clave y no por índice: al anteponer, un índice viejo sobre los bloques nuevos es otra fila y su contenido se rehace.
     return { lista: asignadas, deBloque: new Map(lista.map((b, k) => [b, asignadas[k]])), deClave: new Map(lista.map((b, k) => [asignadas[k], b])) };
   });
@@ -1775,7 +1776,7 @@ export default function Chat(props: ChatProps) {
     const renombradas = clavesDeBloques.takeRenames();
     if (renombradas.length) heredarPliegues(renombradas);
   });
-  const claveFila = (b: Bloque) => claveDeBloque(props.msgs[b.i]?.clave ?? clavesDelHilo().deBloque.get(b) ?? String(b.i));
+  const claveFila = (b: Bloque) => claveDeBloque(b.activity ? `activity:${b.activity.key}` : props.msgs[b.i]?.clave ?? clavesDelHilo().deBloque.get(b) ?? String(b.i));
   const bloqueDeLectura = (lectura: Lectura) => {
     const at = clavesDelHilo().lista.indexOf(lectura.clave);
     return at < 0 ? null : at;
@@ -2055,20 +2056,6 @@ export default function Chat(props: ChatProps) {
 
   onMount(() => props.onSearchReady?.({ messages: searchMessages, thread: searchThread, jump: saltarAlMensaje, move: (delta) => hilo.escribir((elHilo?.scrollTop ?? 0) + delta, true) }));
   onCleanup(() => props.onSearchReady?.(null));
-
-  /**
-   * La herramienta que está corriendo ahora mismo, si hay una. Se busca
-   * desde el final y se para en la primera: los pasos se cierran
-   * emparejando por `id` (`App.tsx`), puede quedar más de uno abierto si
-   * un cierre se perdió, y el que importa es el último que salió.
-   */
-  const pasoVivo = createMemo(() => {
-    for (let i = props.msgs.length - 1; i >= 0; i--) {
-      const paso = props.msgs[i].paso;
-      if (paso?.corriendo) return paso;
-    }
-    return null;
-  });
 
   const respondido = createMemo(() => {
     const m = new Map<string, Respuesta[]>();
@@ -2954,6 +2941,21 @@ export default function Chat(props: ChatProps) {
               };
               return (
               <Switch>
+                <Match when={b().activity}>
+                  <div class="col-start-1 min-w-0" data-turn-activity-anchor={b().activity?.key}>
+                    <RegistroDeTrabajo
+                      pasos={activitySteps(b().activity)}
+                      razonamiento={b().activity?.messages.flatMap(message => message.razonamiento ?? []) ?? []}
+                      corriendo={b().activity?.active ?? false}
+                      animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.encendiendo}
+                      duracion={b().activity?.durationMs == null ? null : formatearDuracion(b().activity!.durationMs!)}
+                      abierto={Boolean(trabajos()[`activity:${b().activity?.key ?? ""}`])}
+                      onAlternar={(open) => setTrabajos({ ...trabajos(), [`activity:${b().activity?.key ?? ""}`]: open })}
+                      onVerCambios={props.onVerCambios}
+                      status={<Show when={b().activity?.active || (b().activity?.key === props.activities?.at(-1)?.key && (props.esperando || props.reintento || props.enFondo || props.encendiendo))}><EstadoDelTurno inline desde={b().activity?.startedAt ?? null} paso={null} esperando={props.esperando} reintento={props.reintento} enFondo={props.enFondo ?? false} encendiendo={props.encendiendo} /></Show>}
+                    />
+                  </div>
+                </Match>
                 <Match when={mensaje()?.msg.meta === "history_gap"}>
                   <div class="col-start-1 min-w-0 py-1 text-center text-xs text-neutral-500" data-history-gap>
                     {t("chat.history.gap")}{" "}
@@ -2964,6 +2966,7 @@ export default function Chat(props: ChatProps) {
                   {(trabajo) => (
                     <TrabajoDeAgente
                       searchBlock={indice()}
+                      responseOnly={b().responseOnly}
                       visualBudget={visualBudget}
                       visualScope={props.visualScope}
                       readVisual={props.readVisual}
@@ -2974,7 +2977,6 @@ export default function Chat(props: ChatProps) {
                       respuestas={(msg) => msg.turno ? respondido().get(msg.turno) ?? null : null}
                       vivo={fromWork(b(), (t) => esElVivo(t.msg), false)}
                       corriendo={registroCorre(b())}
-                      completion={b() === lastActivity() ? activityCompletion() : undefined}
                       animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.encendiendo}
                       abiertoElTrabajo={Boolean(trabajos()[claveFila(b())])}
                       onAlternarTrabajo={() => {
@@ -3016,7 +3018,6 @@ export default function Chat(props: ChatProps) {
                       pasos={pasosDe(b())?.pasos ?? []}
                       avance={pasosDe(b())?.avance}
                       corriendo={esLaTiraViva(b())}
-                      completion={b() === lastActivity() ? activityCompletion() : undefined}
                       animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.encendiendo}
                       abierto={trabajos()[claveFila(b())]}
                       onAlternar={(abierto) => {
@@ -3523,18 +3524,6 @@ export default function Chat(props: ChatProps) {
               />
             )}
           </Show>
-          <Show when={(props.busy || props.encendiendo) && !props.terminal && !props.permission && (props.encendiendo || props.esperando || props.reintento || props.enFondo || !hasLiveActivity())}>
-            <div class="col-start-1 min-w-0">
-              <EstadoDelTurno
-                encendiendo={props.encendiendo ?? null}
-                paso={pasoVivo()}
-                esperando={props.esperando}
-                reintento={props.reintento}
-                enFondo={props.enFondo ?? false}
-                desde={props.inicioDelTurno}
-              />
-            </div>
-          </Show>
           <div
             class="col-span-full"
             aria-hidden="true"
@@ -3680,12 +3669,18 @@ const FILA_DEL_TRAMO =
  * (`RegistroPreguntas`) queda fuera. Lo que cambió no se pinta en el hilo:
  * «Editó N archivos» abre el panel de la tarea en «Cambios».
  */
+function activitySteps(activity: TurnActivity<Msg> | undefined): Paso[] {
+  return activity?.messages.flatMap(message => message.permission
+    ? [pasoDePermiso(message.permission.tool, message.permission.target ?? null, message.permission.allow, message.encargado ?? message.fromTask?.title)]
+    : message.paso ? [message.paso] : message.role === "system" && message.meta === "usó" ? [pasoDe(message.text)] : []) ?? [];
+}
+
 function RegistroDeTrabajo(props: {
   pasos: Paso[];
   /** Lo que el turno hizo y dijo antes de su respuesta; se pliega con los pasos. */
   avance?: Avance[];
   corriendo: boolean;
-  completion?: { take: () => boolean };
+  status?: JSX.Element;
   duracion?: string | null;
   abierto?: boolean;
   onAlternar: (abierto: boolean) => void;
@@ -3716,7 +3711,7 @@ function RegistroDeTrabajo(props: {
       aria-hidden="true"
     />
   );
-  const girando = () => <ActivityDots active={props.corriendo} completion={props.completion} paused={props.animando === false} />;
+  const girando = () => <ActivityDots active={props.corriendo} paused={props.animando === false} />;
   const tiempo = () => (
     <Show when={duracion()}>
       <span class="pointer-events-none shrink-0 text-xs whitespace-nowrap text-neutral-500">{duracion()}</span>
@@ -3733,10 +3728,10 @@ function RegistroDeTrabajo(props: {
         fallback={<p class="m-0 mb-2 px-1 py-1.5 text-xs text-neutral-500">{duracion()}</p>}
       >
         <div class={cn("flex flex-wrap items-center gap-2", !desplegado() && "mb-2")}>
-          <Show when={!hasContent()}><span class={FILA_DEL_TRAMO}><span class="activity-label inline-flex min-w-0 items-center">{girando()}<span>{rotulo()}</span></span>{tiempo()}</span></Show>
+          <Show when={!hasContent()}><span class={FILA_DEL_TRAMO}><span class="activity-label inline-flex min-w-0 items-center">{girando()}<span>{rotulo()}</span></span>{props.status}{tiempo()}</span></Show>
           <Show when={hasContent()}>
             <button type="button" aria-expanded={desplegado()} aria-controls={panelId} onClick={() => props.onAlternar(!desplegado())} class={FILA_DEL_TRAMO}>
-              <span class="activity-label inline-flex min-w-0 items-center">{girando()}<span class="min-w-0 truncate" data-activity-label="">{rotulo()}</span></span>{tiempo()}{chevron()}
+              <span class="activity-label inline-flex min-w-0 items-center">{girando()}<span class="min-w-0 truncate" data-activity-label="">{rotulo()}</span></span>{props.status}{tiempo()}{chevron()}
             </button>
           </Show>
           <Show when={hasChanges()}>
@@ -3750,7 +3745,7 @@ function RegistroDeTrabajo(props: {
               {(tramo) => (
                 <>
                   <Show when={tramo().pasos.length > 0}>
-                    <LineaDeTiempo pasos={tramo().pasos}  />
+                    <LineaDeTiempo pasos={tramo().pasos} individual />
                   </Show>
                   {/* La fila de siempre y no prosa suelta: dentro del pliegue
                       una ráfaga sin su rótulo se lee como algo que el agente dijo. */}
@@ -3766,7 +3761,7 @@ function RegistroDeTrabajo(props: {
               )}
             </Index>
             <Show when={props.pasos.length > 0}>
-              <LineaDeTiempo pasos={props.pasos}  />
+              <LineaDeTiempo pasos={props.pasos} individual />
             </Show>
             <Show when={props.razonamiento?.length ? props.razonamiento : null}>{(blocks) => <Reasoning bloques={blocks()} />}</Show>
       <Index each={todos()}>
@@ -3799,6 +3794,7 @@ function TrabajoDeAgente(props: {
   readVisual?: (file: string) => Promise<string>;
   openVisual?: (file: string) => Promise<void>;
   searchBlock?: number;
+  responseOnly?: boolean;
   pasos: Paso[];
   avance: Avance[];
   msg: Msg;
@@ -3807,7 +3803,6 @@ function TrabajoDeAgente(props: {
   vivo: boolean;
   /** El estado del turno manda incluso si falta el cierre de una herramienta. */
   corriendo: boolean;
-  completion?: { take: () => boolean };
   animando: boolean;
   /** Si ESTE turno tiene su registro desplegado. Ver `trabajos` en `Chat`. */
   abiertoElTrabajo: boolean;
@@ -3840,8 +3835,8 @@ function TrabajoDeAgente(props: {
    * un turno que solo preguntó —sin un paso ni duración— abriría un
    * «Trabajo» que al desplegarse no enseña nada.
    */
-  const tieneRegistro = () =>
-    props.pasos.length > 0 || props.avance.length > 0 || Boolean(props.msg.razonamiento?.length) || props.corriendo || props.msg.duration_ms !== undefined;
+  const tieneRegistro = () => !props.responseOnly && (
+    props.pasos.length > 0 || props.avance.length > 0 || Boolean(props.msg.razonamiento?.length) || props.corriendo || props.msg.duration_ms !== undefined);
   const duracion = () =>
     props.msg.duration_ms === undefined
       ? null
@@ -3854,7 +3849,6 @@ function TrabajoDeAgente(props: {
           pasos={props.pasos}
           avance={props.avance}
           corriendo={props.corriendo}
-          completion={props.completion}
           duracion={duracion()}
           abierto={props.abiertoElTrabajo}
           onAlternar={props.onAlternarTrabajo}

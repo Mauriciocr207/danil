@@ -1,3 +1,4 @@
+import type { TurnActivity } from "../../lib/turnActivity.ts";
 import type { Paso } from "../../lib/steps.ts";
 
 type LiveMessage = { nativeMessageId?: string; turno?: string; duration_ms?: number; preguntas?: unknown[] };
@@ -26,4 +27,20 @@ export function coalesceLiveActivity<M extends LiveMessage>(blocks: ActivityBloc
 /** Only visible answers are searchable; historical explicit progress stays in its fold. */
 export function visibleActivityMessages<M>(block: ActivityBlock<M>): M[] {
   return [...(block.tipo === "msg" ? [] : block.avance?.filter(chunk => chunk.outside).map(chunk => chunk.msg) ?? []), ...(block.tipo === "pasos" ? [] : [block.msg])];
+}
+
+export type PresentedActivityBlock<M> = ActivityBlock<M> & { activity?: TurnActivity<M>; responseOnly?: boolean };
+/** Interleave a semantic activity anchor; response objects and their order never change. */
+export function placeActivities<M>(blocks: PresentedActivityBlock<M>[], activities: readonly TurnActivity<M>[]): PresentedActivityBlock<M>[] {
+  const pending = [...activities].sort((a, b) => a.anchorIndex - b.anchorIndex);
+  const result: PresentedActivityBlock<M>[] = [];
+  let next = 0;
+  for (const block of blocks) {
+    while (next < pending.length && pending[next].anchorIndex <= block.i) {
+      const activity = pending[next++]; result.push({ tipo: "pasos", pasos: [], i: activity.anchorIndex, activity });
+    }
+    result.push(block);
+  }
+  for (; next < pending.length; next++) { const activity = pending[next]; result.push({ tipo: "pasos", pasos: [], i: activity.anchorIndex, activity }); }
+  return result;
 }
