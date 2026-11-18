@@ -61,7 +61,7 @@ export default function AddWorkspaceMenu(props: {
         <Plus size={16} aria-hidden="true" />
         <Show when={waiting()}>{(s) => <Dynamic component={props.badge} state={s()} class="absolute -top-1 -right-1" />}</Show>
       </PopoverTrigger>
-      <PopoverContent role={step() === "menu" ? "menu" : undefined} class="w-64 p-1" onKeyDown={menuArrows}>
+      <PopoverContent role="menu" class="w-64 p-1" onKeyDown={menuArrows}>
         <Show
           when={step() === "menu"}
           fallback={<DanilStep danil={props.danil} query={query()} onQuery={setQuery} tasksOf={props.tasksOf} badge={props.badge} onClose={close} />}

@@ -211,3 +211,24 @@ test('changing organization does not mix lists', async () => {
   assert.deepEqual(list(d.sync.added()), [], 'org_B has no evidence: empty');
   assert.deepEqual(svc.rows.get('org_A')?.added, ['acme']);
 });
+
+test('regression: what the person adds or removes shows after a single round, without waiting for the next', async () => {
+  const svc = service();
+  svc.rows.set('org_A', { version: 1, added: ['acme'] });
+  let rounds = 0;
+  const d = device(svc, world());
+  const realGet = svc.transport.get;
+  svc.transport.get = async () => { rounds++; return realGet(); };
+  await d.sync.sync();
+  d.sync.add('labs');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await d.sync.sync();
+  assert.deepEqual(list(d.sync.added()), ['acme', 'labs']);
+  const before = rounds;
+  d.sync.remove('acme');
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  const settled = new Promise((resolve) => setTimeout(resolve, 20));
+  await settled;
+  assert.equal(rounds, before + 1, 'one round after the change');
+  assert.deepEqual(list(d.sync.added()), ['labs'], 'the removal is not undone by the read taken before it was uploaded');
+});

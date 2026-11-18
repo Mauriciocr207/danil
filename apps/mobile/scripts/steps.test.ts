@@ -401,3 +401,12 @@ test("una fila de comando: sin verbo visible, sin flecha y VoiceOver oye el coma
   assert.equal(opensBody(read), true, "las demás filas siguen abriéndose");
   assert.equal(rowAccessibilityLabel(read, "Leyó 2 archivos"), null);
 });
+
+test("la línea de estado no repite un comando cuya fila ya se ve", async () => {
+  const { statusNamesStep } = await import("../src/lib/steps.ts");
+  const run = { kind: "run" as const, name: "Bash", target: "git fetch --all --prune", ok: null, running: true };
+  assert.equal(statusNamesStep(run, true), false, "en la hoja de trabajo: «Ejecutando · 12s»");
+  assert.equal(statusNamesStep(run, false), true, "en el chat el grupo va plegado: la línea nombra el comando");
+  const read = { kind: "read" as const, name: "Read", target: "/a.ts", ok: null, running: true };
+  assert.equal(statusNamesStep(read, true), true, "la regla es solo de comandos");
+});
