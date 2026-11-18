@@ -1,16 +1,14 @@
 /**
  * Lo que Desk pide al borde `/v1` (contrato `mvp-v1`). El token nunca llega
  * aquí: `danil_edge_fetch` lo pone en Rust, solo admite una lista cerrada de
- * rutas y contesta el status del borde tal cual. Un 404 o un 501 (la ruta aún
- * no existe), un 429 o un 503 se reintentan aquí solos, con backoff y la misma
- * `Idempotency-Key`, hasta que la ruta aparece.
+ * rutas. `edgeUntil` reintenta 404, 429, 501 y 503 con backoff e idempotencia.
  */
 import { invoke } from "./invoke.ts";
 
 export type Me = { id: string; name: string; state?: string; workspace: string | null; organizations: { id: string; name: string; type?: string; role?: string }[]; active_organization_id?: string | null };
 export type Organization = { id: string; name: string; plan: string; role: string };
 export type OrganizationList = { items: Organization[]; next_cursor: string | null; active_organization_id?: string | null };
-export type Workspace = { id: string; org?: string; name: string; role?: string };
+export type Workspace = { id: string; org?: string; name: string; role?: string; engine_workspace_id?: string };
 export type WorkspaceList = { items: Workspace[]; next_cursor: string | null; empty_reason?: string; active_workspace_id?: string | null };
 
 export type Patience = {
@@ -22,6 +20,8 @@ export type Patience = {
   retryBudgetMs?: number;
 };
 
+/** Invalida las lecturas al cambiar la organización de la sesión. */
+export const ORGANIZATION_CHANGED = "danil:organization-changed";
 const CEILING_MS = 60_000;
 let context = new AbortController();
 

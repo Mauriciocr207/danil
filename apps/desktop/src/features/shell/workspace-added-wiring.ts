@@ -9,7 +9,7 @@
 import type { OrganizationSelection } from "@terminus/computers";
 import type { Listed } from "@terminus/fleet";
 import { createEffect, createMemo, createRoot, createSignal, on } from "solid-js";
-import { edgeFetch } from "../../lib/edge.ts";
+import { edgeFetch, ORGANIZATION_CHANGED } from "../../lib/edge.ts";
 import { capabilities } from "../../lib/platform.ts";
 import { escribirPref, leerPref } from "../../lib/prefs.ts";
 import { listen } from "../../lib/serviceEvents.ts";
@@ -17,9 +17,6 @@ import { platformTransport } from "../../web/platform-session.ts";
 import { danilAvailable, danilMachines, readDanil } from "../machines/index.ts";
 import { type AddedTransport, createAddedSync } from "./workspace-added-sync.ts";
 import { ADDED_KEY, edgeAddedTransport, prefsAddedStore, type WebSend, webAddedTransport } from "./workspace-added-transport.ts";
-
-/** `ORGANIZATION_CHANGED` de `organization-desktop.ts`; el literal evita cargar el selector antes de tiempo. */
-const ORGANIZATION_CHANGED = "danil:organization-changed";
 
 declare const __DANIL_WEB_API__: import("../../web/session-config").WebSessionDeployment | undefined;
 

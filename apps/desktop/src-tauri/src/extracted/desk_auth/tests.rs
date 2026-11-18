@@ -579,6 +579,7 @@ fn only_the_mvp_routes_are_callable() {
         ("GET", "/v1/identity/organizations"),
         ("POST", "/v1/identity/organizations/select"),
         ("GET", "/v1/workspaces"),
+        ("GET", "/v1/credits/balance"),
         ("POST", "/v1/workspaces/select"),
         ("GET", "/v1/machines"),
         ("GET", "/v1/machines/cmp_lvskjsw4bermfyqioznk5derth"),
@@ -590,6 +591,9 @@ fn only_the_mvp_routes_are_callable() {
     }
     for (m, p) in [
         ("GET", "/v1/messaging/conversations"),
+        ("POST", "/v1/credits/balance"),
+        ("GET", "/v1/credits/balance?organization=org_other"),
+        ("POST", "/v1/credits/inference"),
         ("GET", "/api/inbox/x"),
         ("POST", "/v1/identity/desk/confirm"),
         ("POST", "/v1/identity/desk/token"),
