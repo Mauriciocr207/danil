@@ -1,13 +1,12 @@
-import Plus from "lucide-solid/icons/plus";
 import SettingsIcon from "lucide-solid/icons/settings";
-import { children, createEffect, createSignal, For, type JSX, lazy, onCleanup, Show, Suspense } from "solid-js";
+import { children, createEffect, createSignal, For, type JSX, onCleanup, Show } from "solid-js";
 import { t } from "../../lib/i18n";
 import { createNavigationReorder } from "../../lib/navigation-order";
 import { KeyedList } from "../../ui/KeyedList";
 import { cn } from "../../lib/utils";
 import { capabilities, type OtherAccount, type OtherWorkspace } from "../../lib/platform";
 import { generacionDeLogo, urlDeLogo } from "./logo-src";
-import { ITEM_DE_MENU, Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "../../ui/Popover";
+import { ITEM_DE_MENU, Popover, PopoverAnchor, PopoverContent } from "../../ui/Popover";
 import { RETARDO_TOOLTIP, TooltipContent, TooltipRoot, TooltipTrigger } from "../../ui/Tooltip";
 import { taskLabel } from "../projects/TaskStatus";
 import { SignalDot, taskSignalTone } from "../../ui/SignalDot";
@@ -17,8 +16,8 @@ import { topState, type AttentionState, type WorkspaceAttention } from "./attent
 import KeepAwake from "./KeepAwake";
 import ProfileMenu from "./ProfileMenu";
 import { workspaceBar } from "./workspace-directory";
-
-const WorkspaceDirectoryMenu = lazy(() => import("./WorkspaceDirectoryMenu"));
+import AddWorkspaceMenu, { menuArrows } from "./AddWorkspaceMenu";
+import { createHiddenWorkspaces, keepSlots, railHidden, railVisible } from "./hidden-workspaces";
 
 /** Las iniciales de las dos primeras palabras; una sola palabra da una letra. */
 export function monogram(name: string) {
@@ -85,10 +84,11 @@ export default function WorkspaceColumn(props: {
   tools?: JSX.Element;
 }) {
   const ws = createRail();
-  // Con fijados, la barra muestra esos y el abierto; la persona cambia a cualquier otro desde el menú.
+  const hidden = createHiddenWorkspaces();
+  // Con fijados, la barra muestra esos y el abierto; los ocultos solo se ven mientras están abiertos.
   const visibles = () => {
     const bar = workspaceBar(ws.activo() ?? null);
-    return (ws.lista() ?? []).filter(w => !bar || bar.has(w.id));
+    return railVisible((ws.lista() ?? []).filter(w => !bar || bar.has(w.id)), hidden.ids(), ws.activo() ?? null);
   };
   let list: HTMLDivElement | undefined;
   const reorder = createNavigationReorder({
@@ -97,14 +97,14 @@ export default function WorkspaceColumn(props: {
     attribute: "data-workspace-tile",
     axis: "y",
     ids: () => visibles().map(w => w.id),
-    // Los que la barra no muestra conservan su lugar relativo, al final.
-    save: (ids) => ws.reorder([...ids, ...(ws.lista() ?? []).map(w => w.id).filter(id => !ids.includes(id))]),
+    // Los que la barra no muestra conservan su lugar.
+    save: (ids) => ws.reorder(keepSlots((ws.lista() ?? []).map(w => w.id), ids)),
   });
   const [menuOf, setMenuOf] = createSignal<string | null>(null);
   cerrarConEscape(() => menuOf() !== null, () => setMenuOf(null));
 
-  const stateOf = (id: string) =>
-    topState(props.attention.find((w) => w.workspace === id)?.tasks ?? []);
+  const tasksOf = (id: string) => props.attention.find((w) => w.workspace === id)?.tasks ?? [];
+  const stateOf = (id: string) => topState(tasksOf(id));
 
   const Tile = (p: { w: RailWorkspace }) => {
     const active = () => p.w.id === ws.activo();
@@ -179,6 +179,7 @@ export default function WorkspaceColumn(props: {
         <PopoverContent
           role="menu"
           class="w-56 p-1"
+          onKeyDown={menuArrows}
           onCloseAutoFocus={(e: Event) => {
             e.preventDefault();
             anchor?.focus();
@@ -195,6 +196,11 @@ export default function WorkspaceColumn(props: {
           >
             {t("settings.workspaces.manage")}
           </button>
+          <Show when={!active()}>
+            <button role="menuitem" class={ITEM_DE_MENU} onClick={() => (setMenuOf(null), hidden.hide(p.w.id))}>
+              {t("shell.workspaces.hide")}
+            </button>
+          </Show>
         </PopoverContent>
       </Popover>
     );
@@ -300,7 +306,16 @@ export default function WorkspaceColumn(props: {
           <AccountHeader id={accounts!.current.user_id} email={accounts!.current.email} extra={accounts!.current.extra} signedIn />
         </Show>
         <KeyedList each={visibles()} by={w => w.id}>{w => <Tile w={w()} />}</KeyedList>
-        <AddWorkspaceMenu />
+        <AddWorkspaceMenu
+          hidden={railHidden(ws.lista() ?? [], hidden.ids())}
+          open={ws.activo() ?? null}
+          tasksOf={tasksOf}
+          badge={AttentionBadge}
+          labelOf={(s) => taskLabel(s, true)}
+          onCreate={() => window.dispatchEvent(new CustomEvent("harness:new-workspace"))}
+          onOpen={(id) => void ws.cambiarA(id)}
+          onShow={hidden.show}
+        />
         <For each={others()}>
           {(account) => (
             <>
@@ -312,65 +327,6 @@ export default function WorkspaceColumn(props: {
       </div>
       <ColumnFoot tools={props.tools} onSettings={props.onSettings} onReportarBug={props.onReportarBug} />
     </nav>
-  );
-}
-
-/** El «+» del riel: crear uno nuevo o abrir el directorio para agregar uno existente. */
-function AddWorkspaceMenu() {
-  const [open, setOpen] = createSignal(false);
-  const [step, setStep] = createSignal<"menu" | "directory">("menu");
-  const close = () => {
-    setOpen(false);
-    setStep("menu");
-  };
-  return (
-    <Popover
-      open={open()}
-      onOpenChange={(value) => {
-        if (!value) setStep("menu");
-        setOpen(value);
-      }}
-      placement="right-start"
-      gutter={4}
-    >
-      <PopoverTrigger
-        type="button"
-        class="mt-1 grid size-8 shrink-0 place-items-center rounded-md border border-dashed border-neutral-500 text-neutral-500 outline-none hover:bg-neutral-200 hover:text-neutral-950 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-        aria-label={t("shell.workspaces.add")}
-        title={t("shell.workspaces.add")}
-      >
-        <Plus size={16} aria-hidden="true" />
-      </PopoverTrigger>
-      <PopoverContent role={step() === "menu" ? "menu" : undefined} class="w-64 p-1">
-        <Show
-          when={step() === "menu"}
-          fallback={
-            <Suspense fallback={null}>
-              <WorkspaceDirectoryMenu
-                onClose={close}
-              />
-            </Suspense>
-          }
-        >
-          <button
-            type="button"
-            role="menuitem"
-            class={ITEM_DE_MENU}
-            onClick={() => {
-              close();
-              window.dispatchEvent(new CustomEvent("harness:new-workspace"));
-            }}
-          >
-            {t("shell.workspaces.create")}
-          </button>
-          <Show when={capabilities().workspaceDirectory}>
-            <button type="button" role="menuitem" class={ITEM_DE_MENU} onClick={() => setStep("directory")}>
-              {t("shell.workspaces.add_existing")}
-            </button>
-          </Show>
-        </Show>
-      </PopoverContent>
-    </Popover>
   );
 }
 

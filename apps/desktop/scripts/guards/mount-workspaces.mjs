@@ -49,6 +49,32 @@ assert.equal(tile("w2").getAttribute("aria-label"), "Beta: Aquí dentro esperan 
 assert.equal(tile("w3").dataset.attention, "asked", "una pregunta gana a terminada sin ver");
 assert.ok(tile("w3").querySelector('.signal-dot[data-tone="warning"]'));
 assert.equal(tile("w4").dataset.attention, undefined, "un estado que la ventana no conoce no se pinta");
+const items = () => [...doc.querySelectorAll('[role="menuitem"]')].map((b) => b.textContent.trim());
+const add = () => doc.querySelector("[data-workspace-column] [data-add-workspace]");
+const escape = async () => { doc.activeElement?.dispatchEvent(new columnApp.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(80); };
+tile("w").dispatchEvent(new columnApp.w.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+await sleep(80);
+assert.ok(!items().includes("Ocultar de la barra"), "el abierto no se oculta");
+await escape();
+tile("w3").dispatchEvent(new columnApp.w.KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }));
+await sleep(80);
+[...doc.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent.trim() === "Ocultar de la barra").click();
+await sleep(80);
+assert.equal(tile("w3"), null, "ocultar lo quita del riel");
+assert.equal(columnApp.w.localStorage.getItem("harness.layout.workspaces.hidden"), '["w3"]');
+assert.equal(add().dataset.attention, "asked", "el «+» lleva lo más urgente de los ocultos");
+assert.ok(add().querySelector('[data-attention-badge="asked"]'));
+add().click();
+await sleep(100);
+const hiddenRow = doc.querySelector('[data-hidden-workspace="w3"]');
+assert.ok(hiddenRow?.querySelector('[data-attention-badge="asked"]'), "la fila del oculto lleva su distintivo");
+assert.equal(items()[0], "Crear workspace", "crear sigue arriba");
+hiddenRow.querySelector("[data-show-workspace]").click();
+await sleep(80);
+await escape();
+assert.deepEqual([...doc.querySelectorAll("[data-workspace-column] [data-workspace-tile]")].map((b) => b.textContent.trim()),
+  ["AC", "B", "GL", "D"], "mostrarlo lo devuelve a su lugar");
+assert.equal(add().dataset.attention, undefined, "sin ocultos el «+» queda como antes");
 const columnRow = (id) => doc.querySelector(`[data-sesion="${id}"]`);
 // La tarjeta del riel: sin ver es el punto verde; vista no lleva punto y se apaga.
 assert.ok(columnRow("s1").querySelector('[aria-label="Terminó y no la has abierto"] .task-card-badge .signal-dot[data-tone="success"]'), "la fila dice terminada sin ver");
