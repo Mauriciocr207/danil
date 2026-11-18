@@ -10,28 +10,32 @@ const acceptedInput = (message: Msg) => message.role === "user" && !message.perm
 
 /** Presentation position only: a captured input never grants ownership of saved responses. */
 export class ActivityAnchor {
-  private input: Msg | null;
-  private source: "cached" | "accepted" | "fresh" = "cached";
+  private input: Msg | null = null;
+  private hasAcceptedInput = false;
   private outputObserved = false;
   constructor(snapshot: readonly Msg[] | null) {
-    this.input = snapshot ? [...snapshot].reverse().find(acceptedInput) ?? null : null;
+    if (snapshot) this.reconcile(snapshot, false);
   }
   observe(message: Msg, previous?: Msg) {
     if (!acceptedInput(message)) { if (message.role !== "user") this.outputObserved = true; return; }
     if (this.input === previous || !this.outputObserved) {
       this.input = message;
-      this.source = "accepted";
+      this.hasAcceptedInput = true;
     }
   }
   reconcile(snapshot: readonly Msg[], prepend: boolean) {
-    if (prepend || this.source !== "cached") return;
-    const input = [...snapshot].reverse().find(acceptedInput);
-    if (input) { this.input = input; this.source = "fresh"; }
+    if (prepend || this.hasAcceptedInput) return;
+    for (let i = snapshot.length - 1; i >= 0; i--) {
+      if (acceptedInput(snapshot[i])) {
+        this.input = snapshot[i];
+        return;
+      }
+    }
   }
   inherit(other: ActivityAnchor) {
-    if (this.input) return;
+    if (this.hasAcceptedInput || (this.input && !other.hasAcceptedInput)) return;
     this.input = other.input;
-    this.source = other.source;
+    this.hasAcceptedInput = other.hasAcceptedInput;
     this.outputObserved ||= other.outputObserved;
   }
   before(visible: readonly Msg[]): Msg | undefined {

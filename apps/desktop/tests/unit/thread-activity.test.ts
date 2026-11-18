@@ -287,3 +287,23 @@ test("live output before recent history does not confirm a cached historical inp
   model.reconcile("A", "s", [user, answer], [oldUser, oldAnswer], false, true);
   assert.equal(model.project("A", "s", [oldUser, oldAnswer, user, answer, live])[0].anchor, answer);
 });
+
+test("revalidating cached history moves a recovered activity to its current input only while active", () => {
+  const model = createActivityProjection();
+  const cached = [message("old input", { role: "user" }), message("old answer")];
+  const user = message("current input", { role: "user" });
+  const answer = message("current answer");
+  const refreshed = [...cached, user, answer];
+  model.begin("A", "s", 1_000, cached);
+  model.reconcile("A", "s", cached, cached, false);
+  model.reconcile("A", "s", cached, refreshed, false);
+  const active = model.project("A", "s", refreshed)[0];
+  assert.equal(active.anchorIndex, 3);
+  assert.deepEqual(active.messages, []);
+  const live = message("live continuation");
+  model.observe("A", "s", [], [live]);
+  model.finish("A", "s");
+  const later = [...refreshed, live, message("next input", { role: "user" })];
+  model.reconcile("A", "s", refreshed, later, false);
+  assert.equal(model.project("A", "s", later)[0].anchor, answer);
+});
