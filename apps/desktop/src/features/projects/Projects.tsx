@@ -17,7 +17,8 @@ import { type Project, type Source } from "../../lib/model";
 import { lineaDeProcedencia, procedencia } from "../../lib/sourceOrigin";
 import { Badge } from "../../ui/Badge";
 import WorkdirIcon, { workdirKindLabel } from "../code/WorkdirIcon";
-import { byRecent, type PickedAt, recentProjects } from "./recent";
+import PickerRow from "./PickerRow";
+import { byRecent, type PickedAt, pickerSections, taskCountOf } from "./recent";
 
 /**
  * Con qué proyecto se trabaja, debajo de la caja y no en la cabecera: es una
@@ -42,6 +43,11 @@ export function ProjectPicker(props: {
   activity?: Record<string, number>;
   /** Última vez que se eligió cada proyecto aquí, en ms. */
   picked?: PickedAt;
+  /** Los que la persona apartó: van al final de «Más proyectos…», con «Mostrar». */
+  hidden?: ReadonlySet<string>;
+  onShow?: (id: string) => void;
+  /** Tareas activas (no archivadas) por proyecto; sin entrada, el número no se conoce y no se pinta. */
+  taskCounts?: Record<string, number>;
 }) {
   const [abierto, setAbiertoCrudo] = createSignal(false);
   const [busca, setBusca] = createSignal("");
@@ -56,15 +62,16 @@ export function ProjectPicker(props: {
   /** Sin acentos ni mayúsculas: buscar «administracion» encuentra la con tilde. */
   const plano = (s: string) =>
     s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
-  const recientes = () => recentProjects(props.projects, props.activity ?? {}, props.picked ?? {}, props.project);
-  // Con texto se busca en todo y sin corte.
+  const ocultos = () => props.hidden ?? new Set<string>();
+  const recientes = () => pickerSections(props.projects, props.activity ?? {}, props.picked ?? {}, ocultos(), props.project);
+  // Con texto se busca en todo, ocultos incluidos, y sin corte.
   const filtradas = () => {
     const q = plano(busca().trim());
     if (q) return byRecent(props.projects.filter((p) => plano(p.name).includes(q)), props.activity ?? {}, props.picked ?? {});
-    const { visible, rest } = recientes();
-    return todos() ? [...visible, ...rest] : visible;
+    const { visible, rest, hidden } = recientes();
+    return todos() ? [...visible, ...rest, ...hidden] : visible;
   };
-  const plegados = () => (busca().trim() || todos() ? 0 : recientes().rest.length);
+  const plegados = () => (busca().trim() || todos() ? 0 : recientes().rest.length + recientes().hidden.length);
   const sinNada = () => filtradas().length === 0;
 
   function elegir(id: string) {
@@ -125,23 +132,11 @@ export function ProjectPicker(props: {
 
             <For each={filtradas()}>
               {(p) => (
-                <button
-                  class={cn(ITEM_DE_MENU, "grid grid-cols-[14px_minmax(0,1fr)_auto] items-center gap-2")}
-                  onClick={() => elegir(p.id)}
-                >
-                  <WorkdirIcon kind={p.kind} cloud={p.cloud} size={13} class="text-neutral-500" />
-                  <span
-                    class={cn("truncate", p.sessions === 0 && "text-neutral-500")}
-                    title={workdirKindLabel(p.kind, p.cloud)}
-                  >
-                    {p.name}
-                  </span>
-                  <span class="text-caption whitespace-nowrap text-neutral-500">
-                    {p.sessions > 0
-                      ? t("projects.picker.tasks", { count: p.sessions })
-                      : t("projects.picker.no_tasks")}
-                  </span>
-                </button>
+                <PickerRow
+                  project={p} icon={<WorkdirIcon kind={p.kind} cloud={p.cloud} size={13} class="text-neutral-500" />}
+                  kindLabel={workdirKindLabel(p.kind, p.cloud)} tasks={taskCountOf(p, props.taskCounts)} hidden={ocultos().has(p.id)}
+                  onPick={() => elegir(p.id)} onShow={props.onShow && (() => props.onShow?.(p.id))}
+                />
               )}
             </For>
 

@@ -99,7 +99,7 @@ import { createdTasks } from "../features/projects/agentPageFilters";
 import BaseBranchPicker from "../features/projects/BaseBranchPicker";
 import { watchHandlerStatus, watchHandlerStatuses } from "../features/projects/handlerPresence";
 import { EmptyContext, ProjectPicker } from "../features/projects/Projects";
-import { activityByProject, type PickedAt, rememberPick } from "../features/projects";
+import { activeTaskCounts, activityByProject, type HiddenProjects, hiddenIn, type PickedAt, rememberPick, setHidden } from "../features/projects";
 import { bringHereLabel, canBringHere, carryOrigin, machineName, machineOf, machineWakes, machines, refetchMachines, remoteChildScope, runOn, senderTaskId, setRunOn, setTaskRowMachine } from "../features/machines/store";
 import { canonicalAgentId, isFreeRouterModel, lastActivity, launcherOf, OPENCODE, withRemoteLaunchers } from "@terminus/tasks";
 import type { CarriedBase, CarryCheck } from "../features/machines/carry";
@@ -459,6 +459,17 @@ export default function App() {
     if (!workspace || !id) return;
     const existentes = new Set([...projectList(), ...composerProjects()].map((p) => p.id));
     setProyectosElegidos({ ...proyectosElegidos(), [workspace]: rememberPick(elegidosAqui(), id, Date.now(), existentes) });
+  }
+  // Las tareas activas que la ventana ya cargó: el `sessions` del motor cuenta también las archivadas.
+  const tareasActivas = createMemo(() => activeTaskCounts(sesiones()));
+  // Apartados del selector, por workspace. Solo el selector los mira: ni el riel ni las tareas cambian.
+  const [proyectosOcultos, setProyectosOcultos] = createPref<HiddenProjects>("projects.hidden", {});
+  const ocultosAqui = createMemo(() => hiddenIn(proyectosOcultos(), workspaceActivo()));
+  function ocultarDelSelector(id: string, ocultar: boolean) {
+    const workspace = workspaceActivo();
+    if (!workspace || !id) return;
+    const existentes = [...projectList(), ...composerProjects()].map((p) => p.id);
+    setProyectosOcultos(setHidden(proyectosOcultos(), workspace, id, ocultar, existentes));
   }
   /**
    * Las tareas que la pantalla ya pinta y Rust todavía no ha escrito.
@@ -3738,6 +3749,8 @@ export default function App() {
     get onRemoveFromSpace() {
       return multipleSpaces() ? removeFromActiveSpace : undefined;
     },
+    hiddenInPicker: (id) => ocultosAqui().has(id),
+    onSetHiddenInPicker: (id, hide) => ocultarDelSelector(id, hide),
     onOpenMaterial: (id) => {
       cerrarAjustes();
       setMaterialPedido(id);
@@ -5930,6 +5943,9 @@ export default function App() {
           sources={sources()}
           activity={actividadDeProyectos()}
           picked={elegidosAqui()}
+          hidden={ocultosAqui()}
+          onShow={(id) => ocultarDelSelector(id, false)}
+          taskCounts={tareasActivas()}
           onPick={(id) => {
             recordarEleccion(id);
             elegirProyecto(id);
