@@ -55,6 +55,8 @@
   "danil.error.image_too_large": "La foto pesa más de 2 MB. Elige una más pequeña.",
   "danil.error.unsupported_image": "Esa foto no es PNG, JPEG ni WebP.",
   "danil.error.unauthorized": "Danil ya no acepta la credencial de esta computadora. Vuelve a iniciar sesión.",
+  "danil.error.account_conflict": "Este workspace ya pertenece a otra cuenta de Danil.",
+  "danil.error.invalid_account": "La cuenta de Danil de este workspace no es válida.",
   "danil.error.unsupported": "El servidor de Danil todavía no ofrece esto.",
   "danil.error.unavailable": "Danil no responde ahora. Vuelve a intentarlo en un momento.",
   "danil.status.expired_token": "El código venció antes de confirmarse. Inicia sesión de nuevo.",

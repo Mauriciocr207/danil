@@ -55,6 +55,8 @@
   "danil.error.image_too_large": "The photo is larger than 2 MB. Pick a smaller one.",
   "danil.error.unsupported_image": "That photo isn't PNG, JPEG or WebP.",
   "danil.error.unauthorized": "Danil no longer accepts this computer's credential. Sign in again.",
+  "danil.error.account_conflict": "This workspace already belongs to another Danil account.",
+  "danil.error.invalid_account": "This workspace's Danil account is not valid.",
   "danil.error.unsupported": "Danil's server doesn't offer this yet.",
   "danil.error.unavailable": "Danil is not answering right now. Try again in a moment.",
   "danil.status.expired_token": "The code expired before it was confirmed. Sign in again.",

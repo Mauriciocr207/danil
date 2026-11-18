@@ -3,37 +3,25 @@
  * Danil: con qué cuenta está, iniciar sesión y desvincularla (se confirma). Chunk aparte.
  */
 import "../../locales/danilPhrases";
-import { createEffect, createSignal, on, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, on, Show } from "solid-js";
 import { t } from "../../lib/i18n";
 import { Button } from "../../ui/Button";
 import { cn } from "../../lib/utils";
 import { isDanilWorkspace } from "../machines";
 import { createDanilAccounts, type DanilAccounts } from "./danil-accounts";
 import { said } from "./danil-session";
-import { changeProblem, connectedSessions, setWorkspaceAccount, syncLine } from "./danil-sessions";
+import { connectedSessions, syncLine } from "./danil-sessions";
 import { LICENSE_REQUIRED, requestAccessInBrowser, TerminusLicense } from "./TerminusLicense";
-
-type Mode = "idle" | "confirm-unlink";
 
 /** `placement`: `card` en Workspaces; `section` dentro de Cuenta de Danil. Un local nunca ofrece iniciar sesión. */
 export default function WorkspaceAccount(props: { workspace: string; name: string; placement?: "card" | "section"; onChanged?: (problem: string | null) => void; state?: DanilAccounts }) {
   const accounts = props.state ?? createDanilAccounts({ workspace: () => props.workspace });
-  let generation = 0;
-  onCleanup(() => {
-    generation++;
-  });
 
-  const [mode, setMode] = createSignal<Mode>("idle");
-  const [saving, setSaving] = createSignal(false);
   const [problem, setProblem] = createSignal<string | null>(null);
 
-  createEffect(on(() => props.workspace, () => {
-    generation++;
-    reset();
-  }, { defer: true }));
+  createEffect(on(() => props.workspace, () => reset(), { defer: true }));
 
   function reset() {
-    setMode("idle");
     setProblem(null);
   }
 
@@ -62,25 +50,6 @@ export default function WorkspaceAccount(props: { workspace: string; name: strin
     await accounts.add();
   }
 
-  async function unlink() {
-    const mine = ++generation;
-    setSaving(true);
-    setProblem(null);
-    try {
-      const result = await setWorkspaceAccount(props.workspace, null);
-      if (mine !== generation) return;
-      accounts.setOf(result);
-      props.onChanged?.(null);
-      reset();
-      void accounts.reload();
-    } catch (e) {
-      if (mine !== generation) return;
-      setProblem(changeProblem(null, e));
-    } finally {
-      if (mine === generation) setSaving(false);
-    }
-  }
-
   return (
     <Show when={accounts.sessions() && accounts.of()}>
       <div class={cn("grid gap-1 text-xs", props.placement !== "section" && "pl-[27px]")} data-workspace-account={line().kind}>
@@ -90,42 +59,11 @@ export default function WorkspaceAccount(props: { workspace: string; name: strin
         <p class="m-0 text-neutral-500" data-workspace-sync="">
           {lineText()}
         </p>
-        <Show
-          when={hasAccount()}
-          fallback={
-            <Show when={!signedIn().length && isDanilWorkspace(props.workspace)}>
-              <div class="flex flex-wrap items-center gap-2">
-                <Button size="sm" variant="outline" disabled={accounts.busy() || adding()} onClick={() => void signIn()}>
-                  {t("danil.account.sign_in")}
-                </Button>
-              </div>
-            </Show>
-          }
-        >
+        {/* El vínculo de cuenta lo retiró el motor (E1): sin cuenta, solo un workspace de Danil ofrece iniciar sesión. */}
+        <Show when={!hasAccount() && !signedIn().length && isDanilWorkspace(props.workspace)}>
           <div class="flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={saving() || accounts.busy()}
-              onClick={() => {
-                setProblem(null);
-                setMode("confirm-unlink");
-              }}
-              data-workspace-unlink=""
-            >
-              {t("danil.workspace.unlink")}
-            </Button>
-          </div>
-        </Show>
-
-        <Show when={mode() === "confirm-unlink"}>
-          <div class="flex flex-wrap items-center gap-2" data-workspace-leave="">
-            <span class="text-neutral-500">{t("danil.workspace.leave_confirm", { email: accounts.of()?.email || "" })}</span>
-            <Button size="sm" variant="secondary" disabled={saving()} onClick={() => void unlink()} data-workspace-leave-yes="">
-              {t("danil.workspace.unlink")}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setMode("idle")}>
-              {t("danil.workspace.leave_no")}
+            <Button size="sm" variant="outline" disabled={accounts.busy() || adding()} onClick={() => void signIn()}>
+              {t("danil.account.sign_in")}
             </Button>
           </div>
         </Show>
