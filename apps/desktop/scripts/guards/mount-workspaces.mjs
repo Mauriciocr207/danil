@@ -49,6 +49,8 @@ assert.equal(tile("w2").getAttribute("aria-label"), "Beta: Aquí dentro esperan 
 assert.equal(tile("w3").dataset.attention, "asked", "una pregunta gana a terminada sin ver");
 assert.ok(tile("w3").querySelector('.signal-dot[data-tone="warning"]'));
 assert.equal(tile("w4").dataset.attention, undefined, "un estado que la ventana no conoce no se pinta");
+assert.equal(doc.querySelector("[data-workspace-column] .danil-mark"), null, "sin organización ningún cuadro lleva la marca de Danil");
+assert.ok(!tile("w2").getAttribute("aria-label").includes("workspace de Danil"), "ni lo dice");
 const items = () => [...doc.querySelectorAll('[role="menuitem"]')].map((b) => b.textContent.trim());
 const add = () => doc.querySelector("[data-workspace-column] [data-add-workspace]");
 const escape = async () => { doc.activeElement?.dispatchEvent(new columnApp.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(80); };
@@ -73,7 +75,8 @@ add().click();
 await sleep(100);
 const hiddenRow = (id) => doc.querySelector(`[data-hidden-workspace="${id}"]`);
 assert.ok(hiddenRow("w3")?.querySelector('[data-attention-badge="asked"]'), "la fila del oculto lleva su distintivo");
-assert.equal(items()[0], "Crear workspace", "crear sigue arriba");
+assert.equal(items()[0], "Crear workspace local", "crear sigue arriba");
+assert.equal(doc.querySelector("[data-add-danil-step]"), null, "sin sesión no se ofrece «Agregar workspace»");
 const eye = (id) => hiddenRow(id).querySelector("[data-show-workspace]");
 eye("w3").focus();
 eye("w3").click();
@@ -84,7 +87,7 @@ assert.equal(doc.activeElement?.getAttribute("role"), "menuitem", "y las flechas
 eye("w4").focus();
 eye("w4").click();
 await sleep(80);
-assert.equal(doc.activeElement?.textContent.trim(), "Crear workspace", "sin ocultos, el foco queda en la primera fila");
+assert.equal(doc.activeElement?.textContent.trim(), "Crear workspace local", "sin ocultos, el foco queda en la primera fila");
 await escape();
 assert.deepEqual([...doc.querySelectorAll("[data-workspace-column] [data-workspace-tile]")].map((b) => b.textContent.trim()),
   ["AC", "B", "GL", "D"], "mostrarlos los devuelve a su lugar");
@@ -160,7 +163,7 @@ const setupRequests = [];
 soloApp.w.addEventListener("harness:new-workspace", () => setupRequests.push(1));
 d1.querySelector('[data-workspace-column] button[aria-label="Agregar workspace"]').click();
 await sleep(100);
-const createOne = [...d1.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent.trim() === "Crear workspace");
+const createOne = [...d1.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent.trim() === "Crear workspace local");
 assert.ok(createOne, "el «+» ofrece crear uno");
 createOne.click();
 await sleep(150);

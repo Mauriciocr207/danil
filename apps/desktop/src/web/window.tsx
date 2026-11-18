@@ -3,7 +3,7 @@ import { classOf, Fleet, relayLink, unwrap } from "@terminus/fleet";
 import { createRouter, type SliceChange } from "../features/machines/router";
 import { createSignal, lazy, Suspense } from "solid-js";
 import { leerPref } from "../lib/prefs";
-import { rememberMachineNames } from "../features/machines/known-names";
+import { machinesListed } from "../features/machines";
 import { t } from "../lib/i18n";
 import { setCapabilities, type Capabilities, type WebAccountsSource } from "../lib/platform";
 import { deliver } from "../lib/serviceEvents";
@@ -117,9 +117,9 @@ export function mountWindow(base: Base, mounted: Mounted) {
     setMissing(false);
     bump(n => n + 1);
     fleet.setMachines(answer.value.map(machine => ({ id: machine.machine_id, name: machine.name || machine.machine_id,
-      wakes: machineToComputer(machine).wakeable === true && base.permits("machines.start"),
+      wakes: machineToComputer(machine).wakeable === true && base.permits("machines.start"), kind: machine.kind ?? null, organizationId: machine.organization_id ?? null,
     })));
-    rememberMachineNames(fleet.machines());
+    machinesListed(fleet);
     fleet.subscribeEvents();
     active.registryChanged();
     for (const name of ["harness:workspace-name", "harness:service-resync", "harness:machines"]) window.dispatchEvent(new CustomEvent(name));

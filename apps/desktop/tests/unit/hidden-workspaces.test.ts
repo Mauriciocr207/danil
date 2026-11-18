@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRoot } from 'solid-js';
 import { createHiddenWorkspaces, keepSlots, matchesName, railHidden, railVisible } from '../../src/features/shell/hidden-workspaces.ts';
+import { danilToAdd, railWithDanil } from '../../src/features/shell/danil-rail.ts';
 import { capabilities, setCapabilities } from '../../src/lib/platform.ts';
 
 const rail = [{ id: 'a', name: 'Alfa' }, { id: 'b', name: 'Beta' }, { id: 'c', name: 'Canción' }, { id: 'd', name: 'Delta' }];
@@ -86,4 +87,31 @@ test('on the web each person of the browser has their own hidden list', () => {
       assert.equal(values.get('harness.layout.workspaces.hidden'), '["legacy"]', 'the desktop key is untouched');
     } finally { setCapabilities(original); dispose(); }
   });
+});
+
+const danilRail = [{ id: 'local', name: 'Local' }, { id: 'acme', name: 'Acme' }, { id: 'ops', name: 'Ops' }, { id: 'old', name: 'Viejo' }];
+const make = (w: { id: string; name: string }) => ({ ...w });
+
+test('with the source settled, Danil workspaces show only if added; locals keep their hidden list', () => {
+  const view = { available: [{ id: 'acme', name: 'Acme' }, { id: 'ops', name: 'Ops' }, { id: 'labs', name: 'Labs' }], added: new Set(['acme', 'labs']) };
+  assert.deepEqual(ids(railWithDanil(danilRail, new Set(['old']), 'local', view, make)), ['local', 'acme', 'labs'], 'ops is not added, old is hidden, labs comes from the organization');
+  assert.deepEqual(ids(railWithDanil(danilRail, new Set(), 'ops', view, make)), ['local', 'acme', 'ops', 'old', 'labs'], 'the open one always shows');
+  assert.deepEqual(ids(railWithDanil(danilRail, new Set(['acme']), null, view, make)), ['local', 'acme', 'ops', 'old', 'labs'].filter((id) => id !== 'ops'), 'a local hidden list never hides a Danil workspace');
+  assert.deepEqual(danilToAdd(view)?.map((w) => w.id), ['ops']);
+});
+
+test('without the source or the added list the rail stays as it was, and nothing is offered to add', () => {
+  assert.deepEqual(ids(railWithDanil(danilRail, new Set(['old']), null, { available: null, added: new Set(['acme']) }, make)), ['local', 'acme', 'ops']);
+  assert.deepEqual(ids(railWithDanil(danilRail, new Set(), null, { available: [{ id: 'acme', name: 'Acme' }], added: null }, make)), ids(danilRail));
+  assert.equal(danilToAdd({ available: null, added: null }), null);
+  assert.deepEqual(danilToAdd({ available: [{ id: 'acme', name: 'Acme' }], added: null })?.map((w) => w.id), ['acme'], 'a new account offers everything');
+});
+
+test('a Danil tile says so to who cannot see its mark; a local one does not', async () => {
+  const { tileLabel } = await import('../../src/features/shell/danil-rail.ts');
+  const t = (key: string, v: Record<string, string>) => key === 'shell.workspaces.danil_tile' ? `${v.name}, workspace de Danil` : `${v.name}: ${v.state}`;
+  assert.equal(tileLabel('Acme', true, null, t), 'Acme, workspace de Danil');
+  assert.equal(tileLabel('Acme', true, 'Espera', t), 'Acme, workspace de Danil: Espera');
+  assert.equal(tileLabel('Mío', false, null, t), 'Mío');
+  assert.equal(tileLabel('Mío', false, 'Espera', t), 'Mío: Espera');
 });

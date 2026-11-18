@@ -16,7 +16,8 @@ import { topState, type AttentionState, type WorkspaceAttention } from "./attent
 import KeepAwake from "./KeepAwake";
 import ProfileMenu from "./ProfileMenu";
 import AddWorkspaceMenu, { menuArrows } from "./AddWorkspaceMenu";
-import { createHiddenWorkspaces, keepSlots, railHidden, railVisible } from "./hidden-workspaces";
+import { createHiddenWorkspaces, keepSlots } from "./hidden-workspaces";
+import { columnDanil, danilMenuOf, tileLabel } from "./danil-rail";
 
 /** Las iniciales de las dos primeras palabras; una sola palabra da una letra. */
 export function monogram(name: string) {
@@ -84,8 +85,9 @@ export default function WorkspaceColumn(props: {
 }) {
   const ws = createRail();
   const hidden = createHiddenWorkspaces();
-  // Los ocultos solo se ven mientras están abiertos.
-  const visibles = () => railVisible(ws.lista() ?? [], hidden.ids(), ws.activo() ?? null);
+  const { danil, view: danilView, visible, hiddenRows } = columnDanil(hidden);
+  // Los ocultos y los de Danil sin agregar solo se ven mientras están abiertos.
+  const visibles = () => visible(ws.lista() ?? [], ws.activo() ?? null);
   let list: HTMLDivElement | undefined;
   const reorder = createNavigationReorder({
     scope: () => ws.activo() ?? "",
@@ -105,12 +107,7 @@ export default function WorkspaceColumn(props: {
   const Tile = (p: { w: RailWorkspace }) => {
     const active = () => p.w.id === ws.activo();
     const state = () => stateOf(p.w.id);
-    const label = () => {
-      const s = state();
-      return s
-        ? t("shell.workspaces.tile_with_state", { name: p.w.name, state: taskLabel(s, true) })
-        : p.w.name;
-    };
+    const label = () => tileLabel(p.w.name, danil.isDanil(p.w.id), state() ? taskLabel(state() as AttentionState, true) : null, t);
     let anchor: HTMLButtonElement | undefined;
     return (
       <Popover
@@ -149,7 +146,9 @@ export default function WorkspaceColumn(props: {
             </Show>
             <span
               aria-hidden="true"
+              data-active={active() ? "" : undefined}
               class={cn(
+                danil.isDanil(p.w.id) && "danil-mark",
                 "relative grid size-8 place-items-center rounded-md border text-label font-semibold group-focus-visible:outline-solid group-focus-visible:outline-2 group-focus-visible:outline-offset-2 group-focus-visible:outline-primary",
                 active()
                   ? "border-border-strong bg-surface-raised text-neutral-950"
@@ -193,8 +192,8 @@ export default function WorkspaceColumn(props: {
             {t("settings.workspaces.manage")}
           </button>
           <Show when={!active()}>
-            <button role="menuitem" class={ITEM_DE_MENU} onClick={() => (setMenuOf(null), hidden.hide(p.w.id))}>
-              {t("shell.workspaces.hide")}
+            <button role="menuitem" class={ITEM_DE_MENU} onClick={() => (setMenuOf(null), danil.isDanil(p.w.id) ? danil.remove(p.w.id) : hidden.hide(p.w.id))}>
+              {danil.isDanil(p.w.id) ? t("shell.workspaces.remove") : t("shell.workspaces.hide")}
             </button>
           </Show>
         </PopoverContent>
@@ -303,7 +302,8 @@ export default function WorkspaceColumn(props: {
         </Show>
         <KeyedList each={visibles()} by={w => w.id}>{w => <Tile w={w()} />}</KeyedList>
         <AddWorkspaceMenu
-          hidden={railHidden(ws.lista() ?? [], hidden.ids())}
+          hidden={hiddenRows(ws.lista() ?? [])}
+          danil={danilMenuOf(danil, danilView(), (id) => void ws.cambiarA(id))}
           open={ws.activo() ?? null}
           tasksOf={tasksOf}
           badge={AttentionBadge}

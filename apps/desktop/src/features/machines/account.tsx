@@ -16,8 +16,6 @@ import { cancelEdgeWrites } from "../../lib/edge.ts";
 import {
   type Computer,
   createScreenAccess,
-  linkedWorkspaces,
-  organizationOf,
   serviceFeatures,
   listComputers,
   listWorkspaces,
@@ -52,7 +50,8 @@ import { MachinePicker } from "./MachinePicker";
 import { createRouter, type Invoke, type Router, type SliceChange } from "./router";
 import { createEngineWorkspaces, railOf } from "./engine-workspaces";
 import { machineNamesChanged, refetchMachines, setCloudInventory } from "./store";
-import { rememberMachineNames } from "./known-names";
+import { machinesListed, setDanilFleet } from "./danil-source";
+import { infoOf } from "./machine-info";
 import type { WslChild } from "./wsl";
 import { guestChannels } from "./guestChannels";
 import { CLOUD_RETRY_INITIAL_MS, CLOUD_RETRY_MS, createCloudMachines, EDGE_ENDPOINT } from "./cloud-machines";
@@ -123,20 +122,6 @@ function slicesChanged(changes: SliceChange[]) {
   window.dispatchEvent(new CustomEvent("harness:machine-slices", { detail: { changes } }));
   if (changes.includes("attention")) window.dispatchEvent(new CustomEvent("harness:service-resync"));
 }
-
-const infoOf = (c: Computer): MachineInfo => {
-  const os = systemOf(c.os);
-  return {
-    id: c.computer_id,
-    name: c.name?.trim() || c.computer_id,
-    wakes: wakes(c),
-    linked: linkedWorkspaces(c),
-    organization: organizationOf(c),
-    features: serviceFeatures(c),
-    ...(c.host_version ? { version: c.host_version } : {}),
-    ...(os ? { os } : {}),
-  };
-};
 
 /** The machine picked in «Ejecutar en» for `workspace` (`store.ts`), remembered per workspace. */
 const pickedFor = (workspace: string | null) => (workspace ? (leerPref<Record<string, string>>("machines.run_on", {})[workspace] ?? null) : null);
@@ -266,6 +251,7 @@ export function startAccountMachines(target: Target = window) {
     if (!installed) return;
     const gone = installed;
     installed = null;
+    setDanilFleet(null);
     gone.restore();
     refresh();
   };
@@ -356,7 +342,7 @@ export function startAccountMachines(target: Target = window) {
     });
     fleet.setMachines([...others.map(infoOf), ...guestMachines]);
     observeEngine(fleet);
-    rememberMachineNames(fleet.machines());
+    machinesListed(fleet);
     fleet.subscribeEvents();
     const screens =
       endpoint === null
@@ -525,7 +511,7 @@ export function startAccountMachines(target: Target = window) {
     if (installed?.key === key) {
       installed.fleet.setMachines([...others.map(infoOf), ...guestMachines]);
       observeEngine(installed.fleet);
-      rememberMachineNames(installed.fleet.machines());
+      machinesListed(installed.fleet);
       machineNamesChanged();
       return void refetchMachines();
     }
@@ -542,7 +528,7 @@ export function startAccountMachines(target: Target = window) {
     if (!guests.length && !cloudRows.length) return disconnect();
     if (installed?.key === LOCAL_KEY) {
       installed.fleet.setMachines([...cloudRows.map(infoOf), ...guests]);
-      rememberMachineNames(installed.fleet.machines());
+      machinesListed(installed.fleet);
       machineNamesChanged();
       return void refetchMachines();
     }

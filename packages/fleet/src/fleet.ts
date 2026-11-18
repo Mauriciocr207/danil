@@ -30,6 +30,7 @@ type Row = Record<string, unknown>;
 /** `version`: la `host_version` de su último `hello`, según el plano de control; se conserva apagada. */
 /** `child`: una máquina hija de esta computadora (Linux en esta PC): no está en el registro de la cuenta y es de todos sus workspaces. */
 /** `organization`: es el endpoint de la persona en el servidor de una organización y atiende esos workspaces (`organization` de su fila). */
+/** `kind` y `organizationId`: lo que dice `GET /v1/machines` (`kind=organization` con su `organization_id`, o `personal`); opcionales. */
 export type MachineInfo = {
   id: string;
   name: string;
@@ -41,7 +42,12 @@ export type MachineInfo = {
   version?: string;
   child?: boolean;
   organization?: { id: string; workspaces: readonly { id: string; name: string }[] } | null;
+  kind?: string | null;
+  organizationId?: string | null;
 };
+
+/** Un workspace que contestó una máquina en `list_workspaces`. */
+export type Listed = { id: string; name: string };
 
 /** Si `info` atiende `workspace` por una organización, según su fila. */
 const serves = (info: MachineInfo | undefined, workspace: string): boolean => !!info?.organization?.workspaces.some((w) => w.id === workspace);
@@ -146,6 +152,9 @@ type Member = { info: MachineInfo; link: Link; stops: (() => void)[]; was: Machi
 export class Fleet {
   readonly self: string | null;
   private members = new Map<string, Member>();
+  /** Lo último que cada máquina contestó en `list_workspaces`; sin entrada, aún no se sabe. */
+  private listings = new Map<string, readonly Listed[]>();
+  private listingListeners = new Set<(machine: string) => void>();
   private registry: AccountWorkspace[] | null = null;
   /** Los spaces compartidos con la cuenta que se conocen: del registro y de las respuestas con `account`. */
   private shared = new Set<string>();
@@ -179,6 +188,7 @@ export class Fleet {
         this.members.delete(id);
         this.book.forget(id);
         this.contextRows.delete(id);
+        this.listings.delete(id);
         this.config.onChange?.(id);
       }
     for (const info of next.values()) {
@@ -190,7 +200,8 @@ export class Fleet {
       const before = member.info;
       const same = before.name === info.name && before.wakes === info.wakes && before.os === info.os && !!before.outdated === !!info.outdated && sameLinks(before.linked ?? null, info.linked ?? null)
         && (before.features ?? []).join() === (info.features ?? []).join()
-        && JSON.stringify(before.organization ?? null) === JSON.stringify(info.organization ?? null);
+        && JSON.stringify(before.organization ?? null) === JSON.stringify(info.organization ?? null)
+        && (before.kind ?? null) === (info.kind ?? null) && (before.organizationId ?? null) === (info.organizationId ?? null);
       // Un contrato que vuelve a ser compatible quita la marca que puso el relay.
       if (before.outdated && !info.outdated) member.outdated = false;
       member.info = info;
@@ -254,6 +265,60 @@ export class Fleet {
 
   info(machine: string): MachineInfo | undefined {
     return this.members.get(machine)?.info;
+  }
+
+  /** Lo que `machine` contestó en `list_workspaces`; una respuesta sin lista no borra la anterior. */
+  setListing(machine: string, workspaces: readonly Listed[]) {
+    if (!this.members.has(machine)) return;
+    const before = this.listings.get(machine);
+    this.listings.set(machine, workspaces);
+    if (JSON.stringify(before ?? null) === JSON.stringify(workspaces)) return;
+    this.config.onChange?.(machine);
+    for (const listener of this.listingListeners) listener(machine);
+  }
+
+  /** Avisa cada vez que cambia lo que una máquina lista; devuelve cómo dejar de escuchar. */
+  onListing(listener: (machine: string) => void): () => void {
+    this.listingListeners.add(listener);
+    return () => void this.listingListeners.delete(listener);
+  }
+
+  /** Cada lectura de `list_workspaces` de otra máquina, sea de quien sea, queda como su lista. */
+  private noteListing(machine: string, value: unknown) {
+    const rows = (value as { workspaces?: unknown } | null)?.workspaces;
+    if (!Array.isArray(rows)) return;
+    this.setListing(machine, rows.flatMap((w) => {
+      const id = (w as { id?: unknown } | null)?.id;
+      const name = (w as { name?: unknown } | null)?.name;
+      return typeof id === "string" && id ? [{ id, name: typeof name === "string" && name.trim() ? name : id }] : [];
+    }));
+  }
+
+  /** Las máquinas `kind=organization` de `organization`, según su fila de `/v1/machines`. */
+  organizationMachines(organization: string): string[] {
+    return this.machines().filter((m) => m.kind === "organization" && m.organizationId === organization).map((m) => m.id);
+  }
+
+  /**
+   * Los workspaces que sirven las máquinas de `organization`, de su `list_workspaces`.
+   * `null` mientras ninguna contestó: la fuente no está asentada y nada se decide con ella.
+   */
+  available(organization: string): Listed[] | null {
+    const found = new Map<string, Listed>();
+    let settled = false;
+    for (const id of this.organizationMachines(organization)) {
+      const listed = this.listings.get(id);
+      if (!listed) continue;
+      settled = true;
+      for (const w of listed) if (!found.has(w.id)) found.set(w.id, w);
+    }
+    return settled ? [...found.values()] : null;
+  }
+
+  /** Si `info` atiende `workspace` por una organización: por su fila, o por su `list_workspaces` si es `kind=organization`. */
+  private serves(info: MachineInfo | undefined, workspace: string): boolean {
+    if (serves(info, workspace)) return true;
+    return !!info && info.kind === "organization" && !!info.organizationId && !!this.listings.get(info.id)?.some((w) => w.id === workspace);
   }
 
   name(machine: string): string {
@@ -333,15 +398,15 @@ export class Fleet {
   membersOf(workspace: string | null): string[] {
     if (!workspace) return [];
     const order = this.machines().map((m) => m.id);
-    const servers = order.filter((id) => serves(this.info(id), workspace));
+    const servers = order.filter((id) => this.serves(this.info(id), workspace));
     if (servers.length) return servers;
     if (this.registry) {
       const w = this.registry.find((x) => x.id === workspace);
-      return order.filter((id) => (w?.computers.includes(id) ?? false) || this.info(id)?.child === true || (this.info(id)?.linked?.has(workspace) ?? false) || serves(this.info(id), workspace));
+      return order.filter((id) => (w?.computers.includes(id) ?? false) || this.info(id)?.child === true || (this.info(id)?.linked?.has(workspace) ?? false) || this.serves(this.info(id), workspace));
     }
     return order.filter((id) => {
       const linked = this.info(id)?.linked ?? null;
-      return linked === null || linked.has(workspace) || serves(this.info(id), workspace);
+      return linked === null || linked.has(workspace) || this.serves(this.info(id), workspace);
     });
   }
 
@@ -349,7 +414,7 @@ export class Fleet {
   private linkedAnywhere(workspace: string): boolean {
     return [...this.members.values()].some((m) => {
       const linked = m.info.linked ?? null;
-      return linked === null || linked.has(workspace) || serves(m.info, workspace);
+      return linked === null || linked.has(workspace) || this.serves(m.info, workspace);
     });
   }
 
@@ -575,6 +640,7 @@ export class Fleet {
       const { value, cached } = await this.send(envelope);
       const at = cachedAt(cached);
       slice = { machine, status: cached ? "cached" : "ok", has: true, value, at: at ?? Date.now() };
+      if (envelope.command === "list_workspaces" && !cached) this.noteListing(machine, value);
       member?.fresh?.add(key);
     } catch (error) {
       const e = fromRelay(error, machine);

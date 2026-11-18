@@ -30,6 +30,8 @@ Las paletas se apilan: el oscuro grafito solo redeclara lo que cambia respecto a
 | `--color-rail` | `#edeff5` | `#ebebed` | `#161618` | `#0d132b` | Riel de Ajustes |
 | `--color-border` | `rgb(10 13 35 / 0.1)` | `rgb(9 9 11 / 0.09)` | `rgb(255 255 255 / 0.08)` | `rgb(255 255 255 / 0.1)` | Borde por defecto (hairline con alfa) |
 | `--color-border-strong` | `rgb(10 13 35 / 0.16)` | `rgb(9 9 11 / 0.15)` | `rgb(255 255 255 / 0.14)` | `rgb(255 255 255 / 0.16)` | Borde de controles y foco suave |
+| `--color-danil-mark-from` | `#6539f5` | = violeta | = azul | `#8b6cff` | Inicio del degradado del borde de un workspace de Danil en el riel |
+| `--color-danil-mark-to` | `#a77bff` | = violeta | = azul | `#c9a8ff` | Fin de ese degradado; reemplaza al borde normal del cuadro |
 
 ## Rampa de neutros
 
