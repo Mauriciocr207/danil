@@ -962,3 +962,28 @@ test("task references use their explicit machine, including in locally saved mes
   assert.equal((fleet.encode("cmp_home", ref(), "task_coordinator") as ReturnType<typeof ref>).task, "same");
   assert.deepEqual(fleet.encode("cmp_vm", { task: "unrelated" }), { task: "unrelated" }, "untyped task fields are not references");
 });
+
+
+test("read failures retain only unknown-command classification, never private relay details", async () => {
+  const cases = [
+    { error: { code: "command_failed", detail: { what: { clave: "shell.service.command" }, detail: "private-sentinel" } }, code: "command" },
+    { error: { code: "command_failed", detail: { code: "unsupported", private: "private-sentinel" } }, code: "command" },
+    { error: { code: "command_not_allowed", detail: { scope: "machine", private: "private-sentinel" } }, code: "command_not_here" },
+    { error: { code: "command_failed", detail: { what: { clave: "providers.github.error.expired" }, detail: "private-sentinel" } }, code: "command_failed" },
+  ];
+  for (const item of cases) {
+    const { fleet, link } = setup({});
+    link("cmp_vm").call = () => Promise.reject(item.error);
+    const envelope = { machine: "cmp_vm", workspace: "w", command: "github_account_status", args: {} };
+    const slice = await fleet.read(envelope);
+    assert.equal(slice.error, item.code);
+    assert.equal(slice.has, false);
+    assert.ok(!JSON.stringify(fleet.peek(envelope)).includes("private-sentinel"));
+    await assert.rejects(fleet.call({ ...envelope, command: "finish_browser_login" }), (error: FleetError) => {
+      assert.equal(error.code, item.error.code, "mutations keep their existing error envelope");
+      assert.deepEqual(error.detail, item.error.detail);
+      return true;
+    });
+    fleet.close();
+  }
+});

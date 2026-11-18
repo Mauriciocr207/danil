@@ -12,6 +12,7 @@ import "../helpers/catalog.ts";
 import { withoutAbout } from "../../src/lib/taskMentions.ts";
 import { createRouter, unconfirmedOpen } from "../../src/features/machines/router.ts";
 import type { EngineWorkspace } from "../../src/features/machines/engine-workspaces.ts";
+import { notHere, silent } from "../../src/features/settings/github-account/failures.ts";
 import { runsWorkspace } from "../../src/features/machines/runs-workspace.ts";
 
 type Args = Record<string, unknown>;
@@ -1021,4 +1022,25 @@ test("a slow machine with a new open tab delays the list at most FRESH_WAIT and 
   assert.ok(confirmed.some(r => r.id === "cmp_vm~child"));
   assert.deepEqual(unconfirmedOpen(confirmed), []);
   router.close();
+});
+
+
+test("remote GitHub account status distinguishes absent command from real authorization failure", async () => {
+  for (const [failure, absent, code = "command_failed"] of [
+    [{ what: { clave: "shell.service.command" }, detail: "github_account_status" }, true],
+    [{ what: { clave: "providers.github.error.expired" }, detail: "private-sentinel" }, false],
+    [{ scope: "machine", private: "private-sentinel" }, false, "command_not_allowed"],
+  ] as const) {
+    const link = fakeLink({});
+    link.call = () => Promise.reject({ code, detail: failure });
+    const { router, fleet } = setup({ cmp_vm: link });
+    await router.handle("list_workspaces");
+    await assert.rejects(router.handle("github_account_status", { scope: "w" }, on("cmp_vm")), (error: { detail: string }) => {
+      assert.equal(notHere(error), absent);
+      assert.equal(silent(error), absent);
+      assert.ok(!JSON.stringify(error).includes("private-sentinel"));
+      return true;
+    });
+    fleet.close();
+  }
 });
