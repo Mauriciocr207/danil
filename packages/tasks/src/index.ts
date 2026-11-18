@@ -55,7 +55,7 @@ export { type CardPull, type CheckState, type PullTone, type TaskGit, type TaskG
 export { type KnState, type ReviewState, type TaskGitStatus, UNKNOWN_TASK_GIT, canFinishTask, mergeRemoteGit, readTaskGit, retainGitObservation, sameGit } from "./git.ts";
 
 export { type AttentionRow, delegatedAttention, delegatedFamilies, withFamilyActivity } from "./family.ts";
-export { type TaskTreeRow, type TaskBranch, taskIdentity, taskParent, buildTaskTree, withTaskAncestors, taskDescendants } from "./tree.ts";
+export { type TaskTreeRow, type TaskBranch, taskIdentity, taskParent, buildTaskTree, withTaskAncestors, taskDescendants, familySubtasks } from "./tree.ts";
 
 export { type WorkState, WORK_STATES, workStateOf } from "./workState.ts";
 export { type ModelSession, type Surface, type SurfaceModel, chipModel, menuSurfaces, surfaceHas, surfaceOf } from "./surfaces.ts";

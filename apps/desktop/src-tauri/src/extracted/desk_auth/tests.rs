@@ -17,6 +17,7 @@ struct Req {
     path: String,
     authorization: Option<String>,
     idempotency_key: Option<String>,
+    context: Option<String>,
     body: Value,
 }
 
@@ -60,9 +61,11 @@ fn answer(mut stream: TcpStream, handler: &Handler, seen: &Mutex<Vec<Req>>) {
     let mut length = 0usize;
     let mut authorization = None;
     let mut idempotency_key = None;
+    let mut context = None;
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
             match k.trim().to_ascii_lowercase().as_str() {
+                "x-danil-session" => context = Some(v.trim().to_owned()),
                 "content-length" => length = v.trim().parse().unwrap_or(0),
                 "authorization" => authorization = Some(v.trim().to_owned()),
                 "idempotency-key" => idempotency_key = Some(v.trim().to_owned()),
@@ -83,6 +86,7 @@ fn answer(mut stream: TcpStream, handler: &Handler, seen: &Mutex<Vec<Req>>) {
         path,
         authorization,
         idempotency_key,
+        context,
         body,
     };
     let n = {
@@ -98,6 +102,14 @@ fn answer(mut stream: TcpStream, handler: &Handler, seen: &Mutex<Vec<Req>>) {
         .and_then(|o| o.remove("__location"))
         .and_then(|v| v.as_str().map(|l| format!("Location: {l}\r\n")))
         .unwrap_or_default();
+    let echo = value
+        .as_object_mut()
+        .and_then(|o| o.remove("__echo"))
+        .and_then(|v| {
+            v.as_str()
+                .map(|s| format!("X-Danil-Session-Applied: {s}\r\n"))
+        })
+        .unwrap_or_default();
     let text = if value.is_null() {
         String::new()
     } else {
@@ -105,7 +117,7 @@ fn answer(mut stream: TcpStream, handler: &Handler, seen: &Mutex<Vec<Req>>) {
     };
     let _ = write!(
         stream,
-        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n{location}Content-Length: {}\r\nConnection: close\r\n\r\n{text}",
+        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n{location}{echo}Content-Length: {}\r\nConnection: close\r\n\r\n{text}",
         text.len()
     );
 }
@@ -1143,4 +1155,27 @@ fn old_exchange_cannot_replace_new_login() {
     assert_eq!(desk.access().unwrap().access_token, "acc_2");
     assert_eq!(vault.load().unwrap().refresh_token, "ref_2");
     assert_eq!(notices.load(Ordering::SeqCst), 0);
+}
+
+#[path = "family_tests.rs"]
+mod family_tests;
+
+#[test]
+fn loopback_accepts_a_callback_split_across_tcp_reads() {
+    let pkce = Pkce::open().unwrap();
+    let port = pkce.port;
+    let state = pkce.state.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let sender = std::thread::spawn(move || {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.write_all(b"GET /callback?code=").unwrap();
+        ready_tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(30));
+        let _ =
+            stream.write_all(format!("abc&state={state} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes());
+    });
+    ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let returned = pkce.poll().unwrap();
+    sender.join().unwrap();
+    assert_eq!(returned, Some(Returned::Code("abc".into())));
 }

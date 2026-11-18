@@ -125,7 +125,7 @@ pub(crate) fn capability_of(path: &str) -> &'static str {
 }
 
 /// Un id opaco del contrato en un segmento de ruta: sin `/`, `.`, `%` ni query.
-fn opaque_id(segment: &str) -> bool {
+pub(super) fn opaque_id(segment: &str) -> bool {
     (1..=128).contains(&segment.len())
         && segment
             .bytes()
@@ -250,6 +250,17 @@ pub(crate) fn request_keyed(
     body: Option<&Value>,
     key: &str,
 ) -> Result<Reply, Fail> {
+    request_context(url, method, bearer, body, key, None)
+}
+
+pub(super) fn request_context(
+    url: &str,
+    method: &str,
+    bearer: Option<&str>,
+    body: Option<&Value>,
+    key: &str,
+    context: Option<&str>,
+) -> Result<Reply, Fail> {
     let agent = agent();
     let auth = bearer.map(|t| format!("Bearer {t}"));
     let sent = if method == "GET" || method == "DELETE" {
@@ -259,6 +270,9 @@ pub(crate) fn request_keyed(
             agent.delete(url)
         };
         r = r.header("Accept", "application/json");
+        if let Some(context) = context {
+            r = r.header("X-Danil-Session", context);
+        }
         if method == "DELETE" && !key.is_empty() {
             r = r.header("Idempotency-Key", key);
         }
@@ -269,6 +283,9 @@ pub(crate) fn request_keyed(
     } else if method == "PUT" {
         // `PUT …/preferences/added/{id}` no lleva cuerpo; la siembra (`PUT …/preferences`) sí.
         let mut r = agent.put(url).header("Accept", "application/json");
+        if let Some(context) = context {
+            r = r.header("X-Danil-Session", context);
+        }
         if !key.is_empty() {
             r = r.header("Idempotency-Key", key);
         }
@@ -281,6 +298,9 @@ pub(crate) fn request_keyed(
         }
     } else {
         let mut r = agent.post(url).header("Accept", "application/json");
+        if let Some(context) = context {
+            r = r.header("X-Danil-Session", context);
+        }
         // Las escrituras del contrato exigen `Idempotency-Key`.
         if !key.is_empty() {
             r = r.header("Idempotency-Key", key);
@@ -294,6 +314,27 @@ pub(crate) fn request_keyed(
         retry_after: Duration::from_secs(1),
     })?;
     let status = response.status().as_u16();
+    if context.is_some() && !(200..300).contains(&status) {
+        return Ok(Reply {
+            status,
+            body: Value::Null,
+            retry_after: None,
+            location: None,
+        });
+    }
+    if let Some(context) = context {
+        if response
+            .headers()
+            .get("X-Danil-Session-Applied")
+            .and_then(|v| v.to_str().ok())
+            != Some(context)
+        {
+            return Err(Fail::Refused {
+                status: 502,
+                code: "session_echo_mismatch".into(),
+            });
+        }
+    }
     let retry_after = response
         .headers()
         .get("Retry-After")
@@ -371,6 +412,7 @@ struct Session {
     login_attempt: u64,
     live: Option<Live>,
     profile: Option<Value>,
+    available_contexts: Option<u64>,
     // Una vez olvidado el refresh, no se vuelve a leer si falla el borrado.
     may_restore: bool,
 }
@@ -380,6 +422,7 @@ impl Session {
         self.generation += 1;
         self.live = None;
         self.profile = None;
+        self.available_contexts = None;
         self.may_restore = false;
     }
 }
@@ -411,6 +454,7 @@ impl<V: Vault> Desk<V> {
                 login_attempt: 0,
                 live: None,
                 profile: None,
+                available_contexts: None,
                 may_restore: true,
             }),
             on_loss: Box::new(on_loss),
@@ -419,8 +463,20 @@ impl<V: Vault> Desk<V> {
         }
     }
 
-    pub(crate) fn edge(&self) -> &str {
-        &self.edge
+    pub(super) fn forget(&self) {
+        let mut session = lock(&self.session);
+        session.clear();
+        self.vault.clear();
+    }
+
+    pub(super) fn install(&self, issued: (String, i64, String, String)) {
+        let mut session = lock(&self.session);
+        session.clear();
+        self.accept(&mut session, issued);
+    }
+
+    pub(super) fn available_contexts(&self) -> Option<u64> {
+        lock(&self.session).available_contexts
     }
 
     /// La URL que abre el navegador del sistema. El cliente no construye la de AuthKit.
@@ -454,17 +510,6 @@ impl<V: Vault> Desk<V> {
         let mut session = lock(&self.session);
         session.login_attempt += 1;
         session.login_attempt
-    }
-
-    pub(crate) fn is_signing_in(&self, attempt: u64) -> bool {
-        lock(&self.session).login_attempt == attempt
-    }
-
-    pub(crate) fn publish_if_current(&self, generation: u64, publish: impl FnOnce()) {
-        let session = lock(&self.session);
-        if session.generation == generation {
-            publish();
-        }
     }
 
     fn accept(&self, session: &mut Session, issued: (String, i64, String, String)) -> Live {
@@ -574,6 +619,7 @@ impl<V: Vault> Desk<V> {
                 let issued = tokens(&reply.body).ok_or(Fail::Unavailable {
                     retry_after: Duration::from_secs(2),
                 })?;
+                session.available_contexts = reply.body["available_contexts"].as_u64();
                 Ok(self.accept(&mut session, issued))
             }
             // Refresh vencido, reutilizado o de una sesión revocada: se olvida.
@@ -766,15 +812,26 @@ impl<V: Vault> Desk<V> {
         body: Option<&Value>,
         key: &str,
     ) -> Result<Reply, Fail> {
+        self.fetch_context(method, path, body, key, None)
+    }
+
+    pub(super) fn fetch_context(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        key: &str,
+        context: Option<&str>,
+    ) -> Result<Reply, Fail> {
         let url = format!("{}{path}", self.edge);
         let live = self.access()?;
-        let reply = request_keyed(&url, method, Some(&live.access_token), body, key)?;
+        let reply = request_context(&url, method, Some(&live.access_token), body, key, context)?;
         self.finish_authenticated(&live, false)?;
         if reply.status != 401 {
             return Ok(reply);
         }
         let live = self.access_for(live.generation, Some(&live.access_token))?;
-        let reply = request_keyed(&url, method, Some(&live.access_token), body, key)?;
+        let reply = request_context(&url, method, Some(&live.access_token), body, key, context)?;
         self.finish_authenticated(
             &live,
             reply.status == 401 && path.starts_with("/v1/identity/"),
