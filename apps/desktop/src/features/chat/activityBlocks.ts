@@ -44,3 +44,8 @@ export function placeActivities<M>(blocks: PresentedActivityBlock<M>[], activiti
   for (; next < pending.length; next++) { const activity = pending[next]; result.push({ tipo: "pasos", pasos: [], i: activity.anchorIndex, activity }); }
   return result;
 }
+
+/** A manual shell card is its own output, even when it also carries a step. */
+export function isActivityOnlyMessage(message: { shell?: unknown; paso?: unknown; permission?: unknown; role?: string; meta?: string }): boolean {
+  return !message.shell && Boolean(message.paso || message.permission || (message.role === "system" && message.meta === "usó"));
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { coalesceLiveActivity, visibleActivityMessages, placeActivities, type ActivityBlock } from "../../src/features/chat/activityBlocks.ts";
+import { coalesceLiveActivity, visibleActivityMessages, placeActivities, isActivityOnlyMessage, type ActivityBlock } from "../../src/features/chat/activityBlocks.ts";
 type Message = { nativeMessageId?: string; turno?: string; duration_ms?: number; text: string; preguntas?: unknown[] };
 const work = (i: number, msg: Message): ActivityBlock<Message> => ({ tipo: "trabajo", i, msg, pasos: [] });
 
@@ -78,4 +78,9 @@ test("empty active turns and settled rows keep the supplied activity identity wi
   const rows = placeActivities([work(0, answer)], [settled]);
   assert.equal(rows[0].activity?.key, empty[0].activity?.key);
   assert.equal(rows[1].tipo === "trabajo" && rows[1].msg, answer);
+});
+
+test("manual shell output remains a separate card even when it carries a tool step", () => {
+  assert.equal(isActivityOnlyMessage({ role: "system", meta: "usó", paso: {}, shell: { output: "manual command result" } }), false);
+  assert.equal(isActivityOnlyMessage({ role: "system", meta: "usó", paso: {} }), true);
 });

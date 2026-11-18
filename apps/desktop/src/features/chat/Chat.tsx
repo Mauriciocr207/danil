@@ -166,7 +166,7 @@ import Suggestions, { type Suggestion } from "./Suggestions";
 import LineaDeTiempo, { SUPERFICIE_DE_EJECUCION } from "./Timeline";
 import EstadoDelTurno, { type MachineWaitStatus } from "./TurnStatus";
 import { ActivityDots } from "./ActivityDots";
-import { coalesceLiveActivity, visibleActivityMessages, placeActivities, type PresentedActivityBlock, type ActivityChunk } from "./activityBlocks";
+import { coalesceLiveActivity, visibleActivityMessages, placeActivities, isActivityOnlyMessage, type PresentedActivityBlock, type ActivityChunk } from "./activityBlocks";
 import { WithMentions } from "./WithMentions";
 import { Interrupcion, LineaDeSistema, TraspasoDeProveedor, SiguioTrasElCupo } from "./components/thread/SystemMarkers";
 import { HoraDelTurno, LineaDeProveedor, BotonCopiar, CambioDeContexto } from "./components/thread/MessageDecorations";
@@ -1592,6 +1592,8 @@ export default function Chat(props: ChatProps) {
    * El turno que no cerró se queda fuera: un fallo es lo único de esa
    * tira que cambia lo que hay que hacer después, no entra en nada plegable.
    */
+  const activityBlocked = () => Boolean(props.permission || props.esperando || props.reintento || props.enFondo || props.machineWait);
+  const isCurrentActivity = (activity: TurnActivity<Msg> | undefined) => !!activity && (activity.active || activity.key === props.activities?.at(-1)?.key);
   const activityOwners = createMemo(() => new Map((props.activities ?? []).flatMap(activity => activity.messages.map(message => [message, activity] as const))));
   const bloques = createMemo<Bloque[]>(() => {
     const out: Bloque[] = [];
@@ -1607,21 +1609,21 @@ export default function Chat(props: ChatProps) {
       // DENTRO de la pregunta que contesta, que es donde se lee lo que se
       // preguntó y lo que se decidió como una sola cosa.
       if (m.respuestas?.length) return;
+      if (m.shell) {
+        out.push({ tipo: "msg", msg: m, i });
+        return;
+      }
       if (activityOwners().has(m) && m.role === "agent") {
         if (m.text || m.preguntas?.length || m.images?.length || m.historyRefs?.length || m.artefactos?.length)
           out.push({ tipo: "trabajo", pasos: [], msg: m, i, responseOnly: true });
         return;
       }
-      if (activityOwners().has(m) && (m.paso || m.permission || (m.role === "system" && m.meta === "usó"))) return;
+      if (activityOwners().has(m) && isActivityOnlyMessage(m)) return;
       // Terminus ya no avisa en el chat que una tarea lanzada terminó; las
       // filas que quedaron guardadas de antes tampoco se pintan.
       if (m.meta === "task_completed") return;
       if (m.meta === "task_launched") {
         ponerLanzamiento(out, { tipo: "msg", msg: m, i }, (b) => b.tipo === "msg" && b.msg.meta === "task_launched");
-        return;
-      }
-      if (m.shell) {
-        out.push({ tipo: "msg", msg: m, i });
         return;
       }
       // El cambio de material no es un paso de ejecución y no entra al
@@ -2944,16 +2946,18 @@ export default function Chat(props: ChatProps) {
                 <Match when={b().activity}>
                   <div class="col-start-1 min-w-0" data-turn-activity-anchor={b().activity?.key}>
                     <RegistroDeTrabajo
+                      observed
                       pasos={activitySteps(b().activity)}
                       razonamiento={b().activity?.messages.flatMap(message => message.razonamiento ?? []) ?? []}
-                      corriendo={b().activity?.active ?? false}
+                      corriendo={Boolean(b().activity?.active) && !activityBlocked()}
+                      blocked={isCurrentActivity(b().activity) && activityBlocked()}
                       label={b().activity?.active && b().activity?.startedAt === null && b().activity?.messages.length === 0 ? t("chat.activity.syncing") : undefined}
                       animando={!(b().activity?.startedAt === null && b().activity?.messages.length === 0) && !props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
                       duracion={b().activity?.durationMs == null ? null : formatearDuracion(b().activity!.durationMs!)}
                       abierto={Boolean(trabajos()[`activity:${b().activity?.key ?? ""}`])}
                       onAlternar={(open) => setTrabajos({ ...trabajos(), [`activity:${b().activity?.key ?? ""}`]: open })}
                       onVerCambios={props.onVerCambios}
-                      status={<Show when={b().activity?.active || (b().activity?.key === props.activities?.at(-1)?.key && (props.esperando || props.reintento || props.enFondo || props.machineWait))}><EstadoDelTurno inline desde={b().activity?.startedAt ?? null} paso={null} esperando={props.esperando} reintento={props.reintento} enFondo={props.enFondo ?? false} machineWait={props.machineWait} /></Show>}
+                      status={() => <Show when={b().activity?.active || (b().activity?.key === props.activities?.at(-1)?.key && (props.esperando || props.reintento || props.enFondo || props.machineWait))}><Show when={props.permission} fallback={<EstadoDelTurno inline desde={b().activity?.startedAt ?? null} paso={null} esperando={props.esperando} reintento={props.reintento} enFondo={props.enFondo ?? false} machineWait={props.machineWait} />}><span class="text-neutral-500">{t("chat.permission.title")}</span></Show></Show>}
                     />
                   </div>
                 </Match>
@@ -3371,7 +3375,7 @@ export default function Chat(props: ChatProps) {
         Sin barra de scroll (`overflow-hidden`) y sin rótulo: el esqueleto
         ya trae su forma y su `aria-busy` (`ui/Skeleton.tsx`). */}
     <Show
-      when={!props.cargando}
+      when={!props.cargando || props.msgs.length > 0 || Boolean(props.activities?.length)}
       fallback={
         <>
           <div class={cn("min-h-0 flex-1 overflow-hidden", margenDelHilo)}>
@@ -3672,7 +3676,7 @@ const FILA_DEL_TRAMO =
  * «Editó N archivos» abre el panel de la tarea en «Cambios».
  */
 function activitySteps(activity: TurnActivity<Msg> | undefined): Paso[] {
-  return activity?.messages.flatMap(message => message.permission
+  return activity?.messages.flatMap(message => message.shell ? [] : message.permission
     ? [pasoDePermiso(message.permission.tool, message.permission.target ?? null, message.permission.allow, message.encargado ?? message.fromTask?.title)]
     : message.paso ? [message.paso] : message.role === "system" && message.meta === "usó" ? [pasoDe(message.text)] : []) ?? [];
 }
@@ -3682,7 +3686,9 @@ function RegistroDeTrabajo(props: {
   /** Lo que el turno hizo y dijo antes de su respuesta; se pliega con los pasos. */
   avance?: Avance[];
   corriendo: boolean;
-  status?: JSX.Element;
+  status?: () => JSX.Element;
+  blocked?: boolean;
+  observed?: boolean;
   label?: string;
   duracion?: string | null;
   abierto?: boolean;
@@ -3715,6 +3721,7 @@ function RegistroDeTrabajo(props: {
     />
   );
   const girando = () => <ActivityDots active={props.corriendo} paused={props.animando === false} />;
+  const caption = () => <><Show when={!props.blocked}><span class="min-w-0 truncate" data-activity-label="">{rotulo()}</span></Show><Show when={props.blocked}>{props.status?.()}</Show></>;
   const tiempo = () => (
     <Show when={duracion()}>
       <span class="pointer-events-none shrink-0 text-xs whitespace-nowrap text-neutral-500">{duracion()}</span>
@@ -3727,14 +3734,14 @@ function RegistroDeTrabajo(props: {
     <>
       <span role="status" aria-live="polite" aria-atomic="true" class="sr-only">{props.corriendo && props.animando !== false ? t("chat.turn.working_aria") : ""}</span>
       <Show
-        when={todos().length > 0 || avance().length > 0 || props.razonamiento?.length || props.corriendo}
+        when={todos().length > 0 || avance().length > 0 || props.razonamiento?.length || props.corriendo || props.observed}
         fallback={<p class="m-0 mb-2 px-1 py-1.5 text-xs text-neutral-500">{duracion()}</p>}
       >
         <div class={cn("flex flex-wrap items-center gap-2", !desplegado() && "mb-2")}>
-          <Show when={!hasContent()}><span class={FILA_DEL_TRAMO}><span class="activity-label inline-flex min-w-0 items-center">{girando()}<span>{rotulo()}</span></span>{props.status}{tiempo()}</span></Show>
+          <Show when={!hasContent()}><span class={FILA_DEL_TRAMO}><span class="activity-label inline-flex min-w-0 items-center">{girando()}{caption()}</span><Show when={!props.blocked}>{props.status?.()}</Show>{tiempo()}</span></Show>
           <Show when={hasContent()}>
             <button type="button" aria-expanded={desplegado()} aria-controls={panelId} onClick={() => props.onAlternar(!desplegado())} class={FILA_DEL_TRAMO}>
-              <span class="activity-label inline-flex min-w-0 items-center">{girando()}<span class="min-w-0 truncate" data-activity-label="">{rotulo()}</span></span>{props.status}{tiempo()}{chevron()}
+              <span class="activity-label inline-flex min-w-0 items-center">{girando()}{caption()}</span><Show when={!props.blocked}>{props.status?.()}</Show>{tiempo()}{chevron()}
             </button>
           </Show>
           <Show when={hasChanges()}>
