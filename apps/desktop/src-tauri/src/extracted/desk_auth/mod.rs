@@ -2,15 +2,19 @@
 //! `desk-auth` y contrato `mvp-v1` en `terminus-workspace`):
 //! PKCE S256, retorno por loopback, canje en `POST /v1/identity/desk/token`,
 //! refresh en el llavero y Bearer al borde. La webview recibe perfil y estado,
-//! nunca tokens. No hay varias cuentas: cambiar de usuario es cerrar sesión.
+//! nunca tokens. Cada familia conserva su propia renovación y sus contextos.
 
+mod families;
+mod login_browser;
 pub(crate) mod pkce;
 pub(crate) mod session;
 #[cfg(test)]
 mod tests;
 
 use serde_json::{json, Value};
-use session::{Desk, Fail, Stored, Vault};
+#[cfg(test)]
+use session::Desk;
+use session::{Fail, Stored, Vault};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -34,8 +38,10 @@ fn edge() -> String {
 }
 
 /// El llavero del sistema, con la ACL del usuario. Sin llavero: solo memoria.
+#[derive(Clone)]
 struct Keychain {
     service: String,
+    account: String,
 }
 
 impl Keychain {
@@ -43,7 +49,7 @@ impl Keychain {
         if std::env::var_os("DANIL_DESK_SESSION_MEMORY").is_some() {
             return None;
         }
-        keyring::Entry::new(&self.service, KEYCHAIN_ACCOUNT).ok()
+        keyring::Entry::new(&self.service, &self.account).ok()
     }
 }
 
@@ -62,16 +68,49 @@ impl Vault for Keychain {
     }
 }
 
-fn desk(app: &tauri::AppHandle) -> &'static Desk<Keychain> {
-    static DESK: OnceLock<Desk<Keychain>> = OnceLock::new();
+impl families::FamilyVault for Keychain {
+    fn family(&self, id: &str) -> Self {
+        Self {
+            service: self.service.clone(),
+            account: format!("session:{id}"),
+        }
+    }
+    fn index(&self) -> Option<String> {
+        Self {
+            service: self.service.clone(),
+            account: "sessions-index".into(),
+        }
+        .entry()?
+        .get_password()
+        .ok()
+    }
+    fn save_index(&self, index: &str) -> bool {
+        Self {
+            service: self.service.clone(),
+            account: "sessions-index".into(),
+        }
+        .entry()
+        .is_some_and(|e| e.set_password(index).is_ok())
+    }
+}
+
+fn desk(app: &tauri::AppHandle) -> &'static families::Families<Keychain> {
+    static DESK: OnceLock<families::Families<Keychain>> = OnceLock::new();
     DESK.get_or_init(|| {
         let app = app.clone();
-        Desk::new(
+        families::Families::new(
             edge(),
             Keychain {
                 service: format!("{}.desk-session", app.config().identifier),
+                account: KEYCHAIN_ACCOUNT.into(),
             },
-            move || announce(&app, &disconnected()),
+            move || {
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    let value = desk(&app).status();
+                    announce(&app, &value);
+                });
+            },
         )
     })
 }
@@ -144,8 +183,16 @@ pub(super) fn danil_session_status(app: tauri::AppHandle) -> Value {
 /// canjea el código. `name` (el de la computadora) ya no se usa: se acepta para
 /// no romper al front que lo manda.
 #[tauri::command(async)]
-pub(super) fn danil_sign_in(app: tauri::AppHandle, name: Option<String>) -> Result<Value, Value> {
+pub(super) fn danil_sign_in(
+    app: tauri::AppHandle,
+    name: Option<String>,
+    mode: Option<String>,
+) -> Result<Value, Value> {
     let _ = name;
+    if mode.as_deref().is_some_and(|m| m != "add") {
+        return Err(coded("invalid_request"));
+    }
+    let add = mode.as_deref() == Some("add");
     let d = desk(&app);
     let attempt = d.begin_sign_in();
     if d.capabilities()
@@ -156,11 +203,12 @@ pub(super) fn danil_sign_in(app: tauri::AppHandle, name: Option<String>) -> Resu
     }
     let pkce = pkce::Pkce::open().ok_or_else(|| coded("unavailable"))?;
     let redirect_uri = pkce.redirect_uri();
-    let url = d.authorize_url(&pkce.challenge, &pkce.state, &redirect_uri);
-    super::env::open_external(url).map_err(|_| coded("browser"))?;
+    let url = d.authorize_url(&pkce.challenge, &pkce.state, &redirect_uri, add);
+    let (url, supported_add) = d.prepare_authorize(url, add);
+    let browser = login_browser::LoginBrowser::open(&app, url, add)?;
     let deadline = Instant::now() + LOGIN_WAIT;
     let code = loop {
-        if !d.is_signing_in(attempt) {
+        if browser.cancelled() || !d.is_signing_in(attempt) {
             return Err(coded("cancelled"));
         }
         if Instant::now() > deadline {
@@ -172,30 +220,36 @@ pub(super) fn danil_sign_in(app: tauri::AppHandle, name: Option<String>) -> Resu
             None => std::thread::sleep(Duration::from_millis(200)),
         }
     };
+    drop(browser);
     let verifier = pkce.verifier.clone();
     drop(pkce);
-    let live = d
-        .exchange(attempt, &code, &verifier, &redirect_uri)
+    d.exchange(attempt, &code, &verifier, &redirect_uri, supported_add)
         .map_err(|f| error(&f))?;
     // La sesión de antes (WorkOS a Supabase) no convive con la nueva.
     super::agents_session::retire_legacy(&app);
     let value = d.status();
-    d.publish_if_current(live.generation, || announce(&app, &value));
+    announce(&app, &value);
     Ok(value)
 }
 
 /// Cierra la sesión de esta instalación en `identity` y la borra del llavero.
 #[tauri::command(async)]
-pub(super) fn danil_sign_out(app: tauri::AppHandle) -> Result<Value, Value> {
+pub(super) fn danil_sign_out(
+    app: tauri::AppHandle,
+    family: Option<String>,
+    context: Option<String>,
+) -> Result<Value, Value> {
     let d = desk(&app);
-    let signed_out = d.sign_out();
-    super::agents_session::retire_legacy(&app);
-    // La cuenta del motor tampoco queda conectada; un motor sin la orden no impide salir.
-    let _ = super::proxy::engine_call(&app, "danil_disconnect", json!({}));
-    let value = disconnected();
-    if let Some(generation) = signed_out {
-        d.publish_if_current(generation, || announce(&app, &value));
+    let key = pkce::random(18).ok_or_else(|| coded("unavailable"))?;
+    d.sign_out(family.as_deref(), context.as_deref(), &key)
+        .map_err(|e| error(&e))?;
+    if family.is_none() && context.is_none() {
+        super::agents_session::retire_legacy(&app);
+        // La cuenta del motor tampoco queda conectada; un motor sin la orden no impide salir.
+        let _ = super::proxy::engine_call(&app, "danil_disconnect", json!({}));
     }
+    let value = d.status();
+    announce(&app, &value);
     Ok(value)
 }
 
@@ -211,6 +265,7 @@ pub(super) fn danil_edge_fetch(
     path: String,
     body: Option<Value>,
     idempotency_key: Option<String>,
+    context: Option<String>,
 ) -> Result<Value, Value> {
     let method = method.to_ascii_uppercase();
     if !session::allowed(&method, &path) {
@@ -221,9 +276,13 @@ pub(super) fn danil_edge_fetch(
         Some(_) => return Err(coded("invalid_request")),
         None => pkce::random(18).ok_or_else(|| coded("unavailable"))?,
     };
-    edge_fetch(desk(&app), &method, &path, body.as_ref(), &key)
+    desk(&app)
+        .fetch(&method, &path, body.as_ref(), &key, context.as_deref())
+        .map(|reply| edge_reply(&method, &reply, &key))
+        .map_err(|fail| error(&fail))
 }
 
+#[cfg(test)]
 fn edge_fetch<V: Vault>(
     desk: &Desk<V>,
     method: &str,
