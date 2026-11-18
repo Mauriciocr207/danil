@@ -1,1 +1,1 @@
-export { danilAvailable, danilMachines, readDanil } from "./danil-source.ts";
+export { danilAvailable, danilMachines, machinesListed, readDanil } from "./danil-source.ts";

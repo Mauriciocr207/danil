@@ -154,6 +154,7 @@ export class Fleet {
   private members = new Map<string, Member>();
   /** Lo último que cada máquina contestó en `list_workspaces`; sin entrada, aún no se sabe. */
   private listings = new Map<string, readonly Listed[]>();
+  private listingListeners = new Set<(machine: string) => void>();
   private registry: AccountWorkspace[] | null = null;
   /** Los spaces compartidos con la cuenta que se conocen: del registro y de las respuestas con `account`. */
   private shared = new Set<string>();
@@ -271,7 +272,26 @@ export class Fleet {
     if (!this.members.has(machine)) return;
     const before = this.listings.get(machine);
     this.listings.set(machine, workspaces);
-    if (JSON.stringify(before ?? null) !== JSON.stringify(workspaces)) this.config.onChange?.(machine);
+    if (JSON.stringify(before ?? null) === JSON.stringify(workspaces)) return;
+    this.config.onChange?.(machine);
+    for (const listener of this.listingListeners) listener(machine);
+  }
+
+  /** Avisa cada vez que cambia lo que una máquina lista; devuelve cómo dejar de escuchar. */
+  onListing(listener: (machine: string) => void): () => void {
+    this.listingListeners.add(listener);
+    return () => void this.listingListeners.delete(listener);
+  }
+
+  /** Cada lectura de `list_workspaces` de otra máquina, sea de quien sea, queda como su lista. */
+  private noteListing(machine: string, value: unknown) {
+    const rows = (value as { workspaces?: unknown } | null)?.workspaces;
+    if (!Array.isArray(rows)) return;
+    this.setListing(machine, rows.flatMap((w) => {
+      const id = (w as { id?: unknown } | null)?.id;
+      const name = (w as { name?: unknown } | null)?.name;
+      return typeof id === "string" && id ? [{ id, name: typeof name === "string" && name.trim() ? name : id }] : [];
+    }));
   }
 
   /** Las máquinas `kind=organization` de `organization`, según su fila de `/v1/machines`. */
@@ -620,6 +640,7 @@ export class Fleet {
       const { value, cached } = await this.send(envelope);
       const at = cachedAt(cached);
       slice = { machine, status: cached ? "cached" : "ok", has: true, value, at: at ?? Date.now() };
+      if (envelope.command === "list_workspaces" && !cached) this.noteListing(machine, value);
       member?.fresh?.add(key);
     } catch (error) {
       const e = fromRelay(error, machine);

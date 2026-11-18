@@ -13,12 +13,15 @@ import { edgeFetch } from "../../lib/edge.ts";
 import { capabilities } from "../../lib/platform.ts";
 import { escribirPref, leerPref } from "../../lib/prefs.ts";
 import { listen } from "../../lib/serviceEvents.ts";
-import { danilAvailable, readDanil } from "../machines/index.ts";
+import { platformTransport } from "../../web/platform-session.ts";
+import { danilAvailable, danilMachines, readDanil } from "../machines/index.ts";
 import { type AddedTransport, createAddedSync } from "./workspace-added-sync.ts";
 import { ADDED_KEY, edgeAddedTransport, prefsAddedStore, type WebSend, webAddedTransport } from "./workspace-added-transport.ts";
 
 /** `ORGANIZATION_CHANGED` de `organization-desktop.ts`; el literal evita cargar el selector antes de tiempo. */
 const ORGANIZATION_CHANGED = "danil:organization-changed";
+
+declare const __DANIL_WEB_API__: import("../../web/session-config").WebSessionDeployment | undefined;
 
 let web: AddedTransport | null = null;
 
@@ -56,7 +59,8 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
   const scope = () => {
     const who = person();
     const org = organization();
-    return who && org ? { person: who, organization: org } : null;
+    // Sin máquina de la organización no hay nada de Danil que sincronizar: ninguna llamada.
+    return who && org && danilMachines(org).length > 0 ? { person: who, organization: org } : null;
   };
   const available = (): Listed[] | null => (scope() ? danilAvailable(organization()) : null);
 
@@ -74,6 +78,8 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
   };
 
   const desk: AddedTransport | null = native ? edgeAddedTransport(edgeFetch) : null;
+  // La web arma su transporte de cookie con el borde de su build.
+  if (!native && !web && typeof __DANIL_WEB_API__ !== "undefined") web = webAddedTransport(platformTransport(__DANIL_WEB_API__, (input, init) => fetch(input, init)));
   const pick = () => desk ?? web ?? unavailable;
   const sync = createAddedSync({
     transport: { get: () => pick().get(), put: (id) => pick().put(id), remove: (id) => pick().remove(id), seed: (ids) => pick().seed(ids) },
@@ -104,14 +110,16 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
   createEffect(on(key, () => void sync.sync()));
   createEffect(on([person, organization], ([who, org]) => {
     askPerson();
-    if (who && org) void readDanil(org);
+    // La web ya pregunta `list_workspaces` a todas sus máquinas (`webListing`); la flota lo registra.
+    if (native && who && org) void readDanil(org);
   }));
 
   const ids = createMemo(() => new Set((available() ?? []).map((w) => w.id)));
   return {
     revision,
     signedIn: () => !!person(),
-    organization,
+    /** La organización activa si tiene máquina: sin ella no hay workspaces de Danil que ofrecer. */
+    organization: () => scope()?.organization ?? null,
     /** Las otras organizaciones del JWT, para «Cambiar a…». */
     others: () => {
       const current = state();

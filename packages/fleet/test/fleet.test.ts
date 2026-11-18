@@ -338,6 +338,19 @@ test("rows from /v1/machines: an added workspace goes only to its organization's
   assert.equal(fleet.available("org_A"), null, "a machine that leaves takes its listing with it");
 });
 
+test("a list_workspaces read of an organization machine becomes its listing, and listeners hear it", async () => {
+  const org: MachineInfo = { id: "cmp_org", name: "Servidor Acme", wakes: false, kind: "organization", organizationId: "org_A" };
+  const { fleet } = setup({ cmp_org: { answers: { list_workspaces: { workspaces: [{ id: "ws_acme", name: "Acme" }, { id: "ws_ops" }], active: "ws_acme" } } } }, [org]);
+  const heard: string[] = [];
+  const stop = fleet.onListing((machine) => heard.push(machine));
+  await fleet.read({ machine: "cmp_org", workspace: null, command: "list_workspaces" });
+  assert.deepEqual(fleet.available("org_A"), [{ id: "ws_acme", name: "Acme" }, { id: "ws_ops", name: "ws_ops" }]);
+  assert.deepEqual(heard, ["cmp_org"]);
+  stop();
+  fleet.setListing("cmp_org", []);
+  assert.deepEqual(heard, ["cmp_org"], "after stop, nothing more is heard");
+});
+
 test("machines are added, removed and renamed live without reconnecting the others", async () => {
   const { fleet, made, changes } = setup({ cmp_vm: { answers: { list_live_sessions: [row("t1")] } } }, [VM, MAC]);
   await fleet.read({ machine: "cmp_vm", workspace: "w", command: "list_live_sessions", args: { project: "p1" } });

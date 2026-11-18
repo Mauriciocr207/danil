@@ -9,32 +9,15 @@ import { ITEM_DE_MENU, Popover, PopoverContent, PopoverTrigger } from "../../ui/
 import { type AttentionState, type TaskAttention, topState } from "./attention";
 import { matchesName } from "./hidden-workspaces";
 import WorkspaceSearch, { SEARCH_FROM } from "./WorkspaceSearch";
-
-/** Flechas arriba y abajo entre las filas de un menú; el buscador cuenta como la primera. */
-export function menuArrows(e: KeyboardEvent) {
-  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-  const menu = e.currentTarget as HTMLElement;
-  const items = [...menu.querySelectorAll<HTMLElement>('input[type="search"], [role="menuitem"]:not(:disabled)')];
-  if (!items.length) return;
-  e.preventDefault();
-  const at = items.indexOf(document.activeElement as HTMLElement);
-  const step = e.key === "ArrowDown" ? 1 : -1;
-  items[at < 0 ? (step > 0 ? 0 : items.length - 1) : (at + step + items.length) % items.length]?.focus();
-}
-
-/** Devuelve una fila a la barra sin perder el foco: pasa a la vecina o, si no queda, a la primera del menú. */
-export function showKeepingFocus(row: HTMLElement, show: () => void) {
-  const neighbor = row.nextElementSibling ?? row.previousElementSibling;
-  const menu = row.closest<HTMLElement>('[role="menu"]');
-  show();
-  const target = neighbor?.isConnected ? neighbor.querySelector<HTMLElement>("[data-show-workspace]") : menu?.querySelector<HTMLElement>('[role="menuitem"]');
-  target?.focus();
-}
+import { DanilAddEntry, type DanilMenu, DanilStep, DanilSwitchRows } from "./DanilAddMenu";
+import { menuArrows, showKeepingFocus } from "./menu-focus";
+export { menuArrows };
 
 type Hidden = { id: string; name: string };
 
-/** El «+» del riel: crear uno nuevo y, debajo, los ocultos para abrirlos o devolverlos a la barra. */
+/** El «+» del riel: agregar uno de Danil, crear uno local y, debajo, los ocultos para abrirlos o devolverlos a la barra. */
 export default function AddWorkspaceMenu(props: {
+  danil: DanilMenu;
   hidden: Hidden[];
   open: string | null;
   tasksOf: (id: string) => TaskAttention[];
@@ -46,14 +29,16 @@ export default function AddWorkspaceMenu(props: {
   onShow: (id: string) => void;
 }) {
   const [open, setOpen] = createSignal(false);
+  const [step, setStep] = createSignal<"menu" | "danil">("menu");
   const [query, setQuery] = createSignal("");
   const close = () => {
     setOpen(false);
+    setStep("menu");
     setQuery("");
   };
   const rows = () => props.hidden.filter((w) => matchesName(w.name, query()));
-  // El abierto ya enseña su distintivo en su cuadro.
-  const waiting = () => topState(props.hidden.filter((w) => w.id !== props.open).flatMap((w) => props.tasksOf(w.id)));
+  // El abierto ya enseña su distintivo en su cuadro; los de Danil sin agregar también avisan.
+  const waiting = () => topState([...props.hidden, ...(props.danil.toAdd ?? [])].filter((w) => w.id !== props.open).flatMap((w) => props.tasksOf(w.id)));
   const label = () => {
     const state = waiting();
     return state ? t("shell.workspaces.add_hidden_state", { state: props.labelOf(state) }) : t("shell.workspaces.add");
@@ -76,7 +61,12 @@ export default function AddWorkspaceMenu(props: {
         <Plus size={16} aria-hidden="true" />
         <Show when={waiting()}>{(s) => <Dynamic component={props.badge} state={s()} class="absolute -top-1 -right-1" />}</Show>
       </PopoverTrigger>
-      <PopoverContent role="menu" class="w-64 p-1" onKeyDown={menuArrows}>
+      <PopoverContent role={step() === "menu" ? "menu" : undefined} class="w-64 p-1" onKeyDown={menuArrows}>
+        <Show
+          when={step() === "menu"}
+          fallback={<DanilStep danil={props.danil} query={query()} onQuery={setQuery} tasksOf={props.tasksOf} badge={props.badge} onClose={close} />}
+        >
+          <DanilAddEntry danil={props.danil} onStep={() => (setQuery(""), setStep("danil"))} />
           <button
             type="button"
             role="menuitem"
@@ -88,13 +78,14 @@ export default function AddWorkspaceMenu(props: {
           >
             {t("shell.workspaces.create")}
           </button>
+          <DanilSwitchRows danil={props.danil} onClose={close} />
           <Show when={props.hidden.length > 0}>
             <span aria-hidden="true" class={cn(SEPARADOR_DE_MENU, "block")} />
             <p class={cn("m-0", TITULO_DE_GRUPO)}>{t("shell.workspaces.hidden_title")}</p>
             <Show when={props.hidden.length >= SEARCH_FROM}>
               <WorkspaceSearch value={query()} onInput={setQuery} />
             </Show>
-            <div class="max-h-64 overflow-y-auto" data-hidden-workspaces="">
+            <div class="max-h-64 overflow-y-auto p-0.5" data-hidden-workspaces="">
               <For each={rows()}>
                 {(w) => {
                   const state = () => (w.id === props.open ? null : topState(props.tasksOf(w.id)));
@@ -131,6 +122,7 @@ export default function AddWorkspaceMenu(props: {
               </For>
             </div>
           </Show>
+        </Show>
       </PopoverContent>
     </Popover>
   );

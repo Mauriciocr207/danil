@@ -1,5 +1,6 @@
 import type { Fleet, Listed } from "@terminus/fleet";
 import { createRoot, createSignal } from "solid-js";
+import { rememberMachineNames } from "./known-names.ts";
 
 /**
  * Los workspaces de Danil de una organización de pago (plan 2026-11-18, A2 y A3): lo que
@@ -8,12 +9,23 @@ import { createRoot, createSignal } from "solid-js";
  */
 const [revision, bump] = createRoot(() => createSignal(0));
 let fleet: Fleet | null = null;
+let unlisten: (() => void) | null = null;
 const reading = new Map<string, Promise<void>>();
 
 /** La flota de la ventana; `null` al cerrar sesión, y entonces no hay nada de Danil. */
 export function setDanilFleet(next: Fleet | null) {
+  if (fleet === next) return;
+  unlisten?.();
   fleet = next;
+  unlisten = next?.onListing(() => bump((n) => n + 1)) ?? null;
   reading.clear();
+  bump((n) => n + 1);
+}
+
+/** La flota recibió su inventario: se recuerdan los nombres de sus máquinas y la fuente la adopta. */
+export function machinesListed(next: Fleet) {
+  rememberMachineNames(next.machines());
+  setDanilFleet(next);
   bump((n) => n + 1);
 }
 
