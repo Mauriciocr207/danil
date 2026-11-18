@@ -1,0 +1,114 @@
+/*! LDRS v1.1.9 / f759f65beb8ab4f4a1f010438072180693ca01ec
+MIT License
+
+Copyright (c) 2022 Griffin Johnston
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+.activity-loader-jellyTriangle{--uib-size:12.25px;--uib-color:currentColor;--uib-speed:1.8s}
+.activity-loader-jellyTriangle {
+  --uib-dot-size: calc(var(--uib-size) / 3);
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--uib-size);
+  width: var(--uib-size);
+}
+
+.activity-loader-jellyTriangle[hidden] {
+  display: none;
+}
+
+.activity-loader-jellyTriangle .container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--uib-size);
+  width: var(--uib-size);
+}
+
+.activity-loader-jellyTriangle .svg {
+  filter: url('#uib-jelly-triangle-ooze');
+  overflow: visible;
+}
+
+.activity-loader-jellyTriangle .dot,
+.activity-loader-jellyTriangle .traveler {
+  display: block;
+  transition: fill 0.3s ease;
+  transform-origin: center;
+  transform-box: fill-box;
+  fill: var(--uib-color);
+  r: calc(var(--uib-dot-size) / 2);
+  will-change: transform;
+}
+
+.activity-loader-jellyTriangle .dot:nth-child(1) {
+  cy: calc(var(--uib-dot-size) / 2);
+  cx: 50%;
+  animation: activity-jellyTriangle-grow var(--uib-speed) ease infinite;
+}
+
+.activity-loader-jellyTriangle .dot:nth-child(2) {
+  cy: calc(var(--uib-size) - var(--uib-dot-size) / 2);
+  cx: calc(var(--uib-size) - var(--uib-dot-size) / 2);
+  animation: activity-jellyTriangle-grow var(--uib-speed) ease calc(var(--uib-speed) * -0.666) infinite;
+}
+
+.activity-loader-jellyTriangle .dot:nth-child(3) {
+  cy: calc(var(--uib-size) - var(--uib-dot-size) / 2);
+  cx: calc(var(--uib-dot-size) / 2);
+  animation: activity-jellyTriangle-grow var(--uib-speed) ease calc(var(--uib-speed) * -0.333) infinite;
+}
+
+.activity-loader-jellyTriangle .traveler {
+  cy: calc(var(--uib-dot-size) / 2);
+  cx: 50%;
+  animation: activity-jellyTriangle-triangulate var(--uib-speed) ease infinite;
+}
+
+@keyframes activity-jellyTriangle-triangulate {
+  0%,
+  100% {
+    transform: none;
+  }
+
+  33.333% {
+    transform: translate(100%, 200%);
+  }
+
+  66.666% {
+    transform: translate(-100%, 200%);
+  }
+}
+
+@keyframes activity-jellyTriangle-grow {
+  0%,
+  85%,
+  100% {
+    transform: scale(1.5);
+  }
+
+  50%,
+  60% {
+    transform: scale(0);
+  }
+}

@@ -30,7 +30,6 @@
 /* La segunda capa de color, sin capa a propósito: tiene que ganarle al `:root`
    que emite `@theme`, igual que el bloque de oscuro de más abajo. */
 @import "./terminal.css";
-@import "../features/chat/activity-dots.css";
 
 /* Detección explícita de las clases en uso: sin `@import "tailwindcss"` no hay
    escaneo automático que heredar. */

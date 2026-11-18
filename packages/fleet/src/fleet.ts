@@ -524,6 +524,13 @@ export class Fleet {
     return { value, at: cachedAt(cached) };
   }
 
+  /** An execution fact cannot come from a relay copy or a prior in-flight display read. */
+  async readLive(envelope: Envelope): Promise<unknown> {
+    const { value, cached } = await this.send(envelope);
+    if (cached !== null) throw new FleetError("machine_off", envelope.machine, envelope.command);
+    return this.encode(envelope.machine, value, envelope.command);
+  }
+
   /** La última rebanada de una lectura de `machine`, sin preguntar. */
   peek(envelope: Envelope): Slice | null {
     const key = this.keyOf(envelope);

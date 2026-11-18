@@ -2,14 +2,15 @@ import ChevronRight from "lucide-solid/icons/chevron-right";
 import { createMemo, createUniqueId, Index, type JSX, Show } from "solid-js";
 import { t } from "../../../../lib/i18n";
 import { sharedLazy } from "../../../../lib/sharedLazy";
-import { cuentaDelTramo, partesDelTramo, type Paso } from "../../../../lib/steps";
+import { partesDelTramo, type Paso } from "../../../../lib/steps";
 import { cn } from "../../../../lib/utils";
 import { Markdown } from "../../../../ui/Markdown";
 import type { ActivityChunk } from "../../activityBlocks";
-import { ActivityDots } from "../../ActivityDots";
+import { ActivityIndicator, ActivityCaption } from "./ActivityIndicator";
 import McpAppView from "../../McpAppView";
 import type { Msg, Razonamiento } from "../../messageTypes";
 import LineaDeTiempo, { SUPERFICIE_DE_EJECUCION } from "../../Timeline";
+import { presentActivity, type ActivityAction } from "../../activityPresentation";
 type Avance = ActivityChunk<Msg>;
 const SIN_AVANCE: Avance[] = [];
 /** La cabecera de un tramo, entera o partida (ver `RegistroDeTrabajo`). */
@@ -22,6 +23,8 @@ export function RegistroDeTrabajo(props: {
   /** Lo que el turno hizo y dijo antes de su respuesta; se pliega con los pasos. */
   avance?: Avance[];
   corriendo: boolean;
+  stopping?: boolean;
+  latestAction?: ActivityAction | null;
   status?: () => JSX.Element;
   blocked?: boolean;
   observed?: boolean;
@@ -39,9 +42,8 @@ export function RegistroDeTrabajo(props: {
   // correcto, y «1 con error» alarmaba. El fallo del turno va aparte.
   const avance = () => props.avance ?? SIN_AVANCE;
   const todos = createMemo(() => [...avance().flatMap((a) => a.pasos), ...props.pasos]);
-  const rotulo = () => props.label ??
-    cuentaDelTramo(todos(), props.corriendo) ??
-    (props.corriendo ? t("chat.reasoning.thinking") : t("chat.activity.title"));
+  const presentation = createMemo(() => presentActivity({ active: props.corriendo, stopping: props.stopping, blocked: props.blocked, paused: props.animando === false, action: props.latestAction, label: props.label }));
+  const rotulo = () => presentation().label;
   const hasContent = () => todos().length > 0 || avance().length > 0 || Boolean(props.razonamiento?.length);
   const hasChanges = () => props.onVerCambios && partesDelTramo(todos(), props.corriendo).some(part => part.clase === "editar");
   const duracion = () =>
@@ -56,8 +58,8 @@ export function RegistroDeTrabajo(props: {
       aria-hidden="true"
     />
   );
-  const girando = () => <ActivityDots active={props.corriendo} paused={props.animando === false} />;
-  const caption = () => <><Show when={!props.blocked}><span class="min-w-0 truncate" data-activity-label="">{rotulo()}</span></Show><Show when={props.blocked}>{props.status?.()}</Show></>;
+  const girando = () => <ActivityIndicator mode={!props.corriendo ? "finished" : presentation().animate ? "running" : "paused"} />;
+  const caption = () => <><Show when={props.stopping || !props.blocked}><ActivityCaption active={presentation().animate} text={rotulo()} /></Show><Show when={!props.stopping && props.blocked}>{props.status?.()}</Show></>;
   const tiempo = () => (
     <Show when={duracion()}>
       <span class="pointer-events-none shrink-0 text-xs whitespace-nowrap text-neutral-500">{duracion()}</span>
@@ -68,16 +70,16 @@ export function RegistroDeTrabajo(props: {
   // elemento de más se multiplica por los tramos del hilo (`open-task-cost`).
   return (
     <>
-      <span role="status" aria-live="polite" aria-atomic="true" class="sr-only">{props.corriendo && props.animando !== false ? t("chat.turn.working_aria") : ""}</span>
+      <span role="status" aria-live="polite" aria-atomic="true" class="sr-only">{props.stopping ? t("chat.turn.stopping") : presentation().animate ? t("chat.turn.working_aria") : ""}</span>
       <Show
         when={todos().length > 0 || avance().length > 0 || props.razonamiento?.length || props.corriendo || props.observed}
         fallback={<p class="m-0 mb-2 px-1 py-1.5 text-xs text-neutral-500">{duracion()}</p>}
       >
         <div class={cn("flex flex-wrap items-center gap-2", !desplegado() && "mb-2")}>
-          <Show when={!hasContent()}><span class={FILA_DEL_TRAMO}><span class="activity-label inline-flex min-w-0 items-center">{girando()}{caption()}</span><Show when={!props.blocked}>{props.status?.()}</Show>{tiempo()}</span></Show>
+          <Show when={!hasContent()}><span class={FILA_DEL_TRAMO}><span class="activity-label inline-flex min-w-0 items-center">{girando()}{caption()}</span><Show when={!props.stopping && !props.blocked}>{props.status?.()}</Show>{tiempo()}</span></Show>
           <Show when={hasContent()}>
             <button type="button" aria-expanded={desplegado()} aria-controls={panelId} onClick={() => props.onAlternar(!desplegado())} class={FILA_DEL_TRAMO}>
-              <span class="activity-label inline-flex min-w-0 items-center">{girando()}{caption()}</span><Show when={!props.blocked}>{props.status?.()}</Show>{tiempo()}{chevron()}
+              <span class="activity-label inline-flex min-w-0 items-center">{girando()}{caption()}</span><Show when={!props.stopping && !props.blocked}>{props.status?.()}</Show>{tiempo()}{chevron()}
             </button>
           </Show>
           <Show when={hasChanges()}>

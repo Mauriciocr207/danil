@@ -63,8 +63,12 @@ const rustSteps = [
 ];
 
 const steps = [
+  ["Unresolved delegated references never fabricate task dates or native actions", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/delegated-reference.test.mjs")], root],
   ["Live activity shares one disclosure without crossing known turn boundaries", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/chat-activity.test.ts")], root],
   ["Turn activity keeps lifecycle provenance and known start epochs", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/thread-activity.test.ts")], root],
+  ["Activity presentation follows observed updates and pending cancellation", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/activity-presentation.test.ts")], root],
+  ["Activity motion consumes each figure once before repeating", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/activity-motion.test.ts")], root],
+  ["Tool rows keep command labels and disclose only additional output", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/step-row.test.ts")], root],
   ["Front modularization debt only decreases", process.execPath, [join(root, "scripts/guards/front-modularization.mjs")], root],
   ["Front modularization gates reject injected regressions", process.execPath, ["--test", join(root, "tests/unit/front-modularization.test.mjs")], root],
   ["Service capabilities are optional and versioned", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/web-service-capabilities.test.ts")], root],
@@ -72,6 +76,7 @@ const steps = [
   ["Workspace context owns transition and material validity", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/workspace-context.test.ts")], root],
   ["Composer selection and catalogs have one owner", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/composer-store.test.ts")], root],
   ["Drafts own text references attachments and rollback", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/drafts-store.test.ts")], root],
+  ["Conversation handoff waits for terminal and stop settlement", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/conversation-handoff.test.ts")], root],
   ["Task queues own retention persistence and session scope", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/task-queues-store.test.ts")], root],
   ["Threads own transcript history and streaming reconciliation", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/threads-store.test.ts")], root],
   ["Service stream owns polling lifecycle and subscription filtering", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/service-stream.test.ts")], root],

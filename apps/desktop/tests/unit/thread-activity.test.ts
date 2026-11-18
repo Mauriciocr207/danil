@@ -4,6 +4,40 @@ import { activityElapsed, createActivityProjection } from "../../src/features/th
 import type { Msg } from "../../src/features/chat/index.ts";
 const message = (text: string, extra: Partial<Msg> = {}): Msg => ({ role: "agent", text, ...extra });
 
+test("last observed action follows updates to an earlier native message, not array position", () => {
+  const model = createActivityProjection(); model.begin("A", "s", 1_000);
+  const reasoning = message("already answered", { nativeMessageId: "native", razonamiento: [{ text: "first" }] });
+  const tool = message("Read", { role: "system", meta: "usó" });
+  model.observe("A", "s", [], [reasoning]); model.observe("A", "s", [reasoning], [reasoning, tool]);
+  assert.equal(model.project("A", "s", [reasoning, tool])[0].observation?.message, tool);
+  const updated = { ...reasoning, razonamiento: [{ text: "first continued" }] };
+  model.observe("A", "s", [reasoning, tool], [updated, tool]);
+  assert.equal(model.project("A", "s", [updated, tool])[0].observation?.message, updated);
+  assert.equal(model.project("A", "s", [updated, tool])[0].observation?.kind, "thinking");
+  const savedTool = { ...tool, tramo: "saved" };
+  model.observe("A", "s", [updated, tool], [updated, savedTool]);
+  assert.equal(model.project("A", "s", [updated, savedTool])[0].observation?.message, updated);
+});
+
+test("draft adoption keeps the newest observation and follows later edits through its alias", () => {
+  const model = createActivityProjection(); model.begin("A", "", 1_000); model.begin("A", "s", 1_100);
+  const first = message("first"); model.observe("A", "s", [], [first]);
+  model.adopt("A", "", "s");
+  assert.equal(model.project("A", "s", [first])[0].observation?.message, first);
+  const updated = { ...first, text: "first continued" }; model.observe("A", "s", [first], [updated]);
+  assert.equal(model.project("A", "s", [updated])[0].observation?.message, updated);
+});
+
+test("recovered history and injected user inputs never invent the latest model action", () => {
+  const model = createActivityProjection(); model.begin("A", "s", null);
+  const history = message("saved", { turno: "old", clave: "old:0" });
+  model.reconcile("A", "s", [], [history], false);
+  assert.equal(model.project("A", "s", [history])[0].observation, null);
+  const steer = message("continue", { role: "user", inyectado: { tras: "old" } });
+  model.observe("A", "s", [history], [history, steer]);
+  assert.equal(model.project("A", "s", [history, steer])[0].observation, null);
+});
+
 test("explicit start anchors before first output without a native message ID", () => {
   const model = createActivityProjection(), old = message("history", { turno: "old", clave: "old:0" });
   model.begin("A", "s", 1_000);
