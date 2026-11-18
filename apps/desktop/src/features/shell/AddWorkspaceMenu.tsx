@@ -7,22 +7,23 @@ import { cn } from "../../lib/utils";
 import { SEPARADOR_DE_MENU, TITULO_DE_GRUPO } from "../../ui/ContextMenu";
 import { ITEM_DE_MENU, Popover, PopoverContent, PopoverTrigger } from "../../ui/Popover";
 import { type AttentionState, type TaskAttention, topState } from "./attention";
-import { matchesName } from "./hidden-workspaces";
-import WorkspaceSearch, { SEARCH_FROM } from "./WorkspaceSearch";
 import { DanilAddEntry, type DanilMenu, DanilStep, DanilSwitchRows } from "./DanilAddMenu";
+import { matchesName } from "./hidden-workspaces";
 import { menuArrows, showKeepingFocus } from "./menu-focus";
+import { SessionAddEntries, SessionAddStep, usesSessionMenu } from "./SessionAddMenu";
+import type { sessionRail } from "./session-groups";
+import WorkspaceSearch, { SEARCH_FROM } from "./WorkspaceSearch";
+
 export { menuArrows };
 
 type Hidden = { id: string; name: string };
-
-/** El «+» del riel: agregar uno de Danil, crear uno local y, debajo, los ocultos para abrirlos o devolverlos a la barra. */
 export default function AddWorkspaceMenu(props: {
   danil: DanilMenu;
+  sessions: ReturnType<typeof sessionRail>;
   hidden: Hidden[];
   open: string | null;
   tasksOf: (id: string) => TaskAttention[];
   badge: Component<{ state: AttentionState; class?: string }>;
-  /** Cómo se dice un estado junto al nombre, para quien no ve el distintivo. */
   labelOf: (state: AttentionState) => string;
   onCreate: () => void;
   onOpen: (id: string) => void;
@@ -37,7 +38,6 @@ export default function AddWorkspaceMenu(props: {
     setQuery("");
   };
   const rows = () => props.hidden.filter((w) => matchesName(w.name, query()));
-  // El abierto ya enseña su distintivo en su cuadro; los de Danil sin agregar también avisan.
   const waiting = () => topState([...props.hidden, ...(props.danil.toAdd ?? [])].filter((w) => w.id !== props.open).flatMap((w) => props.tasksOf(w.id)));
   const label = () => {
     const state = waiting();
@@ -64,9 +64,9 @@ export default function AddWorkspaceMenu(props: {
       <PopoverContent role="menu" class="w-64 p-1" onKeyDown={menuArrows}>
         <Show
           when={step() === "menu"}
-          fallback={<DanilStep danil={props.danil} query={query()} onQuery={setQuery} tasksOf={props.tasksOf} badge={props.badge} onClose={close} />}
+          fallback={props.sessions.groups() !== null ? <SessionAddStep sessions={props.sessions} query={query()} onQuery={setQuery} onClose={close} onOpen={props.onOpen} /> : <DanilStep danil={props.danil} query={query()} onQuery={setQuery} tasksOf={props.tasksOf} badge={props.badge} onClose={close} />}
         >
-          <DanilAddEntry danil={props.danil} onStep={() => (setQuery(""), setStep("danil"))} />
+          <Show when={usesSessionMenu(props.sessions, props.danil.signedIn)} fallback={<DanilAddEntry danil={props.danil} onStep={() => setStep("danil")} />}><SessionAddEntries sessions={props.sessions} signedIn={props.danil.signedIn} onStep={() => setStep("danil")} /></Show>
           <button
             type="button"
             role="menuitem"
@@ -78,7 +78,7 @@ export default function AddWorkspaceMenu(props: {
           >
             {t("shell.workspaces.create")}
           </button>
-          <DanilSwitchRows danil={props.danil} onClose={close} />
+          <Show when={props.sessions.groups() === null}><DanilSwitchRows danil={props.danil} onClose={close} /></Show>
           <Show when={props.hidden.length > 0}>
             <span aria-hidden="true" class={cn(SEPARADOR_DE_MENU, "block")} />
             <p class={cn("m-0", TITULO_DE_GRUPO)}>{t("shell.workspaces.hidden_title")}</p>

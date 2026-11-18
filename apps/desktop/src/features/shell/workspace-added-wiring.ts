@@ -1,11 +1,3 @@
-/**
- * El cableado de los workspaces de Danil agregados (`workspace-added-sync.ts`): una sola
- * sincronización por ventana con el transporte de Desk o el de la web, la persona, la
- * organización activa y la fuente (`danilAvailable`, las máquinas `kind=organization`).
- *
- * - Sin persona u organización no se llama al borde y nada es de Danil.
- * - Desk: `edgeFetch` y la persona de `GET /v1/identity/me`. La web: la cookie y CSRF.
- */
 import type { OrganizationSelection } from "@terminus/computers";
 import type { Listed } from "@terminus/fleet";
 import { createEffect, createMemo, createRoot, createSignal, on } from "solid-js";
@@ -15,6 +7,7 @@ import { escribirPref, leerPref } from "../../lib/prefs.ts";
 import { listen } from "../../lib/serviceEvents.ts";
 import { platformTransport } from "../../web/platform-session.ts";
 import { danilAvailable, danilMachines, readDanil } from "../machines/index.ts";
+import { sessionRail } from "./session-groups.ts";
 import { type AddedTransport, createAddedSync } from "./workspace-added-sync.ts";
 import { ADDED_KEY, edgeAddedTransport, prefsAddedStore, type WebSend, webAddedTransport } from "./workspace-added-transport.ts";
 
@@ -45,6 +38,7 @@ export function danilRail(hidden: () => ReadonlySet<string>, onSeeded: (ids: rea
 
 function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string[]) => void) {
   const native = capabilities().nativeWindow;
+  const sessions = sessionRail(hidden, onSeeded);
   const [revision, bump] = createSignal(0);
   const [person, setPerson] = createSignal<string | null>(native ? null : (capabilities().webAccounts?.current.user_id ?? null));
   const [organizationRead, organizationChanged] = createSignal(0, { equals: false });
@@ -59,6 +53,7 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
     return current?.kind === "ready" ? current.active : null;
   };
   const scope = () => {
+    if (native && (!sessions.ready() || sessions.groups() !== null)) return null;
     const who = person();
     const org = organization();
     // Sin máquina de la organización no hay nada de Danil que sincronizar: ninguna llamada.
@@ -68,7 +63,7 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
 
   let asking = false;
   const askPerson = () => {
-    if (!native || asking || person()) return;
+    if (!native || asking || person() || !sessions.ready() || !sessions.connected() || sessions.groups() !== null) return;
     asking = true;
     edgeFetch<{ id?: unknown }>("GET", "/v1/identity/me")
       .then((r) => {
@@ -110,16 +105,19 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
     return current ? `${current.person}:${current.organization}:${available() ? "settled" : "waiting"}` : "";
   });
   createEffect(on(key, () => void sync.sync()));
-  createEffect(on([person, organization], ([who, org]) => {
+  createEffect(on([person, organization, sessions.ready, sessions.connected, () => sessions.groups() === null], ([who, org]) => {
     askPerson();
     // La web ya pregunta `list_workspaces` a todas sus máquinas (`webListing`); la flota lo registra.
     if (native && who && org) void readDanil(org);
   }));
 
+  createEffect(on(() => native && sessions.ready() && sessions.groups() === null && !!person() && !!selection(), (legacy) => {
+    if (legacy) void selection()?.load();
+  }));
   const ids = createMemo(() => new Set((available() ?? []).map((w) => w.id)));
   return {
     revision,
-    signedIn: () => !!person(),
+    signedIn: () => !!sessions.groups()?.length || !!person(),
     /** La organización activa si tiene máquina: sin ella no hay workspaces de Danil que ofrecer. */
     organization: () => scope()?.organization ?? null,
     /** Las otras organizaciones del JWT, para «Cambiar a…». */
@@ -134,10 +132,13 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
       return sync.added();
     },
     /** De Danil = lo lista la máquina `kind=organization` de la organización activa. */
-    isDanil: (id: string) => ids().has(id),
+    isDanil: (id: string) => sessions.groups() !== null ? sessions.known.has(id) : ids().has(id),
     refresh: () => void readDanil(organization()),
     add: sync.add,
-    remove: sync.remove,
+    remove: (id: string) => {
+      const group = sessions.groups()?.find((g) => g.available?.some((w) => w.id === id));
+      return group ? sessions.remove(group.context_id, id) : sync.remove(id);
+    },
   };
 }
 
