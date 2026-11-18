@@ -214,6 +214,9 @@
   --color-bg: #f9f9f9;
   --color-surface: #ffffff;
   --color-surface-raised: #ffffff;
+  /* El borde de un workspace de Danil en el riel: reemplaza al normal, nunca se suma. */
+  --color-danil-mark-from: #6539f5;
+  --color-danil-mark-to: #a77bff;
   /* El globo de la persona lleva un tinte de marca y el de un agente se queda
      en `surface-raised`, pegado al fondo: lo que escribe la persona es lo que
      tiene que saltar al recorrer el hilo. Cada tema mezcla su propio primario
@@ -489,6 +492,8 @@
   --color-bg: #070b1c;
   --color-surface: #1a2240;
   --color-surface-raised: #242e54;
+  --color-danil-mark-from: #8b6cff;
+  --color-danil-mark-to: #c9a8ff;
   --color-surface-muted: #101630;
   /* Riel de Configuración: 1,18:1 contra `surface`; el gris secundario da 6,31:1. */
   --color-rail: #0d132b;
@@ -906,6 +911,18 @@
   mask: radial-gradient(circle 9px at 50% 0, transparent 8.5px, #000 9px);
 }
 .tarjeta-fijada-alfiler { rotate: 35deg; }
+
+/* Un workspace de Danil en el riel: un solo borde de 1 px con degradado en lugar del normal.
+   El relleno va en una variable para que el hover y el activo sigan pintando su superficie. */
+.danil-mark {
+  --danil-mark-fill: var(--color-surface);
+  border-color: transparent;
+  background:
+    linear-gradient(var(--danil-mark-fill), var(--danil-mark-fill)) padding-box,
+    linear-gradient(135deg, var(--color-danil-mark-from), var(--color-danil-mark-to)) border-box;
+}
+.group:hover .danil-mark { --danil-mark-fill: var(--color-neutral-200); }
+.danil-mark[data-active] { --danil-mark-fill: var(--color-surface-raised); }
 
 /* Nace en la tobera del icono de 15 px centrado en 20 px, sobre el eje del
    cohete (x + y = 20); arriba-centro de la llama queda en (6, 14). */
