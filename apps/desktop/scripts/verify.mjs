@@ -67,6 +67,7 @@ const steps = [
   ["Turn activity keeps lifecycle provenance and known start epochs", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/thread-activity.test.ts")], root],
   ["Activity presentation follows observed updates and pending cancellation", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/activity-presentation.test.ts")], root],
   ["Activity motion consumes each figure once before repeating", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/activity-motion.test.ts")], root],
+  ["Tool rows keep command labels and disclose only additional output", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/step-row.test.ts")], root],
   ["Front modularization debt only decreases", process.execPath, [join(root, "scripts/guards/front-modularization.mjs")], root],
   ["Front modularization gates reject injected regressions", process.execPath, ["--test", join(root, "tests/unit/front-modularization.test.mjs")], root],
   ["Service capabilities are optional and versioned", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/web-service-capabilities.test.ts")], root],
