@@ -29,13 +29,16 @@ export function createActivityProjection() {
   }
   function observe(workspace: string | null, session: string, before: readonly Msg[], after: readonly Msg[]) {
     const active = current(workspace, session);
+    const saved = new Map(list(workspace, session).flatMap(record => [...record.saved].map(id => [id, record] as const)));
     const positions = new Map(before.map((message, index) => [message, index]));
     after.forEach((message, index) => {
       // Existing objects keep their owner even when deletion shifts their index.
       if (owners.has(message)) return;
       const previous = before[index];
       const inherited = before.length === after.length && !positions.has(message) && previous ? owners.get(previous) : undefined;
-      const owner = inherited?.alias ?? inherited ?? (active?.active ? active : undefined);
+      const known = (message.tramo ? saved.get(message.tramo) : undefined) ?? (message.turno ? saved.get(message.turno) : undefined);
+      const assigned = known ?? inherited;
+      const owner = assigned?.alias ?? assigned ?? (active?.active ? active : undefined);
       if (!owner || positions.has(message)) return;
       owners.set(message, owner);
       if (owner.active) owner.anchor.observe(message, previous);

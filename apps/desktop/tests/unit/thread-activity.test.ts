@@ -377,3 +377,20 @@ test("replayed content from a closed segment is not a runtime start confirmation
   model.observe("A", "s", [], [replay]);
   assert.equal(model.project("A", "s", [replay]).at(-1)?.startConfirmed, false);
 });
+
+
+for (const field of ["turno", "tramo"] as const) test(`replayed output with a known ${field} keeps its closed owner`, () => {
+  const model = createActivityProjection();
+  const old = message("old output", { [field]: "old-segment" });
+  model.begin("A", "s", 1_000);
+  model.observe("A", "s", [], [old]);
+  const oldKey = model.project("A", "s", [old])[0].key;
+  model.finish("A", "s");
+  model.begin("A", "s", null, [], true);
+  const replay = { ...old };
+  const current = message("new output");
+  model.observe("A", "s", [], [replay, current]);
+  const activities = model.project("A", "s", [replay, current]);
+  assert.deepEqual(activities.find(activity => activity.key === oldKey)?.messages, [replay]);
+  assert.deepEqual(activities.find(activity => activity.active)?.messages, [current]);
+});
