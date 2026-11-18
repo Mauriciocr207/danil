@@ -1,23 +1,28 @@
 import Eye from "lucide-solid/icons/eye";
 import Plus from "lucide-solid/icons/plus";
-import { type Component, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { t } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { SEPARADOR_DE_MENU, TITULO_DE_GRUPO } from "../../ui/ContextMenu";
 import { ITEM_DE_MENU, Popover, PopoverContent, PopoverTrigger } from "../../ui/Popover";
 import { type AttentionState, type TaskAttention, topState } from "./attention";
-import { matchesName } from "./hidden-workspaces";
-import WorkspaceSearch, { SEARCH_FROM } from "./WorkspaceSearch";
 import { DanilAddEntry, type DanilMenu, DanilStep, DanilSwitchRows } from "./DanilAddMenu";
+import { matchesName } from "./hidden-workspaces";
 import { menuArrows, showKeepingFocus } from "./menu-focus";
+import { SessionAddEntries, SessionAddStep, usesSessionMenu } from "./SessionAddMenu";
+import { SessionEmptyNotice } from "./SessionEmptyNotice";
+import type { sessionRail } from "./session-groups";
+import { openRequestedSessionMenu } from "./session-menu-open";
+import WorkspaceSearch, { SEARCH_FROM } from "./WorkspaceSearch";
+
 export { menuArrows };
 
 type Hidden = { id: string; name: string };
-
 /** El «+» del riel: agregar uno de Danil, crear uno local y, debajo, los ocultos para abrirlos o devolverlos a la barra. */
 export default function AddWorkspaceMenu(props: {
   danil: DanilMenu;
+  sessions: ReturnType<typeof sessionRail>;
   hidden: Hidden[];
   open: string | null;
   tasksOf: (id: string) => TaskAttention[];
@@ -30,6 +35,8 @@ export default function AddWorkspaceMenu(props: {
 }) {
   const [open, setOpen] = createSignal(false);
   const [step, setStep] = createSignal<"menu" | "danil">("menu");
+  const [context, setContext] = createSignal<string | null>(null);
+  createEffect(() => openRequestedSessionMenu(props.sessions, { context: setContext, step: setStep, open: setOpen }));
   const [query, setQuery] = createSignal("");
   const close = () => {
     setOpen(false);
@@ -62,11 +69,12 @@ export default function AddWorkspaceMenu(props: {
         <Show when={waiting()}>{(s) => <Dynamic component={props.badge} state={s()} class="absolute -top-1 -right-1" />}</Show>
       </PopoverTrigger>
       <PopoverContent role="menu" class="w-64 p-1" onKeyDown={menuArrows}>
+        <SessionEmptyNotice sessions={props.sessions} />
         <Show
           when={step() === "menu"}
-          fallback={<DanilStep danil={props.danil} query={query()} onQuery={setQuery} tasksOf={props.tasksOf} badge={props.badge} onClose={close} />}
+          fallback={props.sessions.groups() !== null ? <SessionAddStep sessions={props.sessions} context={context()} query={query()} onQuery={setQuery} onClose={close} onOpen={props.onOpen} /> : <DanilStep danil={props.danil} query={query()} onQuery={setQuery} tasksOf={props.tasksOf} badge={props.badge} onClose={close} />}
         >
-          <DanilAddEntry danil={props.danil} onStep={() => (setQuery(""), setStep("danil"))} />
+          <Show when={usesSessionMenu(props.sessions, props.danil.signedIn)} fallback={<DanilAddEntry danil={props.danil} onStep={() => (setContext(null), setStep("danil"))} />}><SessionAddEntries sessions={props.sessions} signedIn={props.danil.signedIn} onStep={() => (setContext(null), setStep("danil"))} /></Show>
           <button
             type="button"
             role="menuitem"
@@ -78,7 +86,7 @@ export default function AddWorkspaceMenu(props: {
           >
             {t("shell.workspaces.create")}
           </button>
-          <DanilSwitchRows danil={props.danil} onClose={close} />
+          <Show when={props.sessions.groups() === null}><DanilSwitchRows danil={props.danil} onClose={close} /></Show>
           <Show when={props.hidden.length > 0}>
             <span aria-hidden="true" class={cn(SEPARADOR_DE_MENU, "block")} />
             <p class={cn("m-0", TITULO_DE_GRUPO)}>{t("shell.workspaces.hidden_title")}</p>

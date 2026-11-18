@@ -39,7 +39,7 @@ const BLIND_HIDE_MS: u64 = 2_000;
 #[cfg(any(test, target_os = "macos"))]
 const EXIT_GIVE_UP_MS: u64 = 5_000;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, PartialEq, Eq)]
 pub(super) struct Labels {
     tooltip: String,
     header: String,
@@ -48,7 +48,7 @@ pub(super) struct Labels {
     quit: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, PartialEq, Eq)]
 pub(super) struct Item {
     title: String,
 }
@@ -423,9 +423,17 @@ fn arm_exit_observer(window: &tauri::Window) -> bool {
     true
 }
 
+/// Lo último que se pintó en la bandeja: la ventana repite el mismo menú cada pocos segundos.
+static SHOWN_MENU: std::sync::Mutex<Option<(Labels, Vec<Item>)>> = std::sync::Mutex::new(None);
+
 fn update(app: &AppHandle, labels: &Labels, items: &[Item]) -> Result<(), String> {
+    let mut shown = SHOWN_MENU.lock().unwrap_or_else(|p| p.into_inner());
+    let tray = app.tray_by_id(ID);
+    if tray.is_some() && unchanged(shown.as_ref(), labels, items) {
+        return Ok(());
+    }
     let menu = menu(app, labels, items).map_err(|error| error.to_string())?;
-    if let Some(tray) = app.tray_by_id(ID) {
+    if let Some(tray) = tray {
         tray.set_menu(Some(menu))
             .map_err(|error| error.to_string())?;
         tray.set_tooltip(Some(&labels.tooltip))
@@ -460,7 +468,12 @@ fn update(app: &AppHandle, labels: &Labels, items: &[Item]) -> Result<(), String
         }
         builder.build(app).map_err(|error| error.to_string())?;
     }
+    *shown = Some((labels.clone(), items.to_vec()));
     Ok(())
+}
+
+fn unchanged(shown: Option<&(Labels, Vec<Item>)>, labels: &Labels, items: &[Item]) -> bool {
+    shown.is_some_and(|(l, i)| l == labels && i.as_slice() == items)
 }
 
 #[tauri::command]
@@ -689,10 +702,40 @@ fn show_toast(app_id: &str, xml: &str) -> windows::core::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        hide_plan, is_notice, notice_key, HidePlan, LeaveStep, LeaveWatch, BLIND_HIDE_MS,
-        EXIT_GIVE_UP_MS, EXIT_SETTLE_MS,
+        hide_plan, is_notice, notice_key, unchanged, HidePlan, Item, Labels, LeaveStep, LeaveWatch,
+        BLIND_HIDE_MS, EXIT_GIVE_UP_MS, EXIT_SETTLE_MS,
     };
     use std::ffi::OsStr;
+
+    #[test]
+    fn the_same_menu_is_not_rebuilt() {
+        let labels = |tooltip: &str| Labels {
+            tooltip: tooltip.into(),
+            header: "h".into(),
+            open: "o".into(),
+            stop_all: "s".into(),
+            quit: "q".into(),
+        };
+        let items = |titles: &[&str]| {
+            titles
+                .iter()
+                .map(|t| Item { title: (*t).into() })
+                .collect::<Vec<_>>()
+        };
+        let shown = (labels("Danil"), items(&["A"]));
+        assert!(!unchanged(None, &labels("Danil"), &items(&["A"])));
+        assert!(unchanged(Some(&shown), &labels("Danil"), &items(&["A"])));
+        assert!(!unchanged(
+            Some(&shown),
+            &labels("Danil"),
+            &items(&["A", "B"])
+        ));
+        assert!(!unchanged(
+            Some(&shown),
+            &labels("Danil · 2"),
+            &items(&["A"])
+        ));
+    }
 
     #[test]
     fn notice_link_keeps_its_key_after_windows_normalizes_it() {

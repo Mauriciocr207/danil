@@ -82,6 +82,8 @@ const keyOf = (scope: AddedScope) => `${scope.person}:${scope.organization}`;
 
 export function createAddedSync(deps: {
   transport: AddedTransport;
+  /** Una elección explícita empieza vacía; solo el caso anterior adopta lo que mostraba el riel. */
+  seed?: "rail" | "explicit";
   store: AddedStore;
   scope: () => AddedScope | null;
   /** Lo que sirve la organización activa, de `list_workspaces` en su máquina; `null` sin asentar. */
@@ -101,6 +103,7 @@ export function createAddedSync(deps: {
   let retrying = false;
   const schedule = deps.schedule ?? ((run, ms) => void setTimeout(run, ms));
   const record = (key: string): AddedRecord => deps.store.read(key) ?? { local: null, pending: [] };
+  const localOf = (value: AddedRecord) => deps.seed === "explicit" ? value.local : validLocal(value);
   const retry = () => {
     if (retrying) return;
     retrying = true;
@@ -116,17 +119,18 @@ export function createAddedSync(deps: {
    */
   function baseFor(key: string): string[] | null {
     const current = record(key);
-    const local = validLocal(current);
+    const local = localOf(current);
     if (local) return local;
     const available = deps.available();
     if (!available) return null;
+    if (deps.seed === "explicit") return [];
     return seedOf(available, deps.shown(), deps.hidden()) ?? (current.pending.length ? shownAll(available, deps.hidden()) : null);
   }
 
   /** Sin la cuenta: la lista local nace con la misma regla que la siembra, una vez asentada la fuente. */
   function keepLocal(key: string) {
     const current = record(key);
-    if (validLocal(current)) return;
+    if (localOf(current)) return;
     const base = baseFor(key);
     deps.store.write(key, { ...current, local: base ? [...apply(base, current.pending)] : null });
     deps.onChange();
@@ -244,7 +248,7 @@ export function createAddedSync(deps: {
     if (!scope) return;
     const key = keyOf(scope);
     const current = record(key);
-    const kept = validLocal(current);
+    const kept = localOf(current);
     const local = kept ? [...apply(kept, [{ op, id }])] : null;
     deps.store.write(key, { local, pending: enqueue(current.pending, { op, id }) });
     if (server?.key === key) op === "add" ? server.added.add(id) : server.added.delete(id);
@@ -259,7 +263,7 @@ export function createAddedSync(deps: {
       if (!scope) return null;
       const key = keyOf(scope);
       if (server?.key === key) return server.added;
-      const local = validLocal(record(key));
+      const local = localOf(record(key));
       return local ? new Set(local) : null;
     },
     sync,

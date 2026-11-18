@@ -452,5 +452,6 @@
   "danil.welcome.connect_effect": "Use your Danil workspace, agents and machines.",
   "danil.welcome.local": "Continue without an account",
   "danil.welcome.local_effect": "Everything stays on this computer.",
-  "danil.welcome.waiting": "Finish signing in in your browser."
+  "danil.welcome.waiting": "Finish signing in in your browser.",
+  "danil.error.too_many_contexts": "You reached the maximum of 20 connected organizations. Close one to add another."
 }

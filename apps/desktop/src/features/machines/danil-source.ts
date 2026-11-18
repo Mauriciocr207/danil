@@ -1,5 +1,6 @@
 import type { Fleet, Listed } from "@terminus/fleet";
 import { createRoot, createSignal } from "solid-js";
+import { availableInContext, contextSourceMatches } from "./context-source.ts";
 import { rememberMachineNames } from "./known-names.ts";
 
 /**
@@ -84,4 +85,14 @@ export function isDanilWorkspace(workspace: string): boolean {
   if (!current) return false;
   const organizations = new Set(current.machines().flatMap((m) => (m.kind === "organization" && m.organizationId ? [m.organizationId] : [])));
   return [...organizations].some((org) => !!current.available(org)?.some((w) => w.id === workspace));
+}
+
+/** Solo una fuente atribuida al contexto puede aportar datos a su grupo. */
+export function danilAvailableContext(organization: string, context: string): Listed[] | null {
+  revision();
+  return availableInContext(fleet, organization, context);
+}
+
+export function readDanilContext(organization: string, context: string): Promise<void> {
+  return contextSourceMatches(fleet, organization, context) ? readDanil(organization) : Promise.resolve();
 }

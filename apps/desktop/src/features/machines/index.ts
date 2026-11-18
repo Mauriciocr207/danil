@@ -1,1 +1,1 @@
-export { danilAvailable, danilMachines, isDanilWorkspace, machinesListed, readDanil } from "./danil-source.ts";
+export { danilAvailable, danilAvailableContext, danilMachines, isDanilWorkspace, machinesListed, readDanil, readDanilContext } from "./danil-source.ts";

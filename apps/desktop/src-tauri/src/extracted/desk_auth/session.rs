@@ -220,6 +220,8 @@ pub(crate) struct Reply {
     pub(crate) retry_after: Option<Duration>,
     /// `Location` (la operación de un `202`, por ejemplo).
     pub(crate) location: Option<String>,
+    pub(super) code: Option<&'static str>,
+    pub(crate) empty_reason: Option<&'static str>,
 }
 
 fn agent() -> ureq::Agent {
@@ -314,15 +316,7 @@ pub(super) fn request_context(
         retry_after: Duration::from_secs(1),
     })?;
     let status = response.status().as_u16();
-    if context.is_some() && !(200..300).contains(&status) {
-        return Ok(Reply {
-            status,
-            body: Value::Null,
-            retry_after: None,
-            location: None,
-        });
-    }
-    if let Some(context) = context {
+    if let Some(context) = context.filter(|_| (200..300).contains(&status)) {
         if response
             .headers()
             .get("X-Danil-Session-Applied")
@@ -352,12 +346,45 @@ pub(super) fn request_context(
         .limit(MAX_BODY)
         .read_to_string()
         .unwrap_or_default();
+    let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    let code = match body["code"].as_str() {
+        Some("session_expired") => Some("session_expired"),
+        Some("session_not_in_set") => Some("session_not_in_set"),
+        Some("organization_access_denied") => Some("organization_access_denied"),
+        _ => None,
+    };
+    let empty_reason = response
+        .headers()
+        .get("X-Danil-Empty-Reason")
+        .map(|h| h.to_str().ok().and_then(empty_reason).unwrap_or("unknown"));
+    let discard = context.is_some() && !(200..300).contains(&status);
     Ok(Reply {
         status,
-        body: serde_json::from_str(&text).unwrap_or(Value::Null),
-        retry_after,
-        location,
+        body: if discard { Value::Null } else { body },
+        retry_after: if discard { None } else { retry_after },
+        location: if discard { None } else { location },
+        code,
+        empty_reason,
     })
+}
+
+pub(super) fn empty_reason(raw: &str) -> Option<&'static str> {
+    if !(1..=64).contains(&raw.len()) || !raw.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+        return Some("unknown");
+    }
+    Some(match raw {
+        "organization_access_denied" => "organization_access_denied",
+        "no_organization" => "no_organization",
+        "no_workspace_access" => "no_workspace_access",
+        _ => "unknown",
+    })
+}
+
+pub(super) fn deserialize_empty_reason<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let value = <Value as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(value.as_str().and_then(empty_reason).map(str::to_owned))
 }
 
 /// El `code` de un `problem+json` (o `{"error": "…"}`), saneado.
@@ -801,10 +828,9 @@ impl<V: Vault> Desk<V> {
         }
     }
 
-    /// Una llamada con el Bearer que conserva el status: solo un 401 se trata aquí
-    /// (renueva una vez y repite). Un 404 o un 501 llegan tal cual a quien llama.
-    /// Un segundo 401 cierra la sesión solo si lo da `identity`: el de otro servicio
-    /// (máquinas, operaciones, tickets) llega como status y la sesión sigue.
+    /// Un 401 fuerza un refresh y un solo reintento; red y 503 conservan la familia.
+    /// La cierran un refresh rechazado, `session_expired` repetido o un segundo 401
+    /// de `/sessions`; las demás familias no cambian.
     pub(crate) fn fetch(
         &self,
         method: &str,
@@ -827,14 +853,20 @@ impl<V: Vault> Desk<V> {
         let live = self.access()?;
         let reply = request_context(&url, method, Some(&live.access_token), body, key, context)?;
         self.finish_authenticated(&live, false)?;
-        if reply.status != 401 {
+        if reply.status != 401 || (context.is_some() && reply.code == Some("session_not_in_set")) {
             return Ok(reply);
         }
+        let expired = reply.code == Some("session_expired");
         let live = self.access_for(live.generation, Some(&live.access_token))?;
         let reply = request_context(&url, method, Some(&live.access_token), body, key, context)?;
         self.finish_authenticated(
             &live,
-            reply.status == 401 && path.starts_with("/v1/identity/"),
+            reply.status == 401
+                && (reply.code == Some("session_expired")
+                    || path == "/v1/identity/sessions"
+                    || (!expired
+                        && path.starts_with("/v1/identity/")
+                        && !(context.is_some() && reply.code == Some("session_not_in_set")))),
         )?;
         Ok(reply)
     }
