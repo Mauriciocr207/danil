@@ -281,6 +281,7 @@ import { apagarVistasDe, hayVistasDe, soltarVistasHuerfanas } from "../features/
 import { DragOverlay, UnsavedCloseDialog } from "../features/tabs";
 import { TitleBarSection } from "../features/shell";
 import { createDraftsStore } from "../features/drafts";
+import { createConversationHandoff, type ConversationScope } from "../features/conversation-handoff";
 import { createTaskQueues } from "../features/task-queues";
 import { createServiceStream, type PushedBatch, type ServicePage } from "../features/service-stream";
 
@@ -1219,13 +1220,7 @@ export default function App() {
    * del agente y no de la tarea, y abrir la ventana lo olvida.
    */
   const [sinSteer, setSinSteer] = createSignal<string[]>([]);
-  /**
-   * Las tareas donde «detener y enviar» acaba de cortar el turno: al cerrar,
-   * la cola no se retiene por el fallo de la interrupción, que aquí lo pidió la
-   * persona. Sin esto el gesto dejaba el mensaje parado justo después de usarlo.
-   */
-  const enviarAlCerrar = new Set<string>();
-  const queueBusy = () => busy() || settlingTurns().includes(sessionId() ?? "") || injecting().some((item) => item.session === sessionId());
+  const queueBusy = () => handoffBlocked(sessionId()) || busy() || settlingTurns().includes(sessionId() ?? "") || injecting().some((item) => item.session === sessionId());
   const [desdeDeTurno, setDesdeDeTurno] = createSignal<Record<string, number>>({});
   const liveThreads = new Set<string>();
   const liveThreadKey = (workspace: string, session: string) => `${workspace}/${session}`;
@@ -1295,9 +1290,6 @@ export default function App() {
     const abierto = workspaceActivo();
     return !ws || !abierto || ws === abierto;
   };
-  /** Qué tarea se pidió detener. Es de una, no de la app: ver `vivas`. */
-  const [deteniendo, setDeteniendo] = createSignal<string | null>(null);
-  const stopping = () => deteniendo() !== null && deteniendo() === sessionId();
   // El `!` que ocupa cada tarea mientras corre, pintado con sus `shell_*`.
   const [terminales, setTerminales] = createSignal<Record<string, ComandoEnVivo>>({});
   const [carpetasDeTerminal, setCarpetasDeTerminal] = createSignal<Record<string, string>>({});
@@ -1327,6 +1319,42 @@ export default function App() {
     onSaveFailure: (error, scope) => threads.appendLive(scope.session, [{ role: "system", text: t("shell.queue.save_failed", { error: prosaDe(error) }), meta: "aviso" }]),
   });
   onCleanup(taskQueues.dispose);
+  const conversationScope = (id: string, projectId = id === sessionId() ? project() : taskQueues.saved(id)?.project ?? pestanas.open().find(tab => tab.id === id)?.project ?? tareaDelRiel(id)?.folder ?? project()): ConversationScope => ({
+    workspace: workspaceActivo(), generation: workspaceContext.generation(), project: projectId, session: id,
+    route: opcionesDeLaTarea(id, workspaceActivo()),
+  });
+  const handoff = createConversationHandoff({
+    current: () => ({ workspace: workspaceActivo(), generation: workspaceContext.generation() }),
+    runtime: { active: scope => vivas().includes(scope.session), stop: async scope => {
+      const id = scope.session, shell = Boolean(terminales()[id] || lanzados.has(id));
+      const current = () => scope.workspace === workspaceActivo() && scope.generation === workspaceContext.generation();
+      if (shell) detenidos.add(id);
+      try {
+        const stopped = shell ? await invoke<boolean>("stop_shell_command", { session: id }, scope.route)
+          : await invoke("stop_turn", { project: scope.project, session: id }, scope.route);
+        if (current()) {
+          if (shell && stopped === false) detenidos.delete(id);
+          if (!shell) { await reconcileActiveTurns(); if (current()) setPermissions(ps => ps.filter(p => p.session !== id)); }
+        }
+        return shell ? stopped : undefined;
+      } catch (error) {
+        if (current()) {
+          if (shell) detenidos.delete(id);
+          await reconcileActiveTurns();
+          if (current() && vivas().includes(id)) threads.appendLive(id, [{ role: "system", text: t("shell.turn.stop_failed", { error: prosaDe(error) }), meta: "fallo" }]);
+        }
+        throw error;
+      }
+    } },
+    queue: { message: (scope, id) => (scope.session === sessionId() ? taskQueues.items() : taskQueues.saved(scope.session)?.items ?? []).find(item => item.id === id),
+      select: (scope, id) => { if (scope.session !== sessionId() || !taskQueues.items().some(item => item.id === id)) return false; taskQueues.prioritize(id); return true; },
+      release: scope => { taskQueues.retain(null, scope.session); if (scope.session !== sessionId()) void drainHiddenQueue(scope.session); }, failed: scope => taskQueues.retain("fallo", scope.session) },
+  });
+  onCleanup(handoff.dispose);
+  const handoffAt = (id: string | null, projectId?: string) => id ? handoff.view(conversationScope(id, projectId)) : null;
+  const handoffBlocked = (id: string | null) => !!id && handoff.blocked(conversationScope(id));
+  const stopping = () => handoffAt(sessionId())?.stopping ?? false;
+
   const cola = taskQueues.items;
   const colaDe = taskQueues.owner;
   const retenida = taskQueues.retained;
@@ -1878,6 +1906,7 @@ export default function App() {
     const generation = workspaceContext.generation();
     const previousWorkspace = transition.previous;
     taskQueues.workspaceChanged(previousWorkspace);
+    handoff.reset();
     workspaceContext.activate(transition);
     // «Ejecutar en» dice qué tiene cada máquina del workspace abierto: con otro, se relee.
     void refetchMachines();
@@ -2182,7 +2211,7 @@ export default function App() {
         // «Detener y enviar»: la interrupción la pidió la persona para que
         // saliera lo que ya estaba escrito. Retener aquí dejaría el mensaje
         // parado y el gesto a medias; la marca se suelta al salir la cola.
-        const saleAhora = enviarAlCerrar.has(session);
+        const saleAhora = !!handoffAt(session)?.pending && !handoffAt(session)?.error;
         taskQueues.turnClosed(session, retained, saleAhora);
         if (ok == null) sinDesenlace.add(session);
         else sinDesenlace.delete(session);
@@ -2196,7 +2225,7 @@ export default function App() {
       // Igual que en el `done`: el turno se acabó, y con él la espera de sus
       // hijas. Este camino es el del turno que cerró sin que su evento llegara.
       setEnFondo((ids) => ids.filter((id) => id !== session));
-      if (deteniendo() === session) setDeteniendo(null);
+      handoff.observe({ kind: "terminal", scope: conversationScope(session) });
       setPermissions((items) => items.filter((permission) => permission.session !== session));
       soltarTerminal(session);
       // `fallo` y no `aviso`: un aviso se pliega dentro del registro del turno,
@@ -2222,7 +2251,7 @@ export default function App() {
         setCierres((n) => n + 1);
         void refreshSessions(grupos());
         void releerProyectos();
-        if (ok === true) void drainHiddenQueue(session);
+        if (ok === true || handoffAt(session)?.released) void drainHiddenQueue(session);
       });
     }
   }
@@ -2339,7 +2368,7 @@ export default function App() {
       const nuevas = active.filter((id) => !vivas().includes(id));
       const finished = vivas().filter((id) => !active.includes(id) && !pendingStarts.has(id) && !taskQueues.draining(id));
       for (const id of nuevas) void reponerGates(id);
-      for (const id of active) if (!settlingTurns().includes(id)) marcarViva(id);
+      for (const id of active) if (!settlingTurns().includes(id)) { marcarViva(id); handoff.observe({ kind: "started", scope: conversationScope(id) }); }
       for (const id of finished) void settleTurn(id);
     } catch {
       // Un IPC fallido no demuestra que el turno haya terminado.
@@ -2452,7 +2481,7 @@ export default function App() {
         if (workspace && !esDelWorkspaceAbierto(workspace) && ok !== true && taskQueues.retainedAt(workspace, session) !== undefined) {
           taskQueues.retainAt(workspace, session, ok === false ? "fallo" : "borrador");
         }
-        if (esDelWorkspaceAbierto(workspace) && deteniendo() === session) setDeteniendo(null);
+        if (esDelWorkspaceAbierto(workspace)) handoff.observe({ kind: "terminal", scope: conversationScope(session) });
         // Un turno que acaba libera el material que tenía delante, y hay quien
         // está esperando justo eso para traerlo (`AvisoDeMaterial`). Se avisa
         // aquí, antes del filtro por tarea abierta: el turno que termina puede
@@ -2514,7 +2543,7 @@ export default function App() {
         ["delta", "reasoning", "image", "tool", "tool_done", "notice", "task_launched", "segment_saved", "command_output", "command_running"].includes(kind);
       if (!esGate && !esDelWorkspaceAbierto(workspace) && !retainedStream) return;
 
-      if (kind === "started") return;
+      if (kind === "started") { handoff.observe({ kind: "started", scope: conversationScope(session) }); return; }
 
       if (kind === "task_launched") {
         paintTranscript();
@@ -3212,38 +3241,8 @@ export default function App() {
   async function detener() {
     const id = sessionId();
     if (!busy() || !id || stopping()) return;
-    setDeteniendo(id);
     setPermissionError(null);
-    if (terminales()[id] || lanzados.has(id)) {
-      detenidos.add(id);
-      try {
-        if (!(await invoke<boolean>("stop_shell_command", { session: id }, deLaTarea(id)))) {
-          detenidos.delete(id);
-          setDeteniendo(null);
-        }
-      } catch (e) {
-        detenidos.delete(id);
-        setDeteniendo(null);
-        threads.appendLive(id, [{ role: "system", text: t("shell.turn.stop_failed", { error: prosaDe(e) }), meta: "fallo" }]);
-      }
-      return;
-    }
-    try {
-      await invoke("stop_turn", { project: project(), session: id }, deLaTarea(id));
-      await reconcileActiveTurns();
-      // Rust ya quitó el gate y cerró su stdin. La hoja desaparece en el mismo
-      // gesto, sin esperar a que el proceso termine de emitir su cierre.
-      setPermissions((ps) => ps.filter((p) => p.session !== id));
-    } catch (e) {
-      await reconcileActiveTurns();
-      if (!vivas().includes(id)) return;
-      setDeteniendo(null);
-      threads.appendLive(id, [{
-                  role: "system",
-                  text: t("shell.turn.stop_failed", { error: prosaDe(e) }),
-                  meta: "fallo",
-                }]);
-    }
+    await handoff.requestStop(conversationScope(id));
   }
 
   createEffect(() => {
@@ -3284,8 +3283,6 @@ export default function App() {
           // Sin nada en cola no hay nada que retener. Si no se soltara aquí, un
           // fallo dejaría detenida para siempre la cola que venga después.
           if (ret) taskQueues.retain(null);
-          // «Detener y enviar» sin nada que enviar ya no tiene promesa que cumplir.
-          enviarAlCerrar.delete(mirando ?? "");
           return;
         }
         // El cierre permite reintentar una sesión reservada por otro turno.
@@ -3301,7 +3298,7 @@ export default function App() {
             void ejecutarDeLaCola(next.item);
             return;
           }
-          enviarAlCerrar.delete(mirando ?? "");
+          if (mirando) handoff.observe({ kind: "dispatching", scope: conversationScope(mirando), itemIds: next.itemIds });
           void enviar(next.message);
         });
       },
@@ -3310,10 +3307,11 @@ export default function App() {
 
   async function drainHiddenQueue(session: string) {
     const history = hilos()[session];
-    const reservation = taskQueues.beginHidden(session, vivas().includes(session) || settlingTurns().includes(session) ||
+    const reservation = taskQueues.beginHidden(session, handoffBlocked(session) || vivas().includes(session) || settlingTurns().includes(session) ||
       injecting().some(item => item.session === session) || !history || preguntasPendientes([...(history?.base ?? []), ...(history?.vivo ?? [])]));
     if (!reservation) return;
     const generation = workspaceContext.generation();
+    handoff.observe({ kind: "dispatching", scope: conversationScope(session, reservation.project), itemIds: reservation.batch.map(item => item.id) });
     marcarViva(session);
     try {
       await taskQueues.persist(session, reservation.project, taskQueues.saved(session)?.items ?? []);
@@ -5197,6 +5195,7 @@ export default function App() {
         },
       });
       const id = traspaso.answer;
+      if (generation === workspaceContext.generation()) handoff.observe({ kind: "accepted", scope: conversationScope(id, proyecto) });
       threads.acknowledgeOptimistic(clave, [...entrando, turnoPropio]);
       // El gesto quedó consumido: se escribió el consentimiento o el mensaje ya
       // salió con el CLI que pedía. Un `!` no lo consume.
@@ -5227,7 +5226,7 @@ export default function App() {
       if (!abierta) adoptarNacida(id, { provisional, proyecto, titulo: tituloProvisional(m.text), claveBorrador });
       void leerTarea(proyecto, id)
         .then((s) => loadResult(id, s, false, generation))
-        .catch((error) => { if (generation === workspaceContext.generation()) setError(String(error)); });
+        .catch((error) => { if (generation === workspaceContext.generation()) setError(prosaDe(error)); });
       if (!finishedTurns.has(id)) marcarViva(id);
       void signatureReady.then((signature) => {
         if (generation !== workspaceContext.generation()) return;
@@ -5275,6 +5274,7 @@ export default function App() {
       }
       threads.rejectOptimistic(clave, [turnoPropio, ...entrando]);
       if (generation !== workspaceContext.generation()) return false;
+      if (abierta) handoff.observe({ kind: "rejected", scope: conversationScope(abierta, proyecto), error: e });
       if (e === CARRY_STOPPED) {
         // El texto vuelve a la caja: el globo se iría duplicado.
         setArrancando(false);
@@ -5745,6 +5745,7 @@ export default function App() {
   function quitarEncolado(id: string) {
     if (injecting().some((item) => item.id === id)) return;
     taskQueues.remove(id);
+    if (sessionId()) handoff.observe({ kind: "queue-removed", scope: conversationScope(sessionId()!), queueItemId: id });
   }
 
   /**
@@ -5766,16 +5767,9 @@ export default function App() {
    * disfraza: el paso que corría se pierde, y el título del botón lo dice.
    */
   async function detenerYEnviar(id: string) {
-    const abierta = sessionId();
-    const m = cola().find((q) => q.id === id);
-    if (!abierta || !m || !inyectable(m)) return;
-    // Lo elegido sale primero; el resto conserva su orden.
-    taskQueues.prioritize(id);
-    taskQueues.retain(null);
-    // Sin turno vivo no hay nada que detener: la cola sale sola.
-    if (!busy()) return;
-    enviarAlCerrar.add(abierta);
-    await detener();
+    const abierta = sessionId(), message = cola().find(item => item.id === id);
+    if (!abierta || !message || !inyectable(message)) return;
+    await handoff.replaceWithQueued(conversationScope(abierta), id);
   }
 
   /**
@@ -6546,7 +6540,8 @@ export default function App() {
            creíble y equivocado. */
         ventana={pp.sesion === sessionId() ? ventana() : null}
         busy={pp.sesion === sessionId() ? busy() : esProvisional(pp.sesion) ? arrancando() : vivas().includes(pp.sesion ?? "")}
-        stopping={deteniendo() !== null && deteniendo() === pp.sesion}
+        stopping={handoffAt(pp.sesion, proyectoDeLaCelda()?.id)?.stopping ?? false}
+        handoff={pp.sesion ? handoff.presentation(conversationScope(pp.sesion, proyectoDeLaCelda()?.id)) : null}
         agents={agents()}
         proyecto={
           <SelectorDeProyecto nueva={!pp.sesion} locked={!!encargadoDeLaCelda()} branch={
@@ -6710,7 +6705,7 @@ export default function App() {
           onEditar: editarEncolado,
           onBorrar: quitarEncolado,
           onEditando: taskQueues.editMode,
-          onMandar: () => taskQueues.retain(null),
+          onMandar: () => { const id = sessionId(), view = handoffAt(id); if (id && !busy() && view?.error && view.pending?.phase === "waiting-close") void handoff.replaceWithQueued(conversationScope(id), view.pending.queueItemId); else taskQueues.retain(null); },
           // Solo con un turno vivo y con un agente que no haya dicho que no
           // recibe mensajes a medias: sin él, lo escrito sale por el camino
           // normal y el gesto no significaría nada; con él negado, sería un

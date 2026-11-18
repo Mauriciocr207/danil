@@ -90,7 +90,7 @@ export function createTaskQueues(deps: Dependencies) {
     if (!mensaje) return null;
     if (esDeLaTerminal(lote[0])) return { kind: "shell" as const, item: lote[0] };
     setItems(resto);
-    return { kind: "message" as const, message: mensaje };
+    return { kind: "message" as const, message: mensaje, itemIds: lote.map(item => item.id) };
   }
   function beginHidden(session: string, blocked: boolean): HiddenQueueBatch | null {
     const queue = saved.get(session);
