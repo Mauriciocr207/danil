@@ -83,7 +83,7 @@ export default function EstadoDelTurno(props: {
             : t("chat.turn.working_aria")
       }
     >
-      <Show when={props.encendiendo || props.esperando || props.reintento || props.enFondo} fallback={<><ActivityDots /><span class="sr-only">{t("chat.turn.working_aria")}</span></>}>
+      <Show when={props.encendiendo || props.esperando || props.reintento || props.enFondo} fallback={<><ActivityDots /><span class="text-neutral-700 not-italic">{t("chat.reasoning.thinking")}</span></>}>
         <Show when={props.encendiendo}>{(machine) => <MachineIcon wakes={machine().wakes} size={14} />}</Show>
         <span>{dice().verbo}</span>
       </Show>
