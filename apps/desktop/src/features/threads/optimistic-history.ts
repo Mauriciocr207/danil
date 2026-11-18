@@ -94,9 +94,13 @@ export function createOptimisticHistory<T extends HistoryState>(deps: {
     if (!apply) return null;
     return () => { if (current()) { apply(); paint(true); } };
   }
-  async function read(id: string, request: () => Promise<Session>) {
+  async function read(project: string, id: string, request: () => Promise<Session>) {
+    if (deps.disposed()) throw new DOMException("Conversation disposed", "AbortError");
     const provenance = { id, generation: deps.generation(), revision: ++revision };
     const session = await request(); reads.set(session, provenance);
+    if (session.history?.version === 1) session.turns = session.turns.map(turn => ({ ...turn,
+      history_refs: turn.history_refs?.map(ref => ({ ...ref, project, session: id })),
+    }));
     return session;
   }
   return { appendOptimistic, acknowledgeOptimistic, reviseOptimistic, rejectOptimistic, accepts, reconcile, readPage, older, read,

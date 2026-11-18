@@ -6,6 +6,8 @@ import type { ChatEvent, Msg, Session } from "../../src/features/chat/index.ts";
 
 const msg = (text: string, role: Msg["role"] = "agent"): Msg => ({ role, text });
 const session = (turns: Session["turns"] = [], extra: Partial<Session> = {}): Session => ({ turns, provider: "claude", ...extra }) as Session;
+import commentaryFixture from "../fixtures/assistant-durable-commentary.json" with { type: "json" };
+
 const metadata = { author: null };
 const event = (kind: ChatEvent["kind"], text: string, extra: Partial<ChatEvent> = {}): ChatEvent => ({ kind, text, session: "s", meta: null, ...extra });
 function fixture(read?: Parameters<typeof createThreadsStore>[0]["invoke"]) {
@@ -304,4 +306,87 @@ test("a superseded rewrite recovery cannot cancel a newer older-page request", a
   prepend(session([{ id: "older-new", role: "user", text: "older-new" }, { id: "latest", role: "user", text: "latest" }], { history: page(4, 6, 6) }));
   const apply = await current; assert.ok(apply); apply();
   assert.deepEqual(f.store.messages().map(row => row.turno), ["older-new", "latest"]); f.dispose();
+});
+
+
+test("a persisted commentary snapshot cannot duplicate unbound live output or hide concurrent user input", async () => {
+  const durable = commentaryFixture as Session["turns"][number], text = durable.pieces![0] as { text: string };
+  const previous = { id: "earlier", role: "agent", text: "Earlier durable answer" };
+  const answer = session([previous, { id: "prior", role: "user", text: "prior input" }, durable, { id: "concurrent", role: "user", text: "concurrent input" }]);
+  const f = fixture(async <T>() => structuredClone(answer) as T);
+  f.store.acceptSession("s", session([previous]), true, f.generation());
+  f.store.event(event("delta", text.text, { starts_message: true, message_id: "native-commentary" }), metadata);
+  f.store.flush();
+  f.store.acceptSession("s", await f.store.read("p", "s"), false, f.generation());
+  assert.equal(f.store.messages().filter(row => row.text === text.text).length, 1);
+  assert.ok(f.store.messages().some(row => row.turno === "concurrent"));
+  assert.ok(f.store.messages().some(row => row.turno === "earlier"));
+  assert.equal(f.store.handovers().s.provider, "claude");
+  f.store.event(event("segment_saved", "", { id: durable.id! }), metadata);
+  assert.equal(f.store.messages().filter(row => row.text === text.text).length, 1);
+  assert.ok(f.store.messages().some(row => row.text === text.text && row.avanceDe === durable.id)); f.dispose();
+});
+
+test("different pieces and native messages with equal commentary survive segment reconciliation", async () => {
+  const text = "Same legitimate commentary";
+  const durable = { id: "saved-equal-pieces", role: "agent", text: text + text + "Final", tools: [{ name: "Read", target: "fixture.txt", ok: true }],
+    pieces: [{ text }, { tool: 0 }, { text }, { tool: 0 }, { text: "Final" }] };
+  const f = fixture(async <T>() => session([durable]) as T);
+  for (const id of ["native-first", "native-second"]) f.store.event(event("delta", text, { starts_message: true, message_id: id }), metadata);
+  f.store.flush();
+  f.store.acceptSession("s", await f.store.read("p", "s"), false, f.generation());
+  assert.equal(f.store.messages().filter(row => row.text === text).length, 2);
+  f.store.event(event("segment_saved", "", { id: durable.id }), metadata);
+  const rows = f.store.messages().filter(row => row.text === text);
+  assert.equal(rows.length, 2); assert.notEqual(rows[0].clave, rows[1].clave); f.dispose();
+});
+
+test("done materializes a deferred segment and its late marker cannot bind the next turn", async () => {
+  const durable = commentaryFixture as Session["turns"][number], text = (durable.pieces![0] as { text: string }).text;
+  const f = fixture(async <T>() => session([durable]) as T);
+  f.store.beginActivity("s", 1000);
+  f.store.event(event("delta", text, { starts_message: true, message_id: "cancelled-run" }), metadata); f.store.flush();
+  f.store.acceptSession("s", await f.store.read("p", "s"), false, f.generation());
+  f.store.finishActivity("s");
+  f.store.acceptSession("s", await f.store.read("p", "s"), true, f.generation());
+  assert.equal(f.store.messages().filter(row => row.text === text).length, 1);
+  f.store.beginActivity("s", 2000);
+  f.store.event(event("delta", text, { starts_message: true, message_id: "next-run" }), metadata); f.store.flush();
+  f.store.event(event("segment_saved", "", { id: durable.id! }), metadata);
+  assert.equal(f.store.messages().filter(row => row.text === text).length, 2);
+  assert.equal(f.store.activities("s", f.store.messages()).at(-1)?.active, true);
+  assert.equal(f.store.rows().s.vivo[0].tramo, undefined); f.dispose();
+});
+
+test("deferred commentary survives a scoped A to B to A reload without tagging B output", async () => {
+  const durable = commentaryFixture as Session["turns"][number], text = (durable.pieces![0] as { text: string }).text;
+  const f = fixture(async <T>() => session([durable]) as T);
+  f.store.event(event("delta", text, { starts_message: true, message_id: "A-output" }), metadata); f.store.flush(); f.live.add("A/s");
+  f.store.acceptSession("s", await f.store.read("p", "s"), false, f.generation());
+  f.move("B"); f.store.event(event("delta", "B output", { workspace: "B", starts_message: true }), metadata); f.store.flush();
+  f.store.event(event("segment_saved", "", { workspace: "A", id: durable.id! }), metadata);
+  assert.equal(f.store.rows().s.vivo[0].tramo, undefined);
+  f.move("A");
+  f.store.acceptSession("s", await f.store.read("p", "s"), false, f.generation());
+  assert.equal(f.store.messages().filter(row => row.text === text).length, 1); f.dispose();
+});
+
+test("catchup markers bind replayed output already represented in durable history", async () => {
+  const durable = commentaryFixture as Session["turns"][number], text = (durable.pieces![0] as { text: string }).text;
+  const f = fixture(async <T>() => session([durable]) as T);
+  f.store.acceptSession("s", await f.store.read("p", "s"), true, f.generation());
+  f.store.replay("s", "A");
+  f.store.event(event("delta", text, { starts_message: true, message_id: "replayed" }), metadata);
+  f.store.event(event("segment_saved", "", { id: durable.id! }), metadata);
+  assert.equal(f.store.messages().filter(row => row.text === text).length, 1); f.dispose();
+});
+
+test("a snapshot before the first delta can still bind its segment to the current observed run", async () => {
+  const f = fixture(async <T>() => session([{ id: "current-segment", role: "agent", text: "valid output" }]) as T);
+  f.store.beginActivity("s", 1000);
+  f.store.acceptSession("s", await f.store.read("p", "s"), false, f.generation());
+  f.store.event(event("delta", "valid output", { message_id: "native-current", starts_message: true }), metadata); f.store.flush();
+  f.store.event(event("segment_saved", "", { id: "current-segment" }), metadata);
+  assert.equal(f.store.messages().filter(row => row.text === "valid output").length, 1);
+  assert.equal(f.store.rows().s.vivo[0].tramo, "current-segment"); f.dispose();
 });
