@@ -199,24 +199,21 @@ function esComando(item: Encolado): boolean {
   return /^[!/]/.test(item.text.trimStart());
 }
 
-/**
- * Lo que puede entrar en el turno vivo: solo texto para el agente, y de la
- * persona. `inject_message` no lleva sobre: lo de otra tarea o de un canal
- * entraría firmado por quien mira y sin dónde contestar.
- */
+/** La inyección no lleva sobre ni admite menciones: conserva la autoría del mensaje. */
 export function inyectable(item: Encolado): boolean {
-  return !item.task_mentions?.length && !esComando(item) && !conSobre(item);
+  return !item.task_mentions?.length && interrumpible(item);
+}
+
+/** Un mensaje propio para el siguiente turno admite menciones y adjuntos. */
+export function interrumpible(item: Encolado): boolean {
+  return !esComando(item) && !conSobre(item);
 }
 
 function conSobre(item: Encolado): boolean {
   return Boolean(item.agent || item.channel || item.reply_to || item.hops != null || item.from_task);
 }
 
-/**
- * Lo que dejó en la cola otra tarea o un encargado, no la persona. Un motor
- * anterior las escribía aquí; se ven con su remitente y no se editan ni se
- * quitan: no son de quien mira, y quitarlas las perdería.
- */
+/** Las entregas de otra tarea conservan su remitente y no se editan desde esta cola. */
 export function deOtraTarea(item: Encolado): boolean {
   return !item.channel && Boolean(item.from_task || item.agent);
 }

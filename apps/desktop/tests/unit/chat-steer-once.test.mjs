@@ -1,9 +1,4 @@
-/**
- * Lo que se mete en el turno vivo sale una vez: una sola inyección aunque el
- * Enter o la flecha de la cola se pulsen seguido, y un solo globo al releer la
- * tarea con el turno corriendo, también con un motor que no devuelve el turno
- * guardado (`inject_message` → `null`). Monta `dist/`.
- */
+/** Automatic background delivery is injected once and reconciles without duplicate bubbles. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { boot, sleep } from "../helpers/jsdom-app.mjs";
@@ -54,11 +49,11 @@ async function abrir(app, id) {
 
 const veces = (app) => app.w.document.body.textContent.split(TEXTO).length - 1;
 
-for (const [gesto, legacy] of [["enter", false], ["enter", true], ["flecha", true]]) {
-  test(`metido con ${gesto}${legacy ? " en un motor que no devuelve el turno" : ""}: una inyección y un globo`, async () => {
+for (const legacy of [false, true]) {
+  test(`automatic background delivery${legacy ? " on a legacy engine" : ""}: one injection and one bubble`, async () => {
     const injected = [];
     let disco = [{ role: "user", id: "u0", at: 0, text: "hola" }];
-    const app = await boot("listo", `chat-steer-once-${gesto}-${legacy}`, responses({
+    const app = await boot("listo", `chat-steer-once-background-${legacy}`, responses({
       load_session: ({ id }) => session(id, id === "t1" ? disco : [{ role: "user", id: "x0", at: 0, text: "otra" }]),
       inject_message: async (args) => {
         injected.push(args);
@@ -79,18 +74,10 @@ for (const [gesto, legacy] of [["enter", false], ["enter", true], ["flecha", tru
       field.dispatchEvent(new app.w.Event("input", { bubbles: true }));
       await sleep(50);
       const enter = () => field.dispatchEvent(new app.w.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-      // El primer Enter lo encola; los siguientes, seguidos, lo meten en el turno.
       enter();
       await sleep(20);
-      if (gesto === "enter") {
-        enter();
-        enter();
-      } else {
-        const flecha = app.w.document.querySelector('button[title="Mandar ahora"]');
-        assert.ok(flecha, "no está la flecha de la cola");
-        flecha.click();
-        flecha.click();
-      }
+      app.emit("chat", { kind: "background", session: "t1", workspace: "w" });
+      app.emit("chat", { kind: "background", session: "t1", workspace: "w" });
       await sleep(500);
       assert.equal(injected.length, 1, "se metió más de una vez");
       assert.equal(veces(app), 1, "el globo no salió una vez");

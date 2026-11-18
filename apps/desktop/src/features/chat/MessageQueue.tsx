@@ -1,6 +1,5 @@
 import type { Recipient, ReplyTo, SenderTask } from "../../lib/recipients";
 import { editMentions, finishEdit, trimMentions, type PendingEdit, type TaskMention } from "../../lib/taskMentions";
-import CircleStop from "lucide-solid/icons/circle-stop";
 import CornerDownLeft from "lucide-solid/icons/corner-down-left";
 import Paperclip from "lucide-solid/icons/paperclip";
 import Pause from "lucide-solid/icons/pause";
@@ -14,7 +13,7 @@ import { cn } from "../../lib/utils";
 import type { Agent } from "../../lib/model";
 import { Button } from "../../ui/Button";
 import { Textarea } from "../../ui/Textarea";
-import { deOtraTarea, esDeLaTerminal, inyectable } from "./queue";
+import { deOtraTarea, esDeLaTerminal, interrumpible } from "./queue";
 
 // Conserva la configuración al encolar; el lote adopta la del último mensaje.
 export type Encolado = {
@@ -83,21 +82,8 @@ export type ColaDeMensajesProps = {
   esperandoA?: string | null;
   onEditar: (id: string, text: string, mentions?: TaskMention[]) => void;
   onBorrar: (id: string) => void;
-  /**
-   * Mete el mensaje en el turno que ya corre, en vez de esperar a que cierre.
-   * `null` cuando el agente no lo admite: no todos aceptan entrada con el turno
-   * vivo, y un botón que no hace nada es peor que no tenerlo.
-   */
-  onMandarAhora: ((id: string) => Promise<void>) | null;
-  /**
-   * Lo mismo que hace la persona a mano cuando el agente no recibe mensajes a
-   * medias: detener el turno y dejar salir esta cola. `null` cuando el agente
-   * sí los recibe —ahí va `onMandarAhora`— o cuando no hay turno vivo.
-   *
-   * No es un steer y no se disfraza de uno: el paso que estaba corriendo se
-   * pierde, y eso lo dice el título.
-   */
-  onDetenerYEnviar: ((id: string) => void) | null;
+  /** Interrumpe el turno actual y envía el mensaje cuando su cierre esté confirmado. */
+  onDetenerYEnviar: ((id: string) => Promise<void>) | null;
   /** Editar pausa la cola: un turno que cierra a mitad de la edición no se lleva el texto a medias. */
   onEditando: (activo: boolean) => void;
   onMandar: () => void;
@@ -279,23 +265,7 @@ export default function ColaDeMensajes(props: ColaDeMensajesProps) {
                     </Show>
 
                     <span class="flex shrink-0 items-center gap-0.5">
-                      <Show when={inyectable(it) ? props.onMandarAhora : null}>
-                        {(mandar) => (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            class="size-7"
-                            aria-label={t("chat.queue.send_now_aria", { n: i() + 1 })}
-                            title={t("chat.queue.send_now")}
-                            disabled={props.pending?.includes(it.id)}
-                            onClick={() => mandar()(it.id)}
-                          >
-                            <CornerDownLeft size={13} />
-                          </Button>
-                        )}
-                      </Show>
-                      <Show when={inyectable(it) ? props.onDetenerYEnviar : null}>
+                      <Show when={interrumpible(it) ? props.onDetenerYEnviar : null}>
                         {(parar) => (
                           <Button
                             type="button"
@@ -307,7 +277,7 @@ export default function ColaDeMensajes(props: ColaDeMensajesProps) {
                             disabled={props.pending?.includes(it.id)}
                             onClick={() => parar()(it.id)}
                           >
-                            <CircleStop size={13} />
+                            <CornerDownLeft size={13} />
                           </Button>
                         )}
                       </Show>

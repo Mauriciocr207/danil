@@ -141,7 +141,7 @@ import SelectorDeModo from "./ModePicker";
 import { AltoMonotono } from "./MonotonicHeight";
 import { MARCA_SIN_ELEGIR } from "./marks";
 import { siguienteModo } from "./modes";
-import { inyectable, seMandaSinSuperficie } from "./queue";
+import { interrumpible, seMandaSinSuperficie } from "./queue";
 import TarjetaDeTerminal, { type ComandoEnVivo } from "./ShellCard";
 import { HOLGURA, seguirElFondo } from "./paste";
 import YourMessages, { type InputMessage } from "./YourMessages";
@@ -1873,12 +1873,11 @@ export default function Chat(props: ChatProps) {
     ),
   );
   /**
-   * Lo encolado que puede entrar en el turno vivo: ni lo que ya está entrando
-   * ni lo que lleva menciones, que el backend no inyecta.
+   * El primer mensaje elegible para interrumpir y enviar conserva el orden del resto.
    */
-  const steerables = () =>
-    props.cola.onMandarAhora
-      ? props.cola.items.filter((q) => !props.cola.pending?.includes(q.id) && inyectable(q))
+  const interruptibles = () =>
+    props.cola.onDetenerYEnviar
+      ? props.cola.items.filter((q) => !props.cola.pending?.includes(q.id) && interrumpible(q))
       : [];
 
   const nombreDelAgente = (id?: string) => {
@@ -1927,11 +1926,9 @@ export default function Chat(props: ChatProps) {
     }
     return null;
   };
-  /** En orden y de uno en uno: dos inyecciones a la vez llegan como quieran. */
-  async function steerCola() {
-    const mandar = props.cola.onMandarAhora;
-    if (!mandar) return;
-    for (const encolado of steerables()) await mandar(encolado.id);
+  function interrumpirConCola() {
+    const primero = interruptibles()[0];
+    if (primero) void props.cola.onDetenerYEnviar?.(primero.id);
   }
 
   const [cancelandoPregunta, setCancelandoPregunta] = createSignal(false);
@@ -2540,11 +2537,9 @@ export default function Chat(props: ChatProps) {
             // Enter manda; Shift+Enter hace salto de línea.
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              // Con la caja vacía, el Enter de más mete lo que espera en el
-              // turno que corre. Es el gesto de la flecha de la cola, sin
-              // soltar el teclado para alcanzarla.
-              if (!props.stopping && !props.input.trim() && steerables().length > 0) {
-                void steerCola();
+              // La caja vacía usa la misma interrupción que la flecha de la cola.
+              if (!props.stopping && !props.input.trim() && interruptibles().length > 0) {
+                interrumpirConCola();
                 return;
               }
               void mandar();

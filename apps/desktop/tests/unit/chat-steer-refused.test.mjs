@@ -63,14 +63,14 @@ async function encolar(app) {
   await sleep(150);
 }
 
-const flecha = (app) => app.w.document.querySelector('button[title="Mandar ahora"]');
+const flecha = (app) => app.w.document.querySelector('button[title="Interrumpir y enviar"]');
 const texto = (app) => app.w.document.body.textContent;
 
 for (const [caso, codigo, aviso] of [
   ["no admite mensajes a medias", "chat.steer.unsupported", /no recibe mensajes a mitad del turno/],
   ["la entrega quedó sin confirmar", "executor_acceptance_unknown", /No se pudo confirmar la entrega del mensaje/],
 ]) {
-  test(`«mandar ahora» contra un agente que lo rechaza: ${caso}`, async () => {
+  test(`automatic background delivery rejected: ${caso}`, async () => {
     const intentos = [];
     const app = await boot("listo", `chat-steer-refused-${codigo}`, responses({
       inject_message: (args) => {
@@ -90,13 +90,13 @@ for (const [caso, codigo, aviso] of [
       await encolar(app);
       assert.ok(flecha(app), "sin flecha de «Mandar ahora» antes de intentarlo");
 
-      flecha(app).click();
+      app.emit("chat", { kind: "background", session: "t1", workspace: "w" });
       await sleep(400);
 
       assert.equal(intentos.length, 1, "se intentó meter más de una vez");
       assert.match(texto(app), aviso, "no se explicó qué pasó con el mensaje");
       assert.ok(texto(app).includes(TEXTO), "el mensaje salió de la cola sin haber entrado");
-      assert.equal(flecha(app), null, "la flecha sigue ofreciendo un gesto que el motor negó");
+      assert.ok(flecha(app), "la interrupción explícita sigue disponible tras el rechazo automático");
       assert.doesNotMatch(texto(app), /Reintentar/, "un rechazo del steer no es un fallo que reintentar");
       assert.doesNotMatch(texto(app), /executor_acceptance_unknown/, "la clave interna llegó al hilo");
     } finally {

@@ -44,7 +44,7 @@ import {
 import { DelegatedLaunch, DelegatedNone, DelegatedToolbar, delegatedAttention, delegatedDescendants, delegatedFamilies, type DelegatedListProps, type DelegatedPanelModel } from "../features/chat/DelegatedTasks";
 import PreviousAgentChat from "../features/chat/PreviousAgentChat";
 import type { AlmacenDePreguntas, PreguntasAMedias, Respuesta, RespuestaEnviada } from "../features/chat/Questions";
-import { contestaALaTerminal, ENTREGA_SIN_CONFIRMAR, inyectable } from "../features/chat/queue";
+import { contestaALaTerminal, ENTREGA_SIN_CONFIRMAR, interrumpible, inyectable } from "../features/chat/queue";
 import type { ComandoEnVivo } from "../features/chat/ShellCard";
 import { comandoDeTerminal } from "../features/chat/terminalIndent";
 import type { AlMargen } from "../features/chat/SideQuestion";
@@ -5747,7 +5747,7 @@ export default function App() {
    */
   async function detenerYEnviar(id: string) {
     const abierta = sessionId(), message = cola().find(item => item.id === id);
-    if (!abierta || !message || !inyectable(message)) return;
+    if (!abierta || !message || !interrumpible(message) || injecting().some(item => item.session === abierta && item.id === id)) return;
     await handoff.replaceWithQueued(conversationScope(abierta), id);
   }
 
@@ -6684,21 +6684,9 @@ export default function App() {
           onEditar: editarEncolado,
           onBorrar: quitarEncolado,
           onEditando: taskQueues.editMode,
-          onMandar: () => { const id = sessionId(), view = handoffAt(id); if (id && !busy() && view?.error && view.pending?.phase === "waiting-close") void handoff.replaceWithQueued(conversationScope(id), view.pending.queueItemId); else taskQueues.retain(null); },
-          // Solo con un turno vivo y con un agente que no haya dicho que no
-          // recibe mensajes a medias: sin él, lo escrito sale por el camino
-          // normal y el gesto no significaría nada; con él negado, sería un
-          // botón que no hace nada.
-          onMandarAhora: pp.sesion && vivas().includes(pp.sesion) &&
-            !sinSteer().includes(filaDe(pp.sesion)?.provider ?? "")
-            ? (id: string) => mandarAhora(id)
-            : null,
-          // Y donde el motor ya negó el steer, el gesto que queda es el de la
-          // persona: parar el turno y enviar. Nada con una pregunta abierta:
-          // esa cola espera su respuesta, no un turno nuevo.
-          onDetenerYEnviar: pp.sesion && vivas().includes(pp.sesion) && !esperando() &&
-            sinSteer().includes(filaDe(pp.sesion)?.provider ?? "")
-            ? (id: string) => void detenerYEnviar(id)
+          onMandar: () => { const id = sessionId(), view = handoffAt(id), next = cola().find(item => interrumpible(item) && !injecting().some(pending => pending.session === id && pending.id === item.id)); if (busy() && next) void detenerYEnviar(next.id); else if (id && !busy() && view?.error && view.pending?.phase === "waiting-close") void handoff.replaceWithQueued(conversationScope(id), view.pending.queueItemId); else taskQueues.retain(null); },
+          onDetenerYEnviar: pp.sesion && vivas().includes(pp.sesion) && !esperando()
+            ? detenerYEnviar
             : null,
         }}
         />

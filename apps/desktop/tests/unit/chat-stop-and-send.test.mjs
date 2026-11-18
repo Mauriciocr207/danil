@@ -1,12 +1,4 @@
-/**
- * «Detener y enviar»: el gesto que la persona hace a mano cuando el agente no
- * recibe mensajes a mitad del turno —parar y mandar lo encolado—, en un clic y
- * sin perder el texto. El turno se corta de verdad: solo se ofrece cuando el
- * motor ya negó el steer, y el mensaje sale solo al cerrar. Si la interrupción
- * retuviera la cola, el gesto quedaría a medias.
- *
- * Monta `dist/`.
- */
+/** Explicit queue forcing interrupts and sends for every provider, without trying steer first. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { boot, sleep } from "../helpers/jsdom-app.mjs";
@@ -94,14 +86,8 @@ test("«detener y enviar» corta el turno y deja salir lo encolado, sin perderlo
     await sleep(200);
 
     await encolar(app);
-    const mandar = porTitulo(app, "Mandar ahora");
-    assert.ok(mandar, "sin flecha de «Mandar ahora» antes de intentarlo");
-
-    // Primer gesto: el motor dice que no. Ahí se aprende y aparece el otro.
-    mandar.click();
-    await sleep(400);
-    const detenerYEnviar = porTitulo(app, "Detener el turno y enviar");
-    assert.ok(detenerYEnviar, "no se ofreció «detener y enviar» tras el rechazo");
+    const detenerYEnviar = porTitulo(app, "Interrumpir y enviar");
+    assert.ok(detenerYEnviar, "no se ofreció la interrupción explícita");
 
     detenerYEnviar.click();
     await sleep(300);
@@ -115,7 +101,7 @@ test("«detener y enviar» corta el turno y deja salir lo encolado, sin perderlo
     assert.equal(enviados.length, 1, "lo encolado no salió al cerrar el turno");
     assert.equal(enviados[0].prompt, TEXTO, "salió otro texto");
     assert.equal(enviados[0].session, "t1", "salió a otra tarea");
-    assert.equal(intentos.length, 1, "se intentó meter en el turno además de detenerlo");
+    assert.equal(intentos.length, 0, "se intentó meter en el turno además de detenerlo");
     assert.ok(!app.w.document.body.textContent.includes("en cola"), "el mensaje se quedó en la cola");
   } finally {
     app.w.close();
