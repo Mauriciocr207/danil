@@ -451,7 +451,6 @@
   "shell.workspaces.free_workspace": "Tu workspace Free",
   "shell.workspaces.session_group": "{email} · {name}",
   "shell.workspaces.new_available": "Nuevos disponibles",
-  "danil.error.too_many_contexts": "Llegaste al máximo de 20 organizaciones conectadas. Cierra una para agregar otra.",
   "shell.workspaces.empty_no_org": "No tienes una organización de Danil todavía",
   "shell.workspaces.empty_no_access": "No tienes acceso a los workspaces de esta organización",
   "shell.workspaces.empty_generic": "No hay workspaces de Danil disponibles"
