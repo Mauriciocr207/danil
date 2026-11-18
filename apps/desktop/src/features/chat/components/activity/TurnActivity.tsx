@@ -6,7 +6,7 @@ import { partesDelTramo, type Paso } from "../../../../lib/steps";
 import { cn } from "../../../../lib/utils";
 import { Markdown } from "../../../../ui/Markdown";
 import type { ActivityChunk } from "../../activityBlocks";
-import { ActivityDots } from "../../ActivityDots";
+import { ActivityIndicator, ActivityCaption } from "./ActivityIndicator";
 import McpAppView from "../../McpAppView";
 import type { Msg, Razonamiento } from "../../messageTypes";
 import LineaDeTiempo, { SUPERFICIE_DE_EJECUCION } from "../../Timeline";
@@ -58,8 +58,8 @@ export function RegistroDeTrabajo(props: {
       aria-hidden="true"
     />
   );
-  const girando = () => <ActivityDots active={presentation().animate} paused={!presentation().animate} />;
-  const caption = () => <><Show when={props.stopping || !props.blocked}><span class="min-w-0 truncate" data-activity-label="">{rotulo()}</span></Show><Show when={!props.stopping && props.blocked}>{props.status?.()}</Show></>;
+  const girando = () => <ActivityIndicator active={props.corriendo && !props.stopping} paused={props.animando === false || props.blocked || props.stopping} />;
+  const caption = () => <><Show when={props.stopping || !props.blocked}><ActivityCaption active={presentation().animate} text={rotulo()} /></Show><Show when={!props.stopping && props.blocked}>{props.status?.()}</Show></>;
   const tiempo = () => (
     <Show when={duracion()}>
       <span class="pointer-events-none shrink-0 text-xs whitespace-nowrap text-neutral-500">{duracion()}</span>
