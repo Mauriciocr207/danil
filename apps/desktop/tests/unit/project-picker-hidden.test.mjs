@@ -2,8 +2,9 @@
  * «Ocultar del selector»: se oculta en Ajustes → Proyectos y se muestra desde el
  * selector o desde Ajustes. El oculto deja los 8 recientes y va al final de
  * «Más proyectos…», el buscador lo encuentra, sigue en Ajustes y ninguna tarea
- * cambia. El contador de la fila cuenta las tareas activas, no el `sessions`
- * del motor, que incluye las archivadas. Monta `dist/` con el IPC simulado.
+ * cambia. El contador de la fila y la columna «Tareas» de Ajustes cuentan las
+ * tareas activas, no el `sessions` del motor, que incluye las archivadas; el
+ * aviso de borrado sí las cuenta todas. Monta `dist/` con el IPC simulado.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -85,6 +86,16 @@ test("hide from Settings, it leaves the 8 and goes last under «Más proyectos�
     assert.ok(await until(() => search()));
     [...doc.querySelectorAll("button")].find((b) => b.textContent.includes("Administrar proyectos")).click();
     assert.ok(await until(() => doc.querySelector('[data-settings-project="old9"]')), "Settings → Projects is open");
+    // La columna «Tareas» cuenta las activas, como el selector; el aviso de borrado, todas.
+    const cell = (id) => doc.querySelector(`[data-settings-project="${id}"] [data-active-tasks]`);
+    assert.equal(cell("danil-app").textContent.trim(), "1 tarea", "active tasks, not the engine's 363");
+    assert.equal(cell("old9").textContent.trim(), "sin tareas", "all its tasks are archived");
+    doc.querySelector('[data-settings-project="danil-app"] button[aria-haspopup="menu"]').click();
+    assert.ok(await until(() => [...doc.querySelectorAll('[role="menuitem"]')].some((b) => b.textContent.trim() === "Borrar el proyecto")));
+    [...doc.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent.trim() === "Borrar el proyecto").click();
+    assert.ok(await until(() => doc.body.textContent.includes("También se borrarán sus 363 tareas")), "the delete warning still counts archived tasks: they are deleted too");
+    [...doc.querySelectorAll("button")].find((b) => b.textContent.trim() === "Conservarlo").click();
+    assert.ok(await until(() => !doc.body.textContent.includes("También se borrarán sus 363 tareas")));
     const before = app.commands.length;
     doc.querySelector('[data-settings-project="old9"] button[aria-haspopup="menu"]').click();
     assert.ok(await until(() => doc.querySelector('[data-picker-visibility="shown"]')), "the menu offers «Ocultar del selector»");
