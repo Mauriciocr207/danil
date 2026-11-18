@@ -3602,6 +3602,9 @@ export default function App() {
       // o con otro modelo ya no es la misma sesión.
       // Una tarea de un motor anterior guarda `opencode-zen`; el modelo decide si es OpenCode o el Free Router.
       composer.resumeTask({ provider: canonicalAgentId(s.provider, modeloDeSubtarea(s)), model: modeloDeSubtarea(s) ?? "", effort: s.effort ?? "" });
+      // La transcripción ya llegó; las preferencias opcionales no retienen su pintura.
+      loadResult(id, s, false, generation);
+      void refreshFolder(proyecto, id);
       // El chat de un encargado no es una tarea que se reabre para releer
       // su historial: es su conversación de siempre, y su perfil dice con
       // qué prefiere seguir. Una preferencia guardada gana a lo último que
@@ -3629,10 +3632,6 @@ export default function App() {
       drafts.restoreSession(id, s.excluded_sources ?? []);
       // Y encima, lo que se eligió en su caja sin llegar a mandar nada.
       restoreSessionConfiguration(s);
-      // Lo del disco, y sin vaciar lo vivo: si está contestando, lo que lleva
-      // dicho sigue en su hilo y se pinta detrás.
-      loadResult(id, s, false, generation);
-      void refreshFolder(proyecto, id);
     } catch (e) {
       if (!current()) return;
       try {
