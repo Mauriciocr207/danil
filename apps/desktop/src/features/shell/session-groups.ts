@@ -3,7 +3,7 @@ import { invoke } from "../../lib/invoke.ts";
 import { capabilities } from "../../lib/platform.ts";
 import { escribirPref, leerPref } from "../../lib/prefs.ts";
 import { listen } from "../../lib/serviceEvents.ts";
-import { danilAvailable, readDanil } from "../machines/index.ts";
+import { danilAvailable, danilAvailableContext, readDanilContext } from "../machines/index.ts";
 import { type ContextGroup, createSessionContexts } from "./session-contexts.ts";
 import { coalesceSessionReturn } from "./session-return.ts";
 import { sessionSeedInputs, sessionSyncKey } from "./session-seeding.ts";
@@ -35,9 +35,9 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
       transport: edgeAddedTransport((method, path, body) => sessions.send(g.context_id, method, path, body)),
       store,
       scope: () => record.person && active(g.context_id) ? { person: record.person, organization: g.org } : null,
-      available: () => active(g.context_id) ? danilAvailable(g.org) : null,
-      shown: () => sessionSeedInputs(active(g.context_id), danilAvailable(g.org), new Set([...leerPref<string[]>("workspaces.order", []), ...(capabilities().railWorkspaces?.() ?? []).map((w) => w.id), ...shown()]), hidden()).shown,
-      hidden: () => sessionSeedInputs(active(g.context_id), danilAvailable(g.org), new Set(), hidden()).hidden,
+      available: () => active(g.context_id) ? danilAvailableContext(g.org, g.context_id) : null,
+      shown: () => sessionSeedInputs(active(g.context_id), danilAvailableContext(g.org, g.context_id), new Set([...leerPref<string[]>("workspaces.order", []), ...(capabilities().railWorkspaces?.() ?? []).map((w) => w.id), ...shown()]), hidden()).shown,
+      hidden: () => sessionSeedInputs(active(g.context_id), danilAvailableContext(g.org, g.context_id), new Set(), hidden()).hidden,
       onSeeded, onChange: changed,
     });
     records.set(g.context_id, record);
@@ -52,8 +52,8 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
     }).catch(() => {}).finally(() => { record.asking = false; });
   };
   const rows = createMemo(() => groups()?.map((g): SessionRailGroup => {
-    const available = danilAvailable(g.org);
-    for (const w of available ?? []) known.add(w.id);
+    const available = danilAvailableContext(g.org, g.context_id);
+    for (const w of danilAvailable(g.org) ?? []) known.add(w.id);
     return { ...g, available, added: records.get(g.context_id)?.sync.added() ?? null, person: records.get(g.context_id)?.person ?? null };
   }) ?? null);
   createEffect(() => {
@@ -76,6 +76,6 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
     sessions, groups: rows, known, laterContext, acknowledgeLater: () => setLaterContext(null), ready: () => (revision(), sessions.ready()), connected: () => (revision(), sessions.connected()),
     add: (context: string, id: string) => records.get(context)?.sync.add(id),
     remove: (context: string, id: string) => records.get(context)?.sync.remove(id),
-    refresh: () => { for (const g of groups() ?? []) void readDanil(g.org); },
+    refresh: () => { for (const g of groups() ?? []) void readDanilContext(g.org, g.context_id); },
   };
 }

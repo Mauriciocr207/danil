@@ -11,7 +11,7 @@ type Rail = ReturnType<typeof sessionRail>;
 const NOTE = "m-0 px-2 py-1.5 text-caption text-neutral-500";
 const errorKey = (e: unknown) => {
   const detail = (e as { detail?: string } | null)?.detail;
-  return detail === "too_many_contexts" ? "shell.workspaces.sessions_limit" : detail === "organization_auth_required" ? "shell.workspaces.sessions_auth" : detail === "cancelled" ? "shell.workspaces.sessions_cancelled" : "shell.workspaces.sessions_failed";
+  return detail === "too_many_contexts" ? "danil.error.too_many_contexts" : detail === "organization_auth_required" ? "shell.workspaces.sessions_auth" : detail === "cancelled" ? "shell.workspaces.sessions_cancelled" : "shell.workspaces.sessions_failed";
 };
 
 export function SessionAddEntries(props: { sessions: Rail; signedIn: boolean; onStep: () => void }) {

@@ -261,3 +261,51 @@ test("organization selection stays in the legacy menu only without a session set
   assert.equal(organizationMenuReady(state, false), state);
   assert.equal(organizationMenuReady({ kind: "hidden" }, false), null);
 });
+
+test("unscoped or mismatched machine data never enters a context group", async () => {
+  const { availableInContext, contextSourceMatches } = await import("../../src/features/machines/context-source.ts");
+  let context: string | undefined;
+  let reads = 0;
+  const rows = [{ id: "private-workspace", name: "Private" }];
+  const source = {
+    organizationMachines: () => ["org-machine"],
+    info: () => ({ id: "org-machine", context }),
+    available: () => { reads++; return rows; },
+  };
+  assert.equal(availableInContext(source, "org", "context-a"), null);
+  context = "context-b";
+  assert.equal(availableInContext(source, "org", "context-a"), null);
+  assert.equal(reads, 0, "no data is read under an unproven group");
+  context = "context-a";
+  assert.deepEqual(availableInContext(source, "org", "context-a"), rows);
+  assert.equal(reads, 1);
+  assert.equal(contextSourceMatches({ ...source, organizationMachines: () => [] }, "org", "context-a"), false);
+});
+
+test("the context limit preserves its cause and the other sessions without retrying login", async () => {
+  let logins = 0;
+  const invoke: ContextInvoke = async <T>(command: string) => {
+    if (command === "danil_sign_in") { logins++; throw { detail: "too_many_contexts", what: { clave: "danil.error.too_many_contexts" } }; }
+    return status as T;
+  };
+  const sessions = createSessionContexts(invoke, () => {});
+  await sessions.refresh();
+  await assert.rejects(sessions.addAccount(), { detail: "too_many_contexts", what: { clave: "danil.error.too_many_contexts" } });
+  assert.equal(logins, 1);
+  assert.equal(sessions.groups()!.length, 4);
+});
+
+test("a context removed by a status refresh loses its Danil tiles while the others and hidden locals stay", async () => {
+  let current = structuredClone(status);
+  const invoke: ContextInvoke = async <T>() => current as T;
+  const sessions = createSessionContexts(invoke, () => {});
+  await sessions.refresh();
+  current.sessions![0].contexts = current.sessions![0].contexts.filter((c) => c.context_id !== "a");
+  await sessions.refresh();
+  const groups = sessions.groups()!.map((g) => ({ ...g, available: [{ id: g.context_id, name: g.org }], added: new Set([g.context_id]), person: "person" }));
+  const index = ["a", "local", "hidden"].map((id) => ({ id, name: id, logo: null }));
+  const hidden = new Set(["hidden"]);
+  const rows = sessionVisible(index, "a", hidden, groups, new Set(["a", "b", "free", "c"]));
+  assert.deepEqual(rows.map((w) => w.id), ["local", "b", "free", "c"]);
+  assert.deepEqual([...hidden], ["hidden"]);
+});

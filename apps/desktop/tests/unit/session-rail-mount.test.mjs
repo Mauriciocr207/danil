@@ -17,11 +17,12 @@ test("D2a mounts context headers, opens later for one organization, and signs ou
   ] };
   const closed = [];
   const logins = [];
+  let rejectLogin = true;
   const app = await boot("listo", "session-context-rail", {
     ...RESPONSES,
     danil_session_status: () => structuredClone(status),
     danil_edge_fetch: ({ path, context: id }) => path === "/v1/identity/me" ? { status: 200, body: { id: id === "d" ? "person-two" : "person-one" } } : { status: 404, body: {} },
-    danil_sign_in: (args) => { logins.push(args); return structuredClone(status); },
+    danil_sign_in: (args) => { logins.push(args); return rejectLogin ? Promise.reject({ detail: "too_many_contexts", what: { clave: "danil.error.too_many_contexts" } }) : structuredClone(status); },
     danil_sign_out: ({ family }) => { closed.push(family); status = { ...status, sessions: status.sessions.filter((s) => s.family !== family) }; return structuredClone(status); },
   });
   const doc = app.w.document;
@@ -38,9 +39,17 @@ test("D2a mounts context headers, opens later for one organization, and signs ou
   [...doc.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent === "Agregar cuenta u organización").click();
   assert.ok(await until(() => logins.length === 1));
   assert.equal(logins[0].mode, "add");
+  assert.ok(await until(() => [...doc.querySelectorAll('[role="status"]')].some((p) => p.textContent === "Llegaste al máximo de 20 organizaciones conectadas. Cierra una para agregar otra.")), "the cause is visible inside the open add menu");
+  assert.equal(doc.querySelectorAll("[data-account-header]").length, 4);
+  rejectLogin = false;
+  [...doc.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent === "Agregar cuenta u organización").click();
+  assert.ok(await until(() => logins.length === 2));
+  status.sessions[0].contexts = status.sessions[0].contexts.filter((c) => c.context_id !== "a");
+  app.emit("danil-connect", structuredClone(status));
+  assert.ok(await until(() => doc.querySelectorAll("[data-account-header]").length === 3));
   doc.activeElement?.dispatchEvent(new app.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await sleep(100);
-  doc.querySelector('[data-account-header="a"]').click();
+  doc.querySelector('[data-account-header="b"]').click();
   assert.ok(await until(() => [...doc.querySelectorAll('[role="menuitem"]')].some((b) => b.textContent === "Cerrar sesión de one@example.com")));
   [...doc.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent === "Cerrar sesión de one@example.com").click();
   assert.ok(await until(() => doc.querySelectorAll("[data-account-header]").length === 1));
