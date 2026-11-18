@@ -6,20 +6,18 @@ import { setShellCacheScope } from '../lib/shellCache';
 import { seguirElTema } from '../lib/theme';
 import { Button } from '../ui/Button';
 import { ToastStack } from '../ui/Toast';
-import { webAccountProfile } from './account';
 import { platformSession, platformTransport, PlatformSessionError, type PlatformWorkspace, type PlatformProfile } from './platform-session';
 import type { WebSessionDeployment } from './session-config';
-import { workspaceSelection } from './workspace-selection';
 import { readCapabilities, supports, type CapabilitiesSnapshot } from './service-capabilities';
 import { UpdateNotice } from './UpdateNotice';
 import { WorkosAuthPage, signInError } from './auth/workos';
 import { mountWindow } from './window';
 import { forgetMachineNames } from '../features/machines/known-names';
 import { sessionStorageScope, clearWebCaches } from './session-storage';
-import { createOrganizationSelection } from "@terminus/computers";
-import { webOrganizationSource } from './organizations';
+import { organizationSession } from './organization-session';
 import PromoRedeem from '../features/shell/PromoRedeem';
 import './phrases';
+import { sessionStartup } from './startup-reader';
 
 declare const __DANIL_WEB_RELAY_ORIGINS__: string[];
 const FIRST_RETRY_MS = 1000;
@@ -36,7 +34,6 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
     const request: typeof fetch = (input, init = {}) => lifetime.signal.aborted ? Promise.reject(new DOMException('The page was closed', 'AbortError')) : fetch(input, { ...init, signal: init.signal ? AbortSignal.any([init.signal, lifetime.signal]) : lifetime.signal });
     const api = platformSession(options, request);
     const raw = platformTransport(options, request);
-    const selection = workspaceSelection(api);
     const [rows, setRows] = createSignal<PlatformWorkspace[]>([]);
     const [caps, setCaps] = createSignal<CapabilitiesSnapshot | null>(null);
     const [active, setActive] = createSignal<string | null>(null);
@@ -86,8 +83,7 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
     }
     function expired() {
       if (stopped || signedOut()) return;
-      clearTimeout(timer);
-      lifetime.abort();
+      stopServices();
       if (cache) cache.clear();
       else clearWebCaches(localStorage);
       setSignedOut(true);
@@ -109,21 +105,22 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
       call: (path, init) => authorized(() => raw.call(path, init)),
       mutation: (path, init) => authorized(() => raw.mutation(path, init)),
     };
+    const startup = sessionStartup(api, transport);
+    const selection = startup.selection;
     const machines = machinesClient({ endpoint: `${options.origin}/v1`, transport, relayOrigins: __DANIL_WEB_RELAY_ORIGINS__ });
-    // Tras cambiar de organización la página se relee entera, como tras cambiar de workspace.
-    const organizations = createOrganizationSelection(webOrganizationSource(transport), { onSelected: () => window.location.assign(home) });
+    const organization = organizationSession(transport, lifetime.signal, () => {
+      stopped = true; stopServices(); windowApp?.close(); window.location.assign(home);
+    });
+    const organizations = organization.selection;
     const [orgNeeded, setOrgNeeded] = createSignal(false);
     const [orgState, setOrgState] = createSignal(organizations.state());
     const [noWorkspace, setNoWorkspace] = createSignal(false);
-    organizations.subscribe(() => { setOrgNeeded(organizations.needed()); setOrgState(organizations.state()); });
-    let organizationsLoaded = false;
-    const readOrganizations = () => { if (!organizationsLoaded) { organizationsLoaded = true; void organizations.load(); } };
-    const loadOrganizations = () => Promise.resolve(organizations);
+    const unsubscribeOrganizations = organizations.subscribe(() => { if (!stopped && !lifetime.signal.aborted) { setOrgNeeded(organizations.needed()); setOrgState(organizations.state()); } });
     // Una organización sin workspace activo (`me` da 403 `workspace_selection_required` o `workspace: null`):
     // el estado vacío con sus workspaces, el selector de organización y cerrar sesión; nunca «Reintentar» sin salida.
     async function withoutWorkspace() {
-      readOrganizations();
-      const listed = await api.workspaces().catch(() => [] as PlatformWorkspace[]);
+      organization.load(startup.reader()?.organizations);
+      const listed = await (startup.reader()?.workspaces() ?? api.workspaces()).catch(() => [] as PlatformWorkspace[]);
       if (stopped || signedOut()) return;
       setRows(listed);
       setPreparing(false);
@@ -150,24 +147,24 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
       if (busy() || refreshing) { later(); return; }
       if (!mountedBefore) { await load(); return; }
       refreshing = true;
+      let ready = false;
       try {
-        setCaps(await readCapabilities(transport));
-        if (stopped || signedOut()) return;
-        if (person) {
-          const fresh = await api.me();
-          if (fresh.id !== person.id || fresh.workspace !== person.workspace) { gate(); window.location.assign(home); return; }
+        if (startup.refreshDue()) {
+          const [capabilities, fresh] = await Promise.all([readCapabilities(transport), api.me()]);
+          if (stopped || signedOut()) return;
+          setCaps(capabilities);
+          if (person && (fresh.id !== person.id || fresh.workspace !== person.workspace)) { gate(); window.location.assign(home); return; }
           person = fresh;
-          if (stopped || signedOut() || busy()) return;
-          if (permits('workspaces')) setRows(await api.workspaces());
-          const ready = await windowApp?.refresh();
-          if (ready) wait = POLL_MAX_MS;
-        }
+          if (permits('workspaces')) { const listed = await api.workspaces(); if (stopped || signedOut()) return; setRows(listed); }
+          startup.checked();
+        } else if (!permits('machines')) { const capabilities = await readCapabilities(transport); if (stopped || signedOut()) return; setCaps(capabilities); }
+        if (!stopped && !signedOut()) ready = await windowApp?.refresh() ?? false;
       } catch (cause) {
         if (cause instanceof PlatformSessionError && cause.status === 401) expired();
         else if (cause instanceof PlatformSessionError && cause.retryAfter) wait = Math.max(wait, Number(cause.retryAfter) * 1000 || wait);
       } finally {
         refreshing = false;
-        later();
+        later(ready ? Math.min(POLL_MAX_MS, startup.refreshIn()) : wait);
       }
     }
     async function run(action: () => Promise<void>, firstMountRetry = false) {
@@ -202,16 +199,16 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
     async function logout() { await run(async () => { await api.logout(); forgetMachineNames(); expired(); }); }
     async function load() {
       await run(async () => {
-        try { setCaps(await readCapabilities(transport)); }
-        catch (cause) { if (cause instanceof PlatformSessionError && cause.status === 401) throw cause; }
-        await selection.reconcile();
+        const { profile, capabilities } = await startup.read(caps());
+        if (stopped || signedOut()) return;
+        setCaps(capabilities);
         if (mountedBefore) { window.location.assign(home); return; }
-        person = await api.me();
+        person = profile;
         // Con sesión: el selector se lee una vez y, si la ruta aún no existe, se reintenta solo.
-        readOrganizations();
+        organization.load(startup.reader()?.organizations);
         if (person.workspace === null) { await withoutWorkspace(); return; }
         const listed = permits('workspaces');
-        const workspaces = listed ? await api.workspaces() : [];
+        const workspaces = listed ? await startup.reader()!.workspaces() : [];
         if (stopped || signedOut()) return;
         setRows(workspaces);
         setActive(selection.active());
@@ -224,12 +221,11 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
         disposeGate = undefined;
         mountedBefore = true;
         firstMountAttempts = 0;
-        setPreparing(false);
         windowApp = mountWindow({ machines, permits, relayOrigin: __DANIL_WEB_RELAY_ORIGINS__[0],
-          profile: webAccountProfile(transport), onUnauthorized: expired,
+          profile: startup.accountProfile(lifetime.signal), onUnauthorized: expired,
           onUnavailable: () => { setError('web.platform.unavailable'); gate(); later(); },
           workspaces: { rows, active, busy, uncertain, choose: id => void choose(id) },
-          organizations: loadOrganizations, promo: redeemPromo,
+          organizations: () => Promise.resolve(organizations), promo: redeemPromo,
         }, { storage: cache.storage, webAccounts: {
           current: { user_id: person.id, name: person.name, email: null, extra: false },
           others: () => [], open: () => {}, add: () => {}, remove: async () => {}, signOut: () => void logout(),
@@ -237,7 +233,8 @@ export function startWindow(options: WebSessionDeployment, root: HTMLElement) {
         later(FIRST_RETRY_MS);
       }, true);
     }
-    const close = () => { stopped = true; clearTimeout(timer); lifetime.abort(); windowApp?.close(); disposeGate?.(); dispose(); };
+    function stopServices() { clearTimeout(timer); lifetime.abort(); organizations.stop(); unsubscribeOrganizations(); }
+    const close = () => { stopped = true; stopServices(); windowApp?.close(); disposeGate?.(); dispose(); };
     window.addEventListener('pagehide', close, { once: true });
     gate();
     void load();

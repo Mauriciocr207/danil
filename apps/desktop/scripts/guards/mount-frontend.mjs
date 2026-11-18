@@ -321,6 +321,35 @@ if (!broken) {
   assert.deepEqual(closeAllViews.failures, []);
   closeAllViews.w.close();
 
+  const dragView = await boot("listo", "tab-drag-overlay", WITH_TASK);
+  const dragDocument = dragView.w.document;
+  dragDocument.elementFromPoint = () => null;
+  const dragRow = dragDocument.querySelector('[data-sesion="s1"]');
+  assert.ok(dragRow);
+  const pointer = (type, x, y) => new dragView.w.PointerEvent(type, {
+    bubbles: true, button: 0, buttons: 1, pointerId: 8, isPrimary: true,
+    clientX: x, clientY: y,
+  });
+  const ghost = () => dragDocument.querySelector('.fixed.pointer-events-none[aria-hidden="true"]');
+  assert.equal(ghost(), null);
+  dragRow.dispatchEvent(pointer("pointerdown", 10, 10));
+  dragView.w.dispatchEvent(pointer("pointermove", 40, 50));
+  await sleep(20);
+  assert.ok(ghost(), "el arrastre pinta el nombre de la tarea junto al cursor");
+  assert.equal(ghost().textContent.trim(), "Una tarea");
+  assert.equal(ghost().style.left, "52px");
+  assert.equal(ghost().style.top, "62px");
+  dragView.w.dispatchEvent(pointer("pointermove", 70, 80));
+  await sleep(20);
+  assert.equal(ghost().style.left, "82px", "el fantasma sigue reaccionando al movimiento");
+  assert.equal(ghost().style.top, "92px");
+  dragView.w.dispatchEvent(new dragView.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await sleep(20);
+  assert.equal(ghost(), null, "cancelar el arrastre retira el fantasma");
+  dragView.w.dispatchEvent(pointer("pointerup", 70, 80));
+  assert.deepEqual(dragView.failures, []);
+  dragView.w.close();
+
   console.log(`El front monta — ${normal.painted.length} bytes en #root, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   process.exit(0);
 }

@@ -10,6 +10,7 @@
  * Lo que solo el escritorio sabe (git, PR, worktree) lo añade él.
  */
 import { type TaskActivity, type TaskState, taskPriority } from "../../design/src/index.ts";
+import { providerMark } from "./model-presentation.ts";
 import { type SidebarContext, type SidebarGroup, type SidebarTask, activityOf, isPinned, needsYou } from "./view.ts";
 
 export type CardTask = SidebarTask & {
@@ -17,6 +18,8 @@ export type CardTask = SidebarTask & {
   last_message?: string | null;
   /** Con qué proveedor de IA corre (`claude`, `codex`…). */
   provider?: string | null;
+  /** Con qué modelo corrió; decide si la marca es de Danil. */
+  model?: string | null;
   /** La máquina que la corre, si se enseña; `machine_on: false` es apagada. */
   machine?: string | null;
   machine_on?: boolean;
@@ -31,6 +34,8 @@ export type TaskCard = {
   needsYou: boolean;
   /** El proveedor de IA, va primero en la línea 2. */
   provider: string | null;
+  /** Su marca: la de Danil si el turno lo sirvió Danil (Free Router o créditos). */
+  mark: string | null;
   /** La carpeta de la fila, si se enseña (`""` es sin carpeta y no se enseña). */
   folder: string | null;
   /** La cara del agente; no en su propio chat, que ya es suyo. */
@@ -55,6 +60,7 @@ export function taskCard<T extends CardTask>(task: T, options: CardOptions<T>): 
     pinned: isPinned(task),
     needsYou: needsYou(state),
     provider: task.provider || null,
+    mark: providerMark(task.provider, task.model),
     folder,
     agent: task.agent && !task.chat_de_agente ? task.agent : null,
     machine: !options.hideMachine && task.machine ? { id: task.machine, on: task.machine_on !== false } : null,

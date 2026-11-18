@@ -1,0 +1,70 @@
+{
+  "fixture": "simulated edge DTOs and fake relay; 60 seconds fake idle; request/response and sent/received payload bytes exclude headers/TLS/assets",
+  "startup": {
+    "http": {
+      "GET /v1/capabilities": 3,
+      "GET /v1/identity/me": 4,
+      "GET /v1/workspaces": 2,
+      "GET /v1/identity/organizations": 1,
+      "GET /v1/machines": 1,
+      "GET /v1/identity/csrf": 1,
+      "POST /v1/machines/m1/tickets": 1
+    },
+    "rpc": {
+      "agentsview_status": 1,
+      "list_workspaces": 1,
+      "list_workspace_attention": 1,
+      "list_permission_modes": 3,
+      "list_slash_menu": 3,
+      "list_surfaces": 1,
+      "list_projects": 2,
+      "list_sources": 1,
+      "list_active_turns": 2,
+      "list_spaces": 1,
+      "chat_background": 1,
+      "list_models": 1,
+      "list_live_sessions": 2
+    },
+    "sockets": 1,
+    "httpRequestPayloadBytes": 2,
+    "httpResponsePayloadBytes": 1558,
+    "wsSentPayloadBytes": 2806,
+    "wsReceivedPayloadBytes": 1370
+  },
+  "idle": {
+    "http": {
+      "GET /v1/capabilities": 2,
+      "GET /v1/identity/me": 2,
+      "GET /v1/workspaces": 2,
+      "GET /v1/identity/organizations": 0,
+      "GET /v1/machines": 2,
+      "GET /v1/identity/csrf": 1,
+      "POST /v1/machines/m1/tickets": 1
+    },
+    "rpc": {
+      "agentsview_status": 0,
+      "list_workspaces": 2,
+      "list_workspace_attention": 2,
+      "list_permission_modes": 0,
+      "list_slash_menu": 0,
+      "list_surfaces": 0,
+      "list_projects": 2,
+      "list_sources": 1,
+      "list_active_turns": 11,
+      "list_spaces": 0,
+      "chat_background": 0,
+      "list_models": 0,
+      "list_live_sessions": 0,
+      "task_history": 2,
+      "list_agent_profiles": 1,
+      "list_session_git": 23,
+      "list_agents": 7,
+      "source_freshness": 1
+    },
+    "sockets": 1,
+    "httpRequestPayloadBytes": 2,
+    "httpResponsePayloadBytes": 1400,
+    "wsSentPayloadBytes": 8103,
+    "wsReceivedPayloadBytes": 5555
+  }
+}

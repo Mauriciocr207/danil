@@ -13,8 +13,8 @@ import { capabilities } from "./platform.ts";
  */
 const NS = "harness.layout.";
 // En la web, de la persona y no del navegador; se releen al cambiar de persona.
-const PER_PERSON = new Set(["machines.run_on", "machines.known_names", "projects.last_picked"]);
-const REREAD = new Set(["machines.run_on", "projects.last_picked"]);
+const PER_PERSON = new Set(["machines.run_on", "machines.known_names", "workspaces.hidden", "projects.last_picked"]);
+const REREAD = new Set(["machines.run_on", "workspaces.hidden", "projects.last_picked"]);
 function storageKey(key: string) {
   const person = PER_PERSON.has(key) && !capabilities().nativeWindow ? capabilities().webAccounts?.current.user_id : null;
   return person ? `danil.web.${person}.preferences.${key}` : NS + key;

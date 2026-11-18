@@ -1,8 +1,8 @@
-import Folder from "lucide-solid/icons/folder";
 import { SignalDot } from "../../ui/SignalDot";
 import GitBranch from "lucide-solid/icons/git-branch";
 import Monitor from "lucide-solid/icons/monitor";
 import { MachineIcon } from "../machines/MachineIcon";
+import { WorkdirIcon } from "../code";
 import { machineName, machineWakes } from "../machines/store";
 import { type JSX, Show } from "solid-js";
 import { createCopied } from "../../lib/clipboard";
@@ -16,7 +16,7 @@ export type TaskLocationProps = {
   /** El `machine` de la fila; sin él, la máquina de la ventana. */
   machine?: string;
   on: boolean;
-  project?: string;
+  project?: { name: string; kind: string; cloud?: string | null };
   /** La carpeta de trabajo de la tarea (su worktree). */
   path?: string;
   branch?: string;
@@ -83,8 +83,8 @@ export default function TaskLocation(props: TaskLocationProps) {
               label={props.onFiles ? t("shell.folder.view_on", { name: nombre() }) : undefined}
               tip={<>{props.onFiles ? t("shell.folder.view_on", { name: nombre() }) : t("chat.location.project")}<Show when={props.path}>{(ruta) => <span class="block font-mono text-caption font-normal opacity-80">{abbreviateHomePath(ruta())}</span>}</Show></>}
             >
-              <Folder size={14} aria-hidden="true" class="shrink-0" />
-              <span data-task-location-project="" class="min-w-0 truncate">{proyecto()}</span>
+              <span aria-hidden="true" class="inline-flex shrink-0"><WorkdirIcon kind={proyecto().kind} cloud={proyecto().cloud} size={14} /></span>
+              <span data-task-location-project="" class="min-w-0 truncate">{proyecto().name}</span>
             </Pista>
           </>
         )}

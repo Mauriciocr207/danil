@@ -12,7 +12,7 @@ import { Dynamic } from "solid-js/web";
 import { FolderSquare } from "./FolderChip";
 import { t } from "../../lib/i18n";
 import type { AgentModels, AgentProfile, HandlerStatus } from "../../lib/model";
-import { nombreDeModelo } from "../../lib/models";
+import { nombreDeModelo, providerMark } from "../../lib/models";
 import { MarcaAgente } from "../../ui/icons";
 import { machineName, machineSystem, machines } from "../machines/store";
 import { AstroAvatar } from "./AstroAvatar";
@@ -29,8 +29,6 @@ export type TaskHoverCardProps = {
   folderName?: string;
   folderId?: string;
   git?: GitStatus;
-  /** Rótulo del CLI (`Agent.label`); sin él se muestra su id. */
-  providerLabel?: string;
   /** Catálogo de modelos del CLI, para nombrar un alias como lo hace el selector. */
   models?: AgentModels | null;
   /** Perfil del agente de la tarea: nombre visible y cara. */
@@ -85,7 +83,7 @@ export function TaskHoverCard(props: TaskHoverCardProps) {
   const modelo = () => props.task.model
     ? nombreDeModelo(props.task.model, props.models)
     : t("projects.hover_card.default_model");
-  const proveedor = () => props.providerLabel ?? props.task.provider;
+  const marca = () => providerMark(props.task.provider, props.task.model) ?? props.task.provider;
   /** En qué máquina corre: la de la fila o, con más de una máquina, esta computadora. */
   const maquina = () => {
     const remota = props.task.machine;
@@ -146,8 +144,8 @@ export function TaskHoverCard(props: TaskHoverCardProps) {
         )}
       </Show>
       <Fila label={t("projects.hover_card.provider")}>
-        <span class="flex shrink-0" title={proveedor()} aria-label={proveedor()}>
-          <MarcaAgente id={props.task.provider} size={12} />
+        <span class="flex shrink-0" title={marca()} aria-label={marca()}>
+          <MarcaAgente id={marca()} size={12} />
         </span>
         <span class="truncate">{modelo()}</span>
       </Fila>
