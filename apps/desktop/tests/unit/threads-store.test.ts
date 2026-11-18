@@ -530,3 +530,15 @@ test("a rapid next input stays ordered when its fresh history precedes the save 
     assert.deepEqual(f.store.messages().map(row => row.text), ["hola", "respuesta", "qué haces?"]);
   } finally { f.dispose(); }
 });
+
+
+test("runtime start confirmation reaches an existing activity without a timestamp", () => {
+  const f = fixture();
+  try {
+    f.store.beginActivity("s", null);
+    assert.equal(f.store.activities("s", [])[0].startConfirmed, false);
+    f.store.beginActivity("s", null, true);
+    assert.equal(f.store.activities("s", [])[0].startConfirmed, true);
+    assert.equal(f.store.activities("s", [])[0].startedAt, null);
+  } finally { f.dispose(); }
+});
