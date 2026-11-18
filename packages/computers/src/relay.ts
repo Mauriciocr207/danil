@@ -596,7 +596,7 @@ export class RelaySession {
           this.after = cursor;
         } else if (!failed && !previous && cursor !== null) this.after = cursor;
         if (failed) {
-          for (const listener of this.eventListeners) listener({ ...page, gap: true, replay: false });
+          for (const listener of this.eventListeners) listener(page);
           return;
         }
         if (restarted || page.gap) { this.replaying = true; this.replayId = requestId(); }
