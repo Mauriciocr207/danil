@@ -16,6 +16,12 @@ pub(super) struct Context {
     pub org: String,
     pub org_name: Option<String>,
     pub plan: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "session::deserialize_empty_reason",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub empty_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspaces: Option<String>,
 }
@@ -29,6 +35,12 @@ struct Metadata {
     #[serde(default)]
     available_contexts: Option<u64>,
     email: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "session::deserialize_empty_reason",
+        skip_serializing_if = "Option::is_none"
+    )]
+    empty_reason: Option<String>,
     contexts: Vec<Context>,
 }
 #[derive(Default, Serialize, Deserialize)]
@@ -52,6 +64,7 @@ struct Set<V: FamilyVault> {
     default_context: Option<String>,
     attempt: u64,
     legacy_family: Option<String>,
+    removed: Vec<Value>,
 }
 pub(super) struct Families<V: FamilyVault> {
     edge: String,
@@ -142,6 +155,7 @@ impl<V: FamilyVault> Families<V> {
                 default_family: index.default_family,
                 default_context: index.default_context,
                 attempt: 0,
+                removed: Vec::new(),
                 legacy_family,
             }),
             changed,
@@ -321,6 +335,7 @@ impl<V: FamilyVault> Families<V> {
                 session_id: server_id,
                 sub: profile["account"].as_str().map(str::to_owned),
                 email: profile["email"].as_str().map(str::to_owned),
+                empty_reason: None,
                 contexts,
                 available_contexts: reply.body["available_contexts"].as_u64(),
             },
@@ -418,6 +433,12 @@ impl<V: FamilyVault> Families<V> {
                                         .as_str()
                                         .filter(|s| session::opaque_id(s))
                                         .map(str::to_owned);
+                                    f.metadata.empty_reason = item["empty_reason"]
+                                        .as_str()
+                                        .or(reply.body["empty_reason"].as_str())
+                                        .and_then(session::empty_reason)
+                                        .or(reply.empty_reason)
+                                        .map(str::to_owned);
                                     f.metadata.email = item["email"]
                                         .as_str()
                                         .or(state["email"].as_str())
@@ -505,6 +526,7 @@ impl<V: FamilyVault> Families<V> {
                 .iter()
                 .map(|f| {
                     let mut value = json!({"family":f.metadata.family,"email":f.metadata.email,"contexts":f.metadata.contexts});
+                    if let Some(reason) = &f.metadata.empty_reason { value["empty_reason"] = json!(reason); }
                     if let Some(count) = f.metadata.available_contexts { value["available_contexts"] = json!(count); }
                     value
                 })
@@ -518,6 +540,9 @@ impl<V: FamilyVault> Families<V> {
                 .collect::<Vec<_>>(),
             set.default_context.clone(),
         );
+        if !set.removed.is_empty() {
+            value["removed"] = json!(std::mem::take(&mut set.removed));
+        }
         drop(set);
         if before != after {
             (self.changed)();
@@ -536,7 +561,115 @@ impl<V: FamilyVault> Families<V> {
             return Err(refused("session_not_in_set"));
         }
         let desk = self.selected(None, context)?;
-        desk.fetch_context(method, path, body, key, context)
+        let result = desk.fetch_context(method, path, body, key, context);
+        match &result {
+            Err(Fail::NoSession) => self.retire_family(&desk),
+            Ok(reply)
+                if context.is_some()
+                    && ((reply.status == 401 && reply.code == Some("session_not_in_set"))
+                        || (reply.status == 403
+                            && reply.code == Some("organization_access_denied"))) =>
+            {
+                self.retire_context(&desk, context.expect("explicit context"), reply.code);
+            }
+            _ => {}
+        }
+        result
+    }
+    fn retire_family(&self, desk: &Arc<Desk<V>>) {
+        desk.forget();
+        let mut set = lock(&self.set);
+        let family = set
+            .families
+            .iter()
+            .find(|f| Arc::ptr_eq(&f.desk, desk))
+            .map(|f| f.metadata.family.clone());
+        let Some(family) = family else {
+            return;
+        };
+        set.families.retain(|f| f.metadata.family != family);
+        if set.default_family.as_ref() == Some(&family) {
+            set.default_family = None;
+            set.default_context = None;
+        }
+        if set.legacy_family.as_ref() == Some(&family) {
+            set.legacy_family = None;
+        }
+        self.persist(&set);
+        drop(set);
+        (self.changed)();
+    }
+    fn retire_context(&self, desk: &Arc<Desk<V>>, context: &str, reason: Option<&str>) {
+        let _mutation = lock(&self.mutations);
+        let metadata = {
+            let mut set = lock(&self.set);
+            let Some(family) = set.families.iter_mut().find(|f| Arc::ptr_eq(&f.desk, desk)) else {
+                return;
+            };
+            let removed = family
+                .metadata
+                .contexts
+                .iter()
+                .find(|c| c.context_id == context)
+                .cloned();
+            family.metadata.contexts.retain(|c| c.context_id != context);
+            let metadata = family.metadata.clone();
+            if reason == Some("organization_access_denied") {
+                if let Some(removed) = removed {
+                    set.removed.push(json!({"context_id":removed.context_id,"org":removed.org,"reason":"organization_access_denied"}));
+                }
+            }
+            if set.default_context.as_deref() == Some(context) {
+                set.default_context = None;
+                set.default_family = None;
+            }
+            self.persist(&set);
+            metadata
+        };
+        let refreshed = desk.fetch("GET", "/v1/identity/sessions", None, "");
+        match refreshed {
+            Err(Fail::NoSession) => {
+                self.retire_family(desk);
+                return;
+            }
+            Ok(reply) if reply.status == 401 => {
+                self.retire_family(desk);
+                return;
+            }
+            Ok(reply) if reply.status == 200 => {
+                if let Some(items) = reply.body["items"].as_array() {
+                    let item = items
+                        .iter()
+                        .find(|i| {
+                            metadata
+                                .session_id
+                                .as_deref()
+                                .is_some_and(|id| i["session_id"] == id)
+                        })
+                        .or_else(|| (items.len() == 1).then(|| &items[0]));
+                    if let Some(item) = item {
+                        if let Ok(mut contexts) =
+                            serde_json::from_value::<Vec<Context>>(item["contexts"].clone())
+                        {
+                            contexts.retain(|c| {
+                                c.context_id != context
+                                    && session::opaque_id(&c.context_id)
+                                    && session::opaque_id(&c.org)
+                            });
+                            let mut set = lock(&self.set);
+                            if let Some(family) =
+                                set.families.iter_mut().find(|f| Arc::ptr_eq(&f.desk, desk))
+                            {
+                                family.metadata.contexts = contexts.into_iter().take(20).collect();
+                            }
+                            self.persist(&set);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        (self.changed)();
     }
     fn prune_duplicates(&self) {
         let duplicates = {
