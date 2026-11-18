@@ -3,7 +3,7 @@ import type { Msg } from "../chat/index.ts";
 import type { TurnActivity } from "../../lib/turnActivity.ts";
 export type { TurnActivity } from "../../lib/turnActivity.ts";
 
-type RecordOfActivity = { key: string; active: boolean; startedAt: number | null; saved: Set<string>; alias?: RecordOfActivity };
+type RecordOfActivity = { key: string; active: boolean; startedAt: number | null; saved: Set<string>; baseline: readonly string[] | null; alias?: RecordOfActivity };
 const scopeKey = (workspace: string | null, session: string) => JSON.stringify([workspace, session]);
 // `transcripcion` assigns every persisted piece `${turn id}:${piece}`.
 const savedTurn = (message: Msg) => {
@@ -19,7 +19,7 @@ export function createActivityProjection() {
   const owners = new WeakMap<Msg, RecordOfActivity>();
   const list = (workspace: string | null, session: string) => records.get(scopeKey(workspace, session)) ?? [];
   const current = (workspace: string | null, session: string) => list(workspace, session).at(-1);
-  function begin(workspace: string | null, session: string, startedAt: number | null) {
+  function begin(workspace: string | null, session: string, startedAt: number | null, before: readonly Msg[] | null = null) {
     const previous = current(workspace, session);
     if (previous?.active) {
       if (previous.startedAt !== null || epoch(startedAt) === null) return false;
@@ -27,7 +27,9 @@ export function createActivityProjection() {
       return true;
     }
     const key = scopeKey(workspace, session);
-    records.set(key, [...list(workspace, session), { key: `${key}:activity:${++serial}`, active: true, startedAt: epoch(startedAt), saved: new Set() }]);
+    const known = before?.map(savedTurn).filter((id): id is string => Boolean(id));
+    const baseline = before === null || (before.length > 0 && !known?.length) ? null : known ?? [];
+    records.set(key, [...list(workspace, session), { key: `${key}:activity:${++serial}`, active: true, startedAt: epoch(startedAt), saved: new Set(), baseline }]);
     return true;
   }
   function observe(workspace: string | null, session: string, before: readonly Msg[], after: readonly Msg[]) {
@@ -51,12 +53,19 @@ export function createActivityProjection() {
     activity.active = false;
     return true;
   }
-  function reconcile(workspace: string | null, session: string, before: readonly Msg[], after: readonly Msg[], closed: boolean) {
-    const previous = new Set(before.map(savedTurn).filter(Boolean));
+  function reconcile(workspace: string | null, session: string, _before: readonly Msg[], after: readonly Msg[], closed: boolean) {
     const latest = current(workspace, session);
-    if (closed && latest && !latest.active) for (const message of after) {
-      const id = savedTurn(message);
-      if (id && !previous.has(id)) latest.saved.add(id);
+    if (closed && latest && !latest.active && latest.baseline !== null) {
+      const frontier = latest.baseline.at(-1);
+      let boundary = -1;
+      if (frontier) for (let index = after.length - 1; index >= 0; index--) {
+        if (savedTurn(after[index]) === frontier) { boundary = index; break; }
+      }
+      // Prepending history cannot turn older, previously unseen IDs into this run.
+      if (!frontier || boundary >= 0) for (const message of after.slice(boundary + 1)) {
+        const id = savedTurn(message);
+        if (id && !latest.baseline.includes(id)) latest.saved.add(id);
+      }
     }
     const saved = new Map(list(workspace, session).flatMap(record => [...record.saved].map(id => [id, record] as const)));
     for (const message of after) {
@@ -91,8 +100,4 @@ export function createActivityProjection() {
     clear: () => records.clear() };
 }
 
-/** Unknown start is not elapsed zero; a remount never fabricates an epoch. */
-export function activityElapsed(startedAt: number | null, now: number): number | null {
-  const start = epoch(startedAt);
-  return start === null ? null : Math.max(0, now - start);
-}
+export { activityElapsed } from "../../lib/turnActivity.ts";

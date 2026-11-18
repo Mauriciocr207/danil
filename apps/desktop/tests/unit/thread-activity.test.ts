@@ -31,7 +31,7 @@ test("question permission and an injected user never create a turn boundary", ()
   assert.equal(activities.length, 1); assert.equal(activities[0].anchor, first); assert.deepEqual(activities[0].messages, rows);
 });
 test("done and persisted history preserve the observed activity key and answer order", () => {
-  const model = createActivityProjection(); model.begin("A", "s", 1_000);
+  const model = createActivityProjection(); model.begin("A", "s", 1_000, []);
   const live = message("first"), last = message("last"); model.observe("A", "s", [], [live, last]);
   const key = model.project("A", "s", [live, last])[0].key;
   model.finish("A", "s");
@@ -70,4 +70,30 @@ test("draft adoption retains the visible anchor key when started already arrived
   model.begin("A", "s", 1_200); const answer = message("answer"); model.observe("A", "s", [], [answer]);
   model.adopt("A", "", "s"); const activities = model.project("A", "s", [prompt, answer]);
   assert.equal(activities.length, 1); assert.equal(activities[0].key, key); assert.equal(activities[0].anchor, answer);
+});
+test("thread owner publishes begin and finish without waiting for another message", async () => {
+  const { createRoot, createEffect } = await import("solid-js");
+  const { createThreadsStore } = await import("../../src/features/threads/index.ts");
+  const states: boolean[] = [];
+  const f = createRoot(dispose => {
+    const store = createThreadsStore({ scope: { workspace: () => "A", generation: () => 1, paged: () => false },
+      activeSession: () => "s", project: () => "p", invoke: async <T>() => ({ turns: [] }) as T,
+      route: () => undefined, liveThreads: () => new Set() });
+    createEffect(() => { const activities = store.activities("s", store.messages()); states.push(activities[0]?.active ?? false); });
+    return { store, dispose: () => { store.dispose(); dispose(); } };
+  });
+  await Promise.resolve(); f.store.replaceHistory("s", [], true); f.store.beginActivity("s", 1_000); assert.equal(states.at(-1), true);
+  f.store.appendLive("s", [message("answer")]); f.store.finishActivity("s"); assert.equal(states.at(-1), false);
+  const key = f.store.activities("s", f.store.messages())[0].key;
+  f.store.replaceHistory("s", [message("answer", { turno: "persisted", clave: "persisted:0", duration_ms: 10 })], true);
+  const completed = f.store.activities("s", f.store.messages())[0]; assert.equal(completed.key, key); assert.equal(completed.active, false);
+  f.dispose();
+});
+test("closed run does not adopt unknown older history prepended before its saved frontier", () => {
+  const model = createActivityProjection(); const history = message("known history", { turno: "known", clave: "known:0" });
+  model.begin("A", "s", 1_000, [history]); const live = message("current"); model.observe("A", "s", [], [live]); model.finish("A", "s");
+  const older = message("older", { turno: "older", clave: "older:0" }); model.reconcile("A", "s", [history], [older, history], true);
+  assert.deepEqual(model.project("A", "s", [older, history, live])[0].messages, [live]);
+  const unknown = createActivityProjection(); unknown.begin("A", "s", null); unknown.finish("A", "s");
+  unknown.reconcile("A", "s", [], [older], true); assert.deepEqual(unknown.project("A", "s", [older]), []);
 });

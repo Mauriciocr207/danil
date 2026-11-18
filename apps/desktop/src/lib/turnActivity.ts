@@ -7,3 +7,8 @@ export type TurnActivity<Message> = {
   readonly durationMs: number | null;
   readonly messages: readonly Message[];
 };
+
+/** Unknown start is not elapsed zero; a remount never fabricates an epoch. */
+export function activityElapsed(startedAt: number | null, now: number): number | null {
+  return startedAt === null || !Number.isFinite(startedAt) || startedAt <= 0 ? null : Math.max(0, now - startedAt);
+}

@@ -1229,7 +1229,7 @@ export default function App() {
     const id = sessionId();
     return id ? vivas().includes(id) : arrancando();
   };
-  const marcarViva = (id: string, desde = Date.now()) =>
+  const marcarViva = (id: string, desde?: number) =>
     batch(() => {
       const workspace = workspaceActivo();
       if (workspace) liveThreads.add(liveThreadKey(workspace, id));
@@ -1237,13 +1237,15 @@ export default function App() {
       // Otro turno: el `done` que llegue ya no es del que cerró sin desenlace.
       sinDesenlace.delete(id);
       setVivas((v) => (v.includes(id) ? v : [...v, id]));
-      setDesdeDeTurno((d) => (id in d ? d : { ...d, [id]: desde }));
+      setDesdeDeTurno((d) => (id in d || desde === undefined ? d : { ...d, [id]: desde }));
+      threads.beginActivity(id, desdeDeTurno()[id] ?? null);
     });
   const marcarQuieta = (id: string) =>
     batch(() => {
       const workspace = workspaceActivo();
       if (workspace) liveThreads.delete(liveThreadKey(workspace, id));
       enviarFiltro();
+      threads.finishActivity(id);
       setVivas((v) => v.filter((x) => x !== id));
       setDesdeDeTurno((d) => {
         if (!(id in d)) return d;
@@ -5036,8 +5038,8 @@ export default function App() {
     const selectedBase = draftBases()[claveBorrador] ?? null;
     const pendientes = destination ? drafts.peek(claveBorrador)?.sourceIds ?? [] : sourceIds();
     const excluidas = destination ? drafts.peek(claveBorrador)?.excludedSourceIds ?? [] : excludedSourceIds();
-    if (abierta) marcarViva(abierta);
-    else setArrancando(true);
+    if (abierta) marcarViva(abierta, Date.now());
+    else { threads.beginActivity("", Date.now()); setArrancando(true); }
     // Conversar es editar: la pestaña de la tarea deja de ser vista.
     if (abierta) pestanas.pin(abierta);
     // La tarea se pinta antes de que Rust la cree. Lo que la retrasaba no era
@@ -5209,7 +5211,7 @@ export default function App() {
           threads.reviseOptimistic(id, turnoPropio, { author: signature?.person ?? null });
         }
       });
-      if (!abierta) setArrancando(false);
+      if (!abierta) { threads.finishActivity(""); setArrancando(false); }
       // Las fuentes de este mensaje salen del borrador; las de otro
       // que siga esperando, no. Va por id: da igual qué se esté mirando.
       drafts.sentSources(id, pendientes);
@@ -5264,7 +5266,7 @@ export default function App() {
         return true;
       }
       if (abierta === sessionId()) taskQueues.retain("fallo");
-      if (!abierta) setArrancando(false);
+      if (!abierta) { threads.finishActivity(""); setArrancando(false); }
       if (abierta) marcarQuieta(abierta);
       respuestas && threads.rejectOptimistic(clave, [turnoPropio]);
       threads.appendLive(clave, [{
@@ -6445,6 +6447,7 @@ export default function App() {
           </Show>
         </>}
         machine={pp.sesion ? filaDe(pp.sesion)?.machine : undefined}
+        {...{ activities: threads.activities(pp.sesion ?? "", mensajes()) }}
         msgs={mensajes()}
         /* Identidad de lo que tiene delante, no ids de proyecto/tarea: es lo
            único con lo que distingue «entró un mensaje» de «otra

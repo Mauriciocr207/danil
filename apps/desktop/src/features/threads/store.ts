@@ -1,6 +1,7 @@
 import { createMemo, createSignal, untrack } from "solid-js";
 import { anexarDeltas, hasOlder, hasRecentGap, HistoryPager, lotesDeDeltas, mensajesDelHilo, transcripcion, type ChatEvent, type HandoverState, type Msg, type OlderState, type Session, type TranscriptOrigin, type Turn } from "../chat/index.ts";
 import { conservarEnOrden, conservarPorClave } from "../../lib/sessionRefresh.ts";
+import { createActivityProjection } from "./activity.ts";
 import { transcriptEvent, type TranscriptMetadata } from "./transcript-events.ts";
 
 type Options = { headers: Record<string, string> };
@@ -16,6 +17,9 @@ export function createThreadsStore(deps: {
 }) {
   const { invoke } = deps;
   let disposed = false;
+  const activity = createActivityProjection();
+  const [activityRevision, setActivityRevision] = createSignal(0);
+  const activityChanged = () => setActivityRevision(value => value + 1);
   const route = (id: string) => {
     const options = deps.route(id), workspace = deps.scope.workspace();
     return { ...options, headers: { ...options?.headers, ...(workspace ? { "x-terminus-workspace": workspace } : {}) } };
@@ -35,12 +39,16 @@ export function createThreadsStore(deps: {
     if (workspace && workspace !== deps.scope.workspace()) {
       const threads = workspaceThreads.get(workspace) ?? {};
       const thread = threads[session] ?? SIN_HILO;
-      workspaceThreads.set(workspace, { ...threads, [session]: { ...thread, vivo: fn(thread.vivo) } });
+      const next = fn(thread.vivo);
+      activity.observe(workspace, session, thread.vivo, next);
+      workspaceThreads.set(workspace, { ...threads, [session]: { ...thread, vivo: next } });
       return;
     }
     setHilos((hs) => {
       const h = hs[session] ?? SIN_HILO;
-      return { ...hs, [session]: { ...h, vivo: fn(h.vivo) } };
+      const next = fn(h.vivo);
+      activity.observe(workspace, session, h.vivo, next);
+      return { ...hs, [session]: { ...h, vivo: next } };
     });
   };
   const deltasPorCuadro = lotesDeDeltas((session, workspace, deltas) =>
@@ -56,7 +64,9 @@ export function createThreadsStore(deps: {
     deltasPorCuadro.vaciar();
     setHilos((hs) => {
       const h = hs[session] ?? SIN_HILO;
-      return { ...hs, [session]: { ...h, base: fn(h.base) } };
+      const next = fn(h.base);
+      activity.observe(deps.scope.workspace(), session, h.base, next);
+      return { ...hs, [session]: { ...h, base: next } };
     });
   };
   type IdsDeTurnos = ReadonlySet<string>;
@@ -84,6 +94,7 @@ export function createThreadsStore(deps: {
                 : m,
             );
       const base = (antepuesta ? conservarPorClave : conservarEnOrden)(previo?.base ?? [], atada);
+      activity.reconcile(deps.scope.workspace(), session, previo?.base ?? [], base, vaciarVivo);
       const vivo = vaciarVivo
         ? []
         : vivoPrevio.filter((m) => !m.turno || !persistidos.has(m.turno));
@@ -274,6 +285,7 @@ export function createThreadsStore(deps: {
   }
   function adoptDraft(id: string) {
     deltasPorCuadro.vaciar();
+    activity.adopt(deps.scope.workspace(), "", id);
     setHilos(before => {
       const { [""]: draft, ...rest } = before, previous = before[id] ?? SIN_HILO;
       return { ...rest, [id]: { base: [...(draft?.base ?? []), ...previous.base], vivo: [...(draft?.vivo ?? []), ...previous.vivo], guardados: previous.guardados } };
@@ -291,6 +303,9 @@ export function createThreadsStore(deps: {
     const { [id]: _, ...rest } = saved; workspaceThreads.set(workspace, rest);
   }
   return {
+    activities: (id: string, visible: readonly Msg[]) => { activityRevision(); return activity.project(deps.scope.workspace(), id, visible); },
+    beginActivity: (id: string, startedAt: number | null) => { if (disposed) return; const thread = untrack(hilos)[id]; if (activity.begin(deps.scope.workspace(), id, startedAt, thread ? mensajesDelHilo(thread) : id === "" ? [] : null)) activityChanged(); },
+    finishActivity: (id: string) => { if (!disposed && activity.finish(deps.scope.workspace(), id)) activityChanged(); },
     rows: hilos, current: hiloAbierto, messages: msgs, loading: cargandoHilo, origins: origenes, offline: apagadas, waking: encendiendo, handovers: traspasos,
     olderAvailable: conAntiguos, recentAvailable: conRecientes, olderStatus: estadoAntiguos, recentTail: colaSuelta,
     appendLive, appendPersisted, commitUniqueTurn, replaceTurn, reviseOptimistic, rejectOptimistic, question, replay, finishSteps, event,
@@ -303,6 +318,6 @@ export function createThreadsStore(deps: {
     finishLoading: (id: string) => { if (!disposed) setCargandoHilo(before => before === id ? null : before); },
     reading: (id: string, active: boolean) => { if (active) leyendoLejos.add(id); else leyendoLejos.delete(id); },
     drop: soltarHilo,
-    dispose: () => { disposed = true; deltasPorCuadro.vaciar(); for (const pager of historias.values()) pager.close(); },
+    dispose: () => { disposed = true; activity.clear(); deltasPorCuadro.vaciar(); for (const pager of historias.values()) pager.close(); },
   };
 }
