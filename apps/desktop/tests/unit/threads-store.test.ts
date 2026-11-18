@@ -236,3 +236,47 @@ test("a causal tail kept outside the reading window retains own sends until late
   assert.deepEqual(f.store.messages(), [other]); f.move("A");
   assert.deepEqual(f.store.messages(), []); f.dispose();
 });
+
+test("older-page rewrite recovery cannot paint a durable own row before ACK", async () => {
+  const page = (start: number, total: number) => ({ version: 1, start, end: start + 1, total, limit: 1, has_more: start > 0 });
+  const f = fixture(async <T>(_command: string, args?: Record<string, unknown>) => {
+    const before = (args?.history_request as { before: number | null }).before;
+    return session([{ id: before === null ? "durable-own" : "rewritten", role: "user", text: before === null ? "own" : "rewrite" }], { history: page(0, 1) }) as T;
+  });
+  f.store.acceptSession("s", session([{ id: "old", role: "user", text: "older" }], { history: page(1, 2) }), false, f.generation());
+  const own = msg("own", "user"); f.store.appendOptimistic("s", [own]);
+  await f.store.older("p", "s");
+  assert.deepEqual(f.store.messages().map(row => row.text), ["older", "own"]);
+  f.store.acknowledgeOptimistic("s", [own]);
+  await f.store.older("p", "s");
+  assert.deepEqual(f.store.messages().map(row => row.turno), ["durable-own"]); f.dispose();
+});
+
+test("rewrite recovery started before a newer ACK cannot replace the current history", async () => {
+  const page = (start: number, total: number) => ({ version: 1, start, end: start + 1, total, limit: 1, has_more: start > 0 });
+  let recover!: (value: Session) => void, started!: () => void;
+  const waiting = new Promise<void>(yes => { started = yes; });
+  const f = fixture(async <T>(_command: string, args?: Record<string, unknown>) => {
+    const before = (args?.history_request as { before: number | null }).before;
+    if (before !== null) return session([{ id: "rewritten", role: "user", text: "rewrite" }], { history: page(0, 1) }) as T;
+    started(); return new Promise<Session>(yes => { recover = yes; }) as Promise<T>;
+  });
+  f.store.acceptSession("s", session([{ id: "old", role: "user", text: "older" }], { history: page(1, 2) }), false, f.generation());
+  const own = msg("first", "user"); f.store.appendOptimistic("s", [own]); f.store.acknowledgeOptimistic("s", [own]);
+  const pending = f.store.older("p", "s"); await waiting;
+  const newer = msg("newer", "user"); f.store.appendOptimistic("s", [newer]); f.store.acknowledgeOptimistic("s", [newer]);
+  recover(session([{ id: "durable-first", role: "user", text: "first" }], { history: page(0, 1) }));
+  await pending;
+  assert.deepEqual(f.store.messages().map(row => row.text), ["older", "first", "newer"]); f.dispose();
+});
+
+test("ordinary older pagination still prepends its shared page", async () => {
+  const f = fixture(async <T>() => session([{ id: "older", role: "user", text: "older" }, { id: "tail", role: "user", text: "tail" }], {
+    history: { version: 1, start: 0, end: 2, total: 2, limit: 2, has_more: false },
+  }) as T);
+  f.store.acceptSession("s", session([{ id: "tail", role: "user", text: "tail" }], {
+    history: { version: 1, start: 1, end: 2, total: 2, limit: 1, has_more: true },
+  }), false, f.generation());
+  const apply = await f.store.older("p", "s"); assert.ok(apply); apply();
+  assert.deepEqual(f.store.messages().map(row => row.turno), ["older", "tail"]); f.dispose();
+});

@@ -131,11 +131,20 @@ export function createThreadsStore(deps: {
     setEstadoAntiguos(all => (all[id] ?? "idle") === pager.older ? all : { ...all, [id]: pager.older });
   };
   const [colaSuelta, setColaSuelta] = createSignal<Readonly<Record<string, Msg[]>>>({});
+  const recoveries = new WeakMap<HistoryPager<Session["turns"][number]>, Session>();
   const historiaDe = (id: string) => {
     const hay = historias.get(id);
     if (hay) return hay;
     const pager: HistoryPager<Session["turns"][number]> = new HistoryPager({
-      read: (before) => leerTarea(proyectosDeHistoria.get(id) ?? deps.project(), id, before),
+      read: async (before) => {
+        const result = await leerTarea(proyectosDeHistoria.get(id) ?? deps.project(), id, before);
+        // A rewritten older page recovers at the tail; only the store may accept
+        // that snapshot, with the same ACK/generation checks as any other read.
+        if (before === null && !disposed && reads.get(result)?.generation === deps.scope.generation()) {
+          recoveries.set(pager, result); pager.close();
+        }
+        return result;
+      },
       onChange: () => marcarAntiguos(id, pager),
     });
     historias.set(id, pager);
@@ -164,6 +173,12 @@ export function createThreadsStore(deps: {
     const generation = deps.scope.generation();
     const poner = await pager.fetchOlder();
     if (disposed || generation !== deps.scope.generation()) return null;
+    const recovery = recoveries.get(pager);
+    if (recovery) {
+      recoveries.delete(pager);
+      loadResult(id, recovery, false, generation, true);
+      return null;
+    }
     pintarHistoria(id, pager, false);
     if (!poner) return null;
     return () => {
