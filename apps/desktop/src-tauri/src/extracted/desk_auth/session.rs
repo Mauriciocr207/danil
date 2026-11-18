@@ -55,11 +55,12 @@ pub(crate) trait Vault: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Live {
+    pub(crate) generation: u64,
     pub(crate) access_token: String,
-    pub(crate) expires_at: i64,
-    pub(crate) refresh_token: String,
+    expires_at: i64,
+    refresh_token: String,
     /// Si el refresh quedó en el llavero.
-    pub(crate) persisted: bool,
+    persisted: bool,
 }
 
 /// Por qué no salió una llamada. Ningún caso lleva tokens.
@@ -340,10 +341,29 @@ pub(crate) fn failure(reply: &Reply, fallback: &str) -> Fail {
     }
 }
 
+struct Session {
+    generation: u64,
+    login_attempt: u64,
+    live: Option<Live>,
+    profile: Option<Value>,
+    // Una vez olvidado el refresh, no se vuelve a leer si falla el borrado.
+    may_restore: bool,
+}
+
+impl Session {
+    fn clear(&mut self) {
+        self.generation += 1;
+        self.live = None;
+        self.profile = None;
+        self.may_restore = false;
+    }
+}
+
 pub(crate) struct Desk<V: Vault> {
     edge: String,
     vault: V,
-    live: Mutex<Option<Live>>,
+    session: Mutex<Session>,
+    on_loss: Box<dyn Fn() + Send + Sync>,
     refreshing: Mutex<()>,
     capabilities: Mutex<Option<(Instant, Capabilities)>>,
 }
@@ -353,11 +373,22 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl<V: Vault> Desk<V> {
-    pub(crate) fn new(edge: impl Into<String>, vault: V) -> Self {
+    pub(crate) fn new(
+        edge: impl Into<String>,
+        vault: V,
+        on_loss: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
         Self {
             edge: edge.into().trim_end_matches('/').to_owned(),
             vault,
-            live: Mutex::new(None),
+            session: Mutex::new(Session {
+                generation: 0,
+                login_attempt: 0,
+                live: None,
+                profile: None,
+                may_restore: true,
+            }),
+            on_loss: Box::new(on_loss),
             refreshing: Mutex::new(()),
             capabilities: Mutex::new(None),
         }
@@ -379,34 +410,60 @@ impl<V: Vault> Desk<V> {
         )
     }
 
-    /// `true` si hay algo con qué entrar sin navegador (en memoria o en el llavero).
+    fn refresh_token(&self, session: &Session) -> Option<String> {
+        if let Some(live) = &session.live {
+            return Some(live.refresh_token.clone());
+        }
+        if session.may_restore {
+            return self.vault.load().map(|stored| stored.refresh_token);
+        }
+        None
+    }
+
+    #[cfg(test)]
     pub(crate) fn has_session(&self) -> bool {
-        lock(&self.live).is_some() || self.vault.load().is_some()
+        self.refresh_token(&lock(&self.session)).is_some()
     }
 
-    pub(crate) fn persisted(&self) -> bool {
-        lock(&self.live).as_ref().is_some_and(|l| l.persisted)
+    pub(crate) fn begin_sign_in(&self) -> u64 {
+        let mut session = lock(&self.session);
+        session.login_attempt += 1;
+        session.login_attempt
     }
 
-    fn accept(&self, access: String, expires_in: i64, refresh: String, sid: String) -> Live {
+    pub(crate) fn is_signing_in(&self, attempt: u64) -> bool {
+        lock(&self.session).login_attempt == attempt
+    }
+
+    pub(crate) fn publish_if_current(&self, generation: u64, publish: impl FnOnce()) {
+        let session = lock(&self.session);
+        if session.generation == generation {
+            publish();
+        }
+    }
+
+    fn accept(&self, session: &mut Session, issued: (String, i64, String, String)) -> Live {
+        let (access, expires_in, refresh, sid) = issued;
         let stored = Stored {
             refresh_token: refresh.clone(),
             sid,
         };
         let persisted = self.vault.save(&stored);
         let live = Live {
+            generation: session.generation,
             access_token: access,
             expires_at: now() + expires_in,
             refresh_token: refresh,
             persisted,
         };
-        *lock(&self.live) = Some(live.clone());
+        session.live = Some(live.clone());
         live
     }
 
     /// `POST /v1/identity/desk/token`: el código de un uso más el verificador.
     pub(crate) fn exchange(
         &self,
+        attempt: u64,
         code: &str,
         verifier: &str,
         redirect_uri: &str,
@@ -432,57 +489,71 @@ impl<V: Vault> Desk<V> {
                 other => other,
             });
         }
-        let (access, expires_in, refresh, sid) = tokens(&reply.body).ok_or(Fail::Refused {
+        let issued = tokens(&reply.body).ok_or(Fail::Refused {
             status: 200,
             code: "invalid_response".into(),
         })?;
-        Ok(self.accept(access, expires_in, refresh, sid))
+        let mut session = lock(&self.session);
+        if session.login_attempt != attempt {
+            return Err(Fail::Refused {
+                status: 200,
+                code: "cancelled".into(),
+            });
+        }
+        session.clear();
+        Ok(self.accept(&mut session, issued))
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        lock(&self.session).generation
     }
 
     /// Un access vigente; renueva con el refresh, de uno en uno, si hace falta.
-    pub(crate) fn access(&self, force: bool) -> Result<Live, Fail> {
-        let before = lock(&self.live).clone();
-        if let Some(current) = &before {
-            if !force && current.expires_at - EARLY_SECONDS > now() {
-                return Ok(current.clone());
+    pub(crate) fn access(&self) -> Result<Live, Fail> {
+        self.access_for(self.generation(), None)
+    }
+
+    fn usable<'a>(session: &'a Session, rejected: Option<&str>) -> Option<&'a Live> {
+        session.live.as_ref().filter(|live| {
+            live.expires_at - EARLY_SECONDS > now() && rejected != Some(live.access_token.as_str())
+        })
+    }
+
+    fn current(&self, generation: u64) -> Result<MutexGuard<'_, Session>, Fail> {
+        let session = lock(&self.session);
+        if session.generation != generation {
+            return Err(Fail::NoSession);
+        }
+        Ok(session)
+    }
+
+    fn access_for(&self, generation: u64, rejected: Option<&str>) -> Result<Live, Fail> {
+        {
+            let session = self.current(generation)?;
+            if let Some(live) = Self::usable(&session, rejected) {
+                return Ok(live.clone());
             }
         }
         let _one = lock(&self.refreshing);
-        // Otro hilo pudo renovar mientras se esperaba el candado.
-        if let Some(after) = lock(&self.live).clone() {
-            let renewed = before
-                .as_ref()
-                .is_none_or(|b| b.access_token != after.access_token);
-            if renewed && after.expires_at - EARLY_SECONDS > now() {
-                return Ok(after);
+        let refresh = {
+            let session = self.current(generation)?;
+            if let Some(live) = Self::usable(&session, rejected) {
+                return Ok(live.clone());
             }
-        }
-        let refresh = lock(&self.live)
-            .as_ref()
-            .map(|l| l.refresh_token.clone())
-            .or_else(|| self.vault.load().map(|s| s.refresh_token))
-            .ok_or(Fail::NoSession)?;
-        let reply = request(
-            &format!("{}/v1/identity/desk/refresh", self.edge),
-            "POST",
-            None,
-            Some(&json!({
-                "grant_type": "refresh_token",
-                "refresh_token": refresh,
-                "client_id": CLIENT_ID,
-            })),
-        )?;
+            self.refresh_token(&session).ok_or(Fail::NoSession)?
+        };
+        let reply = self.refresh(&refresh)?;
+        let mut session = self.current(generation)?;
         match reply.status {
             200 => {
-                let (access, expires_in, refresh, sid) =
-                    tokens(&reply.body).ok_or(Fail::Unavailable {
-                        retry_after: Duration::from_secs(2),
-                    })?;
-                Ok(self.accept(access, expires_in, refresh, sid))
+                let issued = tokens(&reply.body).ok_or(Fail::Unavailable {
+                    retry_after: Duration::from_secs(2),
+                })?;
+                Ok(self.accept(&mut session, issued))
             }
             // Refresh vencido, reutilizado o de una sesión revocada: se olvida.
             400 | 401 | 403 => {
-                self.forget();
+                self.lose(&mut session);
                 Err(Fail::NoSession)
             }
             // 503 identity_unavailable, red, 404/501 de un borde a medio desplegar: se conserva.
@@ -495,9 +566,85 @@ impl<V: Vault> Desk<V> {
         }
     }
 
-    pub(crate) fn forget(&self) {
-        *lock(&self.live) = None;
+    fn refresh(&self, token: &str) -> Result<Reply, Fail> {
+        request(
+            &format!("{}/v1/identity/desk/refresh", self.edge),
+            "POST",
+            None,
+            Some(&json!({
+                "grant_type": "refresh_token",
+                "refresh_token": token,
+                "client_id": CLIENT_ID,
+            })),
+        )
+    }
+
+    fn lose(&self, session: &mut Session) {
+        session.clear();
         self.vault.clear();
+        // El aviso debe salir antes de que otro hilo pueda instalar una sesión.
+        (self.on_loss)();
+    }
+
+    fn finish_authenticated(&self, live: &Live, lose: bool) -> Result<(), Fail> {
+        let mut session = self.current(live.generation)?;
+        if lose {
+            if session
+                .live
+                .as_ref()
+                .is_some_and(|current| current.access_token == live.access_token)
+            {
+                self.lose(&mut session);
+            }
+            return Err(Fail::NoSession);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn status(&self) -> Value {
+        loop {
+            if let Some(value) = self.status_for(self.generation()) {
+                return value;
+            }
+        }
+    }
+
+    fn status_for(&self, generation: u64) -> Option<Value> {
+        if let Err(fail) = self.access_for(generation, None) {
+            let _session = self.current(generation).ok()?;
+            return Some(match fail {
+                Fail::NoSession => super::disconnected(),
+                // Con refresh guardado pero sin `identity` ahora: la sesión sigue.
+                _ => super::status_from(None, true),
+            });
+        }
+        {
+            let session = self.current(generation).ok()?;
+            if session.profile.is_some() {
+                return Some(Self::connected(&session));
+            }
+        }
+        let me = self
+            .call(
+                generation,
+                "GET",
+                "/v1/identity/me",
+                None,
+                Duration::from_secs(3),
+            )
+            .ok();
+        let mut session = self.current(generation).ok()?;
+        if session.profile.is_none() {
+            session.profile = me;
+        }
+        Some(Self::connected(&session))
+    }
+
+    fn connected(session: &Session) -> Value {
+        super::status_from(
+            session.profile.as_ref(),
+            session.live.as_ref().is_some_and(|live| live.persisted),
+        )
     }
 
     /// `/v1/capabilities`, con caché de un minuto. Sin la ruta, no guía nada.
@@ -526,6 +673,7 @@ impl<V: Vault> Desk<V> {
     /// martillea (una sola prueba y espera larga).
     pub(crate) fn call(
         &self,
+        generation: u64,
         method: &str,
         path: &str,
         body: Option<&Value>,
@@ -535,14 +683,15 @@ impl<V: Vault> Desk<V> {
         let announced = self.capabilities().announces(capability_of(path));
         let mut attempt = 0u32;
         let mut renewed = false;
+        let mut live = self.access_for(generation, None)?;
         loop {
-            let live = self.access(false)?;
             let reply = request(
                 &format!("{}{path}", self.edge),
                 method,
                 Some(&live.access_token),
                 body,
             )?;
+            self.finish_authenticated(&live, renewed && reply.status == 401)?;
             if (200..300).contains(&reply.status) {
                 return Ok(if reply.body.is_null() {
                     json!({})
@@ -558,13 +707,10 @@ impl<V: Vault> Desk<V> {
             match &fail {
                 Fail::NoSession if !renewed => {
                     renewed = true;
-                    self.access(true)?;
+                    live = self.access_for(generation, Some(&live.access_token))?;
                     continue;
                 }
-                Fail::NoSession => {
-                    self.forget();
-                    return Err(Fail::NoSession);
-                }
+                Fail::NoSession => return Err(fail),
                 Fail::NotYet { retry_after } if announced == Some(false) => {
                     return Err(Fail::NotYet {
                         retry_after: (*retry_after).max(Duration::from_secs(30)),
@@ -577,6 +723,7 @@ impl<V: Vault> Desk<V> {
                     }
                     std::thread::sleep(wait);
                     attempt += 1;
+                    live = self.access_for(generation, None)?;
                 }
                 Fail::Refused { .. } => return Err(fail),
             }
@@ -595,28 +742,49 @@ impl<V: Vault> Desk<V> {
         key: &str,
     ) -> Result<Reply, Fail> {
         let url = format!("{}{path}", self.edge);
-        let live = self.access(false)?;
+        let live = self.access()?;
         let reply = request_keyed(&url, method, Some(&live.access_token), body, key)?;
+        self.finish_authenticated(&live, false)?;
         if reply.status != 401 {
             return Ok(reply);
         }
-        let live = self.access(true)?;
+        let live = self.access_for(live.generation, Some(&live.access_token))?;
         let reply = request_keyed(&url, method, Some(&live.access_token), body, key)?;
-        if reply.status == 401 && path.starts_with("/v1/identity/") {
-            self.forget();
-            return Err(Fail::NoSession);
-        }
+        self.finish_authenticated(
+            &live,
+            reply.status == 401 && path.starts_with("/v1/identity/"),
+        )?;
         Ok(reply)
     }
 
     /// Revoca la sesión en `identity` (mejor esfuerzo) y la olvida aquí.
-    pub(crate) fn sign_out(&self) {
-        // `desk/logout` va con el Bearer: con solo el refresh guardado, se renueva antes.
-        let access = if self.has_session() {
-            self.access(false).ok().map(|l| l.access_token)
-        } else {
-            None
+    pub(crate) fn sign_out(&self) -> Option<u64> {
+        let generation = {
+            let mut session = lock(&self.session);
+            session.login_attempt += 1;
+            session.generation
         };
+        let refreshing = lock(&self.refreshing);
+        let (signed_out, access, refresh) = {
+            let mut session = self.current(generation).ok()?;
+            let access = Self::usable(&session, None).map(|live| live.access_token.clone());
+            let refresh = access
+                .is_none()
+                .then(|| self.refresh_token(&session))
+                .flatten();
+            session.clear();
+            self.vault.clear();
+            (session.generation, access, refresh)
+        };
+        // Con solo el refresh guardado, renueva para revocar sin reinstalar la sesión.
+        let access = access.or_else(|| {
+            let reply = self.refresh(&refresh?).ok()?;
+            if reply.status != 200 {
+                return None;
+            }
+            tokens(&reply.body).map(|issued| issued.0)
+        });
+        drop(refreshing);
         if let Some(access) = access {
             let _ = request(
                 &format!("{}/v1/identity/desk/logout", self.edge),
@@ -625,6 +793,6 @@ impl<V: Vault> Desk<V> {
                 Some(&json!({})),
             );
         }
-        self.forget();
+        Some(signed_out)
     }
 }
