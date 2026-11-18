@@ -180,13 +180,6 @@ export const signOutAccount = (account: string) => {
   return invoke<DanilConnectStatus>("danil_disconnect", { account });
 };
 
-/**
- * `account: null` lo deja sin cuenta: sale de la anterior (de su web y su
- * teléfono) sin cerrar su sesión. La respuesta trae `error` si no se pudo unir en la nueva.
- */
-export function setWorkspaceAccount(workspace: string, account: string | null): Promise<WorkspaceAccount> {
-  return invoke<WorkspaceAccount>("danil_workspace_set_account", { workspace, account });
-}
 
 /** El código de un fallo al cambiar la cuenta de un workspace, venga en la respuesta o como rechazo. */
 export function changeProblem(result: WorkspaceAccount | null, failure?: unknown): string | null {

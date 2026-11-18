@@ -148,42 +148,28 @@ test("adding an account starts the flow with add and opens the approval page", a
   assert.deepEqual(calls[2].args, { name: "Mac", add: true });
 });
 
-test("default, sign out and the workspace's account name the account", async () => {
+test("default, sign out and the workspace's account name the account; the retired link is never called", async () => {
   const calls = engine({
     danil_set_default_account: () => [{ ...FUNDACION, default: true }, { ...ALBERTO, default: false }],
     danil_disconnect: () => ({ state: "disconnected", online: false }),
     danil_workspace_account: () => ({ account: "u_alberto", email: "alberto@danil.ai", signed_in: true, linked: true }),
-    danil_workspace_set_account: (args) => ({ account: args?.account, email: null, signed_in: true, linked: false, error: "workspace_id_taken" }),
   });
-  const { setDefaultAccount, signOutAccount, readWorkspaceAccount, setWorkspaceAccount, changeProblem } = await sessions();
-  const after = await setDefaultAccount("u_fdb");
+  const module = await sessions();
+  const after = await module.setDefaultAccount("u_fdb");
   assert.equal(after[0].default, true);
-  await signOutAccount("u_fdb");
-  assert.equal((await readWorkspaceAccount("w3"))?.account, "u_alberto");
-  const result = await setWorkspaceAccount("w3", "u_fdb");
+  await module.signOutAccount("u_fdb");
+  assert.equal((await module.readWorkspaceAccount("w3"))?.account, "u_alberto");
   assert.deepEqual(
     calls.map((c) => [c.command, c.args]),
     [
       ["danil_set_default_account", { account: "u_fdb" }],
       ["danil_disconnect", { account: "u_fdb" }],
       ["danil_workspace_account", { workspace: "w3" }],
-      ["danil_workspace_set_account", { workspace: "w3", account: "u_fdb" }],
     ],
   );
-  assert.equal(changeProblem(result), "workspace_id_taken", "the control plane kept it with the other account");
-  assert.equal(changeProblem({ account: "u_fdb", email: null, signed_in: true, linked: true }), null);
-});
-
-test("an account that is no longer signed in is told apart when changing a workspace", async () => {
-  engine({
-    danil_workspace_set_account: () => {
-      throw { what: { clave: "danil.error.account_not_found" }, detail: "account_not_found" };
-    },
-  });
-  const { setWorkspaceAccount, changeProblem } = await sessions();
-  const refused = await setWorkspaceAccount("w1", "u_gone").catch((e: unknown) => e);
-  assert.equal(changeProblem(null, refused), "account_not_found");
-  assert.equal(changeProblem(null, new Error("x")), "failed");
+  assert.equal("setWorkspaceAccount" in module, false, "danil_workspace_set_account answers unsupported since E1: the window no longer has it");
+  assert.equal(module.changeProblem({ account: "u_fdb", email: null, signed_in: true, linked: true }), null);
+  assert.equal(module.changeProblem(null, new Error("x")), "failed");
 });
 
 test("the account that just signed in is the first connected one that was not there before", async () => {
