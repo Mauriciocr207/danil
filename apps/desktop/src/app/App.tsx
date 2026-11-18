@@ -819,10 +819,11 @@ export default function App() {
     ),
   );
   /** El panel conserva workspace y conversación; el título pertenece a la tira. */
-  const tareasEnVentanas = createMemo<(Pick<TaskTab, "id" | "session" | "project"> & { workspace: string | null })[]>((previous) =>
-    conservar(previous ?? [], pestanas.open().filter(isTaskTab).map(({ id, session, project }) =>
-      ({ id, session, project, workspace: workspaceActivo() })), (p) => p.id),
+  const tareasEnVentanas = createMemo<(Pick<TaskTab, "id" | "session"> & { workspace: string | null })[]>((previous) =>
+    conservar(previous ?? [], pestanas.open().filter(isTaskTab).map(({ id, session }) =>
+      ({ id, session, workspace: workspaceActivo() })), (p) => p.id),
   );
+  const proyectoDePestana = (id: string) => pestanas.open().find(tab => tab.id === id)?.project ?? "";
   /** Las tareas con pestaña: la lista viva las trae aunque estén archivadas. */
   const sesionesConPestana = createMemo(
     () =>
@@ -7096,7 +7097,7 @@ export default function App() {
               <Show when={montadas().has(p.id)}>
                 <PanelDeChat
                   sesion={p.session}
-                  proyecto={p.project}
+                  proyecto={proyectoDePestana(p.id)}
                   soloLectura={!manda()}
                 />
               </Show>
@@ -7134,11 +7135,11 @@ export default function App() {
                   }}
                   delegated={() => delegatedPanels().get(`${workspaceActivo()}/${p.session}`)?.()} />}>
                   <Suspense fallback={null}>
-                    <TaskFilesCard project={p.project} session={p.session} files={archivosDeTarea}
+                    <TaskFilesCard project={proyectoDePestana(p.id)} session={p.session} files={archivosDeTarea}
                       visible={visible()} readOnly={editorDeletionLocked(p.session)}
                       expandedOnly={paneles.isSplit() || compacta()}
                       onSaved={() => window.dispatchEvent(new CustomEvent("harness:copia"))}
-                      onExportChat={() => exportarChat(p.session, p.project)}
+                      onExportChat={() => exportarChat(p.session, proyectoDePestana(p.id))}
                       onMoved={archivoMovido} onRemoved={archivoBorrado} />
                   </Suspense>
                 </TaskSideShell>
