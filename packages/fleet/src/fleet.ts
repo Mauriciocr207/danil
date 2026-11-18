@@ -115,7 +115,7 @@ export type FleetConfig = {
   /** Cambió el estado de la última rebanada de una máquina (`sliceStatuses`): solo para repintarlo. */
   onSlice?(machine: string): void;
   /** Eventos de otra máquina, ya con los ids del panel. `gap`: se perdieron algunos y hay que releer. */
-  onEvents?(machine: string, events: FleetEvent[], gap: boolean): void;
+  onEvents?(machine: string, events: FleetEvent[], gap: boolean, context?: Pick<EventsPage, "cursor" | "runtime" | "replay" | "replayId">): void;
   /** Cambió la cola de acciones aplazadas de `machine` (se encoló o se aplicó una): la lista se relee. */
   onDeferred?(machine: string, frame: DeferredFrame): void;
   /**
@@ -803,7 +803,7 @@ export class Fleet {
         if (unknown.length) this.config.onUnlinked?.(info.id, unknown);
         const linked = linkedEvents(page.events ?? [], member.info.linked ?? null);
         const events = this.config.panelIds === false ? linked.map((e) => ({ name: e.name, payload: e.payload })) : linked.map((e) => ({ name: e.name, payload: encodeEvent(this.context(), info.id, e.name, e.payload) }));
-        this.config.onEvents?.(info.id, events, page.gap === true);
+        this.config.onEvents?.(info.id, events, page.gap === true, { cursor: page.cursor, runtime: page.runtime, replay: page.replay, replayId: page.replayId });
       }),
     );
     this.members.set(info.id, member);

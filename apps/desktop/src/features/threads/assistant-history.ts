@@ -6,6 +6,7 @@ type Loaded = { turns: Session["turns"]; start: number; total: number };
 /** A new durable assistant segment cannot replace live rows until its marker binds their IDs. */
 export function createAssistantHistory(scope: { workspace: () => string | null; generation: () => number }) {
   const pending = new Map<string, ReadonlySet<string>>();
+  const replayIds = new Map<string, string>();
   const replaying = new Set<string>();
   const baselines = new Map<string, ReadonlySet<string>>();
   const key = (id: string) => JSON.stringify([scope.workspace(), scope.generation(), id]);
@@ -36,9 +37,13 @@ export function createAssistantHistory(scope: { workspace: () => string | null; 
     // A segment first observed after this run began can precede its live deltas.
     return deferred || replaying.has(key(id)) || !represented(base).has(durable) || (baseline !== undefined && !baseline.has(durable));
   }
-  return { prepare, paint, segment,
-    replay: (id: string, messages: Msg[], workspace: string | null) => {
+  const detach = () => { pending.clear(); replaying.clear(); baselines.clear(); };
+  return { prepare, paint, segment, detach,
+    replay: (id: string, messages: Msg[], workspace: string | null, replayId?: string) => {
+      const replayKey = JSON.stringify([workspace, id]);
       if (workspace === scope.workspace()) replaying.add(key(id));
+      if (replayId && replayIds.get(replayKey) === replayId) return messages;
+      if (replayId) replayIds.set(replayKey, replayId);
       const kept = messages.filter(row => row.role === "user");
       return kept.length === messages.length ? messages : kept;
     },
@@ -47,6 +52,6 @@ export function createAssistantHistory(scope: { workspace: () => string | null; 
       if (!baselines.has(key(id))) baselines.set(key(id), new Set([...represented(base), ...(pending.get(key(id)) ?? [])]));
     },
     finish: (id: string) => { replaying.delete(key(id)); baselines.delete(key(id)); },
-    drop: (id: string) => { pending.delete(key(id)); replaying.delete(key(id)); baselines.delete(key(id)); },
-    clear: () => { pending.clear(); replaying.clear(); baselines.clear(); } };
+    drop: (id: string) => { replayIds.delete(JSON.stringify([scope.workspace(), id])); pending.delete(key(id)); replaying.delete(key(id)); baselines.delete(key(id)); },
+    clear: () => { replayIds.clear(); detach(); } };
 }

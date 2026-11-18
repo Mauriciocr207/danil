@@ -1033,3 +1033,12 @@ test("read failures retain only unknown-command classification, never private re
     fleet.close();
   }
 });
+
+test("relay replay provenance and journal cursor survive panel ID encoding", () => {
+  const seen: unknown[] = [];
+  const { fleet, link } = setup({ cmp_vm: {} }, [VM], { onEvents: (_machine, _events, _gap, context) => seen.push(context) });
+  fleet.subscribeEvents();
+  link("cmp_vm").push({ cursor: 41, runtime: "engine-one", replay: true, replayId: "subscription-one", events: [{ name: "chat", payload: { session: "t1", kind: "delta", text: "fixture" } }] });
+  assert.deepEqual(seen, [{ cursor: 41, runtime: "engine-one", replay: true, replayId: "subscription-one" }]);
+  fleet.close();
+});

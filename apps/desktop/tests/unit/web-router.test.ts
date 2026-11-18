@@ -476,3 +476,18 @@ test("execution authority retains an unknown registered member until that member
     assert.deepEqual(await router.handle("list_active_turns", { workspace: "w" }), []);
   } finally { router.close(); }
 });
+
+test("the web journal keeps replay and live batches in one ordered poll stream", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const direct: unknown[] = [], fleet = new Fleet({ self: null, connect: () => fakeLink({}) });
+  const router = createRouter({ self: null, fleet, native: null, deliver: events => direct.push(...events) });
+  try {
+    router.events("cmp_vm", [{ name: "chat", payload: { session: "cmp_vm~s", kind: "delta", text: "old" } }], { replay: true, replayId: "one", cursor: 1 });
+    router.events("cmp_vm", [{ name: "chat", payload: { session: "cmp_vm~s", kind: "delta", text: "new" } }], { replay: false, cursor: 2 });
+    const reading = router.handle("service_poll"); t.mock.timers.tick(20_000);
+    const page = await reading as { batches?: { replay?: boolean; replayId?: string; cursor?: number; events: { payload: { text: string } }[] }[]; push?: boolean };
+    assert.deepEqual(direct, [], "a direct live route cannot race a queued replay");
+    assert.deepEqual(page.batches?.map(batch => [batch.cursor, batch.replay, batch.replayId, batch.events[0].payload.text]), [[1, true, "one", "old"], [2, false, undefined, "new"]]);
+    assert.notEqual(page.push, true, "web delivery does not claim native paged history or a remote service_filter");
+  } finally { router.close(); }
+});

@@ -79,6 +79,8 @@ const steps = [
   ["Drafts own text references attachments and rollback", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/drafts-store.test.ts")], root],
   ["Conversation handoff waits for terminal and stop settlement", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/conversation-handoff.test.ts")], root],
   ["Task queues own retention persistence and session scope", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/task-queues-store.test.ts")], root],
+  ["Native and web replay share one scoped delivery policy", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/service-delivery.test.ts")], root],
+  ["The web journal is bounded and settles pending readers", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/web-event-queue.test.ts")], root],
   ["Threads own transcript history and streaming reconciliation", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/threads-store.test.ts")], root],
   ["Service stream owns polling lifecycle and subscription filtering", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/service-stream.test.ts")], root],
   ["Project rows have one scoped owner and share cancellable reads", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/projects-resource.test.ts")], root],
