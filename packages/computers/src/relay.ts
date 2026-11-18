@@ -67,7 +67,7 @@ export type EventsPage = {
   replayId?: string;
   runtime?: string;
   /** `workspace`: el del evento, para que el relay lo filtre por los vínculos de cada cuenta; `null` si no es de uno. */
-  events?: { name: string; payload: unknown; workspace?: string | null }[];
+  events?: { name: string; payload: unknown; workspace?: string | null; seq?: number }[];
 };
 
 export type SocketLike = {
@@ -168,6 +168,7 @@ export class RelaySession {
   private after: number | null = null;
   private replaying = false;
   private replayId: string | undefined;
+  private deliveredCheckpoint: { runtime: string; cursor: number } | null = null;
   private attempt = 0;
   private missed = 0;
   private pinger: ReturnType<typeof setInterval> | undefined;
@@ -293,6 +294,7 @@ export class RelaySession {
   }
 
   private resubscribe() {
+    this.deliveredCheckpoint = null;
     this.replaying = true;
     this.replayId = requestId();
     this.send({ type: "subscribe", after: this.after });
@@ -582,10 +584,25 @@ export class RelaySession {
       }
       case "events": {
         const page = message as unknown as EventsPage;
+        const cursor = typeof page.cursor === "number" && Number.isSafeInteger(page.cursor) && page.cursor >= 0 ? page.cursor : null;
+        const runtime = typeof page.runtime === "string" && page.runtime.length ? page.runtime : null;
+        const previous = this.deliveredCheckpoint;
+        const failed = message.error !== undefined && message.error !== null;
+        const restarted = runtime !== null && previous !== null && runtime !== previous.runtime;
+        // A subscription's first checkpoint is admissible even when it equals its resume cursor.
+        if (!failed && !page.gap && runtime && cursor !== null && previous?.runtime === runtime && cursor <= previous.cursor) return;
+        if (!failed && runtime && cursor !== null && (!previous || restarted || cursor > previous.cursor)) {
+          this.deliveredCheckpoint = { runtime, cursor };
+          this.after = cursor;
+        } else if (!failed && !previous && cursor !== null) this.after = cursor;
+        if (failed) {
+          for (const listener of this.eventListeners) listener(page);
+          return;
+        }
+        if (restarted || page.gap) { this.replaying = true; this.replayId = requestId(); }
         if (!this.replaying && page.replay === true) this.replayId = requestId();
         const replay = this.replaying || page.replay === true;
         this.replaying = page.replay === true;
-        if (typeof page.cursor === "number") this.after = page.cursor;
         for (const listener of this.eventListeners) listener({ ...page, replay, replayId: replay ? this.replayId : undefined });
         return;
       }

@@ -133,3 +133,44 @@ test('initial and multipart journal pages keep replay provenance through the fin
   assert.ok(pages[0].id); assert.equal(pages[2].id, pages[3].id); assert.equal(pages[3].id, pages[4].id);
   assert.notEqual(pages[0].id, pages[2].id); assert.notEqual(pages[2].id, pages[6].id);
 });
+
+test('a delivered journal checkpoint is idempotent and cannot rewind reconnection within one runtime', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const app = setup(); t.after(() => app.session.close());
+  const seen: (number | null)[] = []; app.session.onEvents(page => seen.push(page.cursor));
+  app.session.subscribe(null); await turn(); app.sockets[0].onopen?.({});
+  const page = (cursor: number) => app.sockets[0].onmessage?.({ data: JSON.stringify({ type: 'events', runtime: 'runtime-one', cursor, replay: false, events: [] }) });
+  page(10); page(10); page(9);
+  app.sockets[0].onclose?.({ code: 1006 }); t.mock.timers.tick(2000); await turn(); app.sockets[1].onopen?.({});
+  const subscribe = app.sockets[1].sent.map(frame => JSON.parse(frame)).find(frame => frame.type === 'subscribe');
+  assert.deepEqual(seen, [10]); assert.equal(subscribe.after, 10);
+});
+
+test('new subscriptions, zero checkpoints and new runtimes admit their own first page and equal text', async t => {
+  const app = setup(); t.after(() => app.session.close());
+  const seen: { cursor: number | null; replay?: boolean; replayId?: string }[] = [];
+  app.session.onEvents(page => seen.push(page));
+  app.session.subscribe(null); await turn(); app.sockets[0].onopen?.({});
+  const page = (cursor: number, runtime = 'runtime-one', gap = false) => app.sockets[0].onmessage?.({ data: JSON.stringify({ type: 'events', runtime, cursor, gap, replay: false, events: [{ name: 'chat', payload: { text: 'same legitimate text' } }] }) });
+  page(0); page(0); page(1);
+  app.session.subscribe(1); page(1); page(2); page(0, 'runtime-two', true); page(1, 'runtime-two');
+  assert.deepEqual(seen.map(item => item.cursor), [0, 1, 1, 2, 0, 1]);
+  assert.equal(seen[2].replay, true); assert.notEqual(seen[0].replayId, seen[2].replayId);
+});
+
+test('unverifiable pages and gap or error facts are delivered without replacing the complete checkpoint', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const app = setup(); t.after(() => app.session.close());
+  const seen: { gap?: boolean; error?: unknown }[] = []; app.session.onEvents(page => seen.push(page));
+  app.session.subscribe(null); await turn(); app.sockets[0].onopen?.({});
+  const page = (fields: object) => app.sockets[0].onmessage?.({ data: JSON.stringify({ type: 'events', replay: false, events: [], ...fields }) });
+  page({ cursor: 10, runtime: 'runtime-one' });
+  page({ cursor: 9 }); page({ cursor: null, runtime: 'runtime-one' });
+  page({ cursor: 9, runtime: 'runtime-one', gap: true }); page({ cursor: 9, runtime: 'runtime-one', gap: false, error: { code: 'io' } });
+  page({ cursor: 10, runtime: 'runtime-one' });
+  app.sockets[0].onclose?.({ code: 1006 }); t.mock.timers.tick(2000); await turn(); app.sockets[1].onopen?.({});
+  const subscribe = app.sockets[1].sent.map(frame => JSON.parse(frame)).find(frame => frame.type === 'subscribe');
+  assert.equal(seen.length, 5); assert.equal(subscribe.after, 10);
+  assert.equal(seen[4].gap, false, 'a failed poll is not evidence that journal output was lost');
+  assert.deepEqual(seen[4].error, { code: 'io' });
+});

@@ -185,3 +185,125 @@ for (const startedOnSession of [false, true]) test(`adoption keeps the active dr
   const next = message("next output"); model.observe("A", "s", [], [next]); model.finish("A", "s");
   assert.equal(model.project("A", "s", [...visible, next]).some(activity => activity.active), false);
 });
+
+for (const deferred of [false, true]) test(`recovered active activity stays between accepted input and saved response (${deferred ? "deferred history" : "snapshot"})`, () => {
+  const model = createActivityProjection();
+  const user = message("hola", { role: "user", turno: "u", clave: "u:0" });
+  const answer = message("saved response", { turno: "a", clave: "a:0" });
+  model.begin("A", "s", null, deferred ? null : [user, answer]);
+  if (deferred) model.reconcile("A", "s", [], [user, answer], false);
+  const activity = model.project("A", "s", [user, answer])[0];
+  assert.equal(activity.anchor, answer); assert.equal(activity.anchorIndex, 1);
+  assert.deepEqual(activity.messages, [], "placement does not invent history ownership");
+  assert.equal(activity.active, true);
+});
+
+test("accepted new input replaces the historical input boundary before its output arrives", () => {
+  const model = createActivityProjection();
+  const oldUser = message("old input", { role: "user", turno: "old-user", clave: "old-user:0" });
+  const oldAnswer = message("old response", { turno: "old-answer", clave: "old-answer:0" });
+  model.begin("A", "s", 1_000, [oldUser, oldAnswer]);
+  const user = message("new input", { role: "user" });
+  model.observe("A", "s", [oldUser, oldAnswer], [oldUser, oldAnswer, user]);
+  assert.equal(model.project("A", "s", [oldUser, oldAnswer, user])[0].anchorIndex, 3);
+  const savedAnswer = message("saved before live output", { turno: "answer", clave: "answer:0" });
+  model.reconcile("A", "s", [], [oldUser, oldAnswer, user, savedAnswer], false);
+  const output = message("late live output");
+  model.observe("A", "s", [], [output]);
+  const activity = model.project("A", "s", [oldUser, oldAnswer, user, savedAnswer, output])[0];
+  assert.equal(activity.anchor, savedAnswer); assert.equal(activity.anchorIndex, 3);
+  assert.deepEqual(activity.messages, [user, output]);
+});
+
+test("prepending history and replacing user objects preserve the captured boundary identity", () => {
+  const model = createActivityProjection();
+  const user = message("hola", { role: "user", turno: "u", clave: "u:0" });
+  const answer = message("saved response", { turno: "a", clave: "a:0" });
+  model.begin("A", "s", null, [user, answer]);
+  const older = message("older input", { role: "user", turno: "older", clave: "older:0" });
+  const restoredUser = { ...user }, restoredAnswer = { ...answer };
+  model.reconcile("A", "s", [user, answer], [older, restoredUser, restoredAnswer], false);
+  const activity = model.project("A", "s", [older, restoredUser, restoredAnswer])[0];
+  assert.equal(activity.anchor, restoredAnswer); assert.equal(activity.anchorIndex, 2);
+  assert.deepEqual(activity.messages, []);
+  model.finish("A", "s");
+  assert.deepEqual(model.project("A", "s", [older, restoredUser, restoredAnswer]), []);
+});
+
+test("adoption preserves the accepted draft input anchor ahead of recovered response", () => {
+  const model = createActivityProjection();
+  const older = message("older", { turno: "older", clave: "older:0" });
+  model.begin("A", "s", 1_000, []); model.observe("A", "s", [], [older]); model.finish("A", "s");
+  model.begin("A", "", 2_000, []);
+  const user = message("accepted", { role: "user" }); model.observe("A", "", [], [user]);
+  model.adopt("A", "", "s");
+  const answer = message("recovered answer", { turno: "answer", clave: "answer:0" });
+  model.reconcile("A", "s", [], [older, user, answer], false);
+  const active = model.project("A", "s", [older, user, answer]).find(activity => activity.active)!;
+  assert.equal(active.anchor, answer); assert.equal(active.anchorIndex, 2);
+  assert.deepEqual(active.messages, [user]);
+});
+
+test("external start refreshes its cached input boundary from recent history but never an older page", () => {
+  const model = createActivityProjection();
+  const oldUser = message("old input", { role: "user", turno: "old-u", clave: "old-u:0" });
+  const oldAnswer = message("old answer", { turno: "old-a", clave: "old-a:0" });
+  const user = message("external input", { role: "user", turno: "new-u", clave: "new-u:0" });
+  const answer = message("external answer", { turno: "new-a", clave: "new-a:0" });
+  model.begin("A", "s", 1_000, [oldUser, oldAnswer]);
+  model.reconcile("A", "s", [oldUser, oldAnswer], [oldUser, oldAnswer, user, answer], false);
+  assert.equal(model.project("A", "s", [oldUser, oldAnswer, user, answer])[0].anchorIndex, 3);
+  model.reconcile("A", "s", [user, answer], [oldUser, oldAnswer], false, true);
+  const activity = model.project("A", "s", [oldUser, oldAnswer, user, answer])[0];
+  assert.equal(activity.anchor, answer); assert.equal(activity.anchorIndex, 3);
+  assert.deepEqual(activity.messages, []);
+});
+
+test("permission and question answers are not accepted input anchors", () => {
+  const model = createActivityProjection();
+  const user = message("accepted input", { role: "user", turno: "user", clave: "user:0" });
+  const answer = message("answer", { turno: "answer", clave: "answer:0" });
+  const permission = message("allow", { role: "user", permission: {} as NonNullable<Msg["permission"]> });
+  const decision = message("decision", { role: "user", respuestas: [{} as NonNullable<Msg["respuestas"]>[number]] });
+  const unanswered = message("", { role: "user", respuestas: [] });
+  model.begin("A", "s", null, [user, answer, permission, decision, unanswered]);
+  const activity = model.project("A", "s", [user, answer, permission, decision, unanswered])[0];
+  assert.equal(activity.anchor, answer); assert.equal(activity.anchorIndex, 1);
+});
+
+test("live output before recent history does not confirm a cached historical input", () => {
+  const model = createActivityProjection();
+  const oldUser = message("old input", { role: "user", turno: "old-u", clave: "old-u:0" });
+  const oldAnswer = message("old answer", { turno: "old-a", clave: "old-a:0" });
+  const user = message("external input", { role: "user", turno: "new-u", clave: "new-u:0" });
+  const answer = message("external answer", { turno: "new-a", clave: "new-a:0" });
+  const live = message("output arriving before history");
+  model.begin("A", "s", 1_000, [oldUser, oldAnswer]);
+  model.observe("A", "s", [], [live]);
+  model.reconcile("A", "s", [oldUser, oldAnswer], [oldUser, oldAnswer, user, answer], false);
+  const activity = model.project("A", "s", [oldUser, oldAnswer, user, answer, live])[0];
+  assert.equal(activity.anchor, answer); assert.equal(activity.anchorIndex, 3);
+  assert.deepEqual(activity.messages, [live]);
+  model.reconcile("A", "s", [user, answer], [oldUser, oldAnswer], false, true);
+  assert.equal(model.project("A", "s", [oldUser, oldAnswer, user, answer, live])[0].anchor, answer);
+});
+
+test("revalidating cached history moves a recovered activity to its current input only while active", () => {
+  const model = createActivityProjection();
+  const cached = [message("old input", { role: "user" }), message("old answer")];
+  const user = message("current input", { role: "user" });
+  const answer = message("current answer");
+  const refreshed = [...cached, user, answer];
+  model.begin("A", "s", 1_000, cached);
+  model.reconcile("A", "s", cached, cached, false);
+  model.reconcile("A", "s", cached, refreshed, false);
+  const active = model.project("A", "s", refreshed)[0];
+  assert.equal(active.anchorIndex, 3);
+  assert.deepEqual(active.messages, []);
+  const live = message("live continuation");
+  model.observe("A", "s", [], [live]);
+  model.finish("A", "s");
+  const later = [...refreshed, live, message("next input", { role: "user" })];
+  model.reconcile("A", "s", refreshed, later, false);
+  assert.equal(model.project("A", "s", later)[0].anchor, answer);
+});

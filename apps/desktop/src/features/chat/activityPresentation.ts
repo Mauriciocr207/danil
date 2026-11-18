@@ -27,15 +27,16 @@ export function presentActivity(input: {
   stopping?: boolean;
   blocked?: boolean;
   paused?: boolean;
+  duration?: string | null;
   action?: ActivityAction | null;
   label?: string;
 }): { label: string; animate: boolean } {
-  if (input.stopping) return { label: t("chat.turn.stopping"), animate: false };
-  if (!input.active) return { label: t("chat.activity.finished"), animate: false };
+  if (!input.active) return { label: input.duration ? t("chat.work.duration", { duration: input.duration }) : t("chat.work.title"), animate: false };
+  if (input.stopping) return { label: t("chat.work.title"), animate: false };
   const animate = !input.blocked && !input.paused;
   if (input.blocked) return { label: t("chat.activity.title"), animate: false };
   const action = input.action;
-  if (!action) return { label: input.label ?? t("chat.activity.running"), animate };
+  if (!action) return { label: input.label ?? t("chat.activity.preparing"), animate };
   switch (action.kind) {
     case "step": {
       if (!action.step.corriendo) return { label: t("chat.activity.continuing"), animate };

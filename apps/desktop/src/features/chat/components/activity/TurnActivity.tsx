@@ -42,7 +42,7 @@ export function RegistroDeTrabajo(props: {
   // correcto, y «1 con error» alarmaba. El fallo del turno va aparte.
   const avance = () => props.avance ?? SIN_AVANCE;
   const todos = createMemo(() => [...avance().flatMap((a) => a.pasos), ...props.pasos]);
-  const presentation = createMemo(() => presentActivity({ active: props.corriendo, stopping: props.stopping, blocked: props.blocked, paused: props.animando === false, action: props.latestAction, label: props.label }));
+  const presentation = createMemo(() => presentActivity({ active: props.corriendo, stopping: props.stopping, blocked: props.blocked, paused: props.animando === false, duration: props.duracion, action: props.latestAction, label: props.label }));
   const rotulo = () => presentation().label;
   const hasContent = () => todos().length > 0 || avance().some(chunk => chunk.msg.razonamiento?.length || (!chunk.outside && chunk.msg.text)) || Boolean(props.razonamiento?.length);
   const hasChanges = () => props.onVerCambios && partesDelTramo(todos(), props.corriendo).some(part => part.clase === "editar");
@@ -59,27 +59,24 @@ export function RegistroDeTrabajo(props: {
     />
   );
   const girando = () => <ActivityIndicator mode={!props.corriendo ? "finished" : presentation().animate ? "running" : "paused"} />;
-  const caption = () => <><Show when={props.stopping || !props.blocked}><ActivityCaption active={presentation().animate} text={rotulo()} /></Show><Show when={!props.stopping && props.blocked}>{props.status?.()}</Show></>;
-  const tiempo = () => (
-    <Show when={duracion()}>
-      <span class="pointer-events-none shrink-0 text-xs whitespace-nowrap text-neutral-500">{duracion()}</span>
-    </Show>
-  );
+  const blocked = () => props.corriendo && !props.stopping && props.blocked;
+  const caption = () => <Show when={!blocked()} fallback={props.status?.()}><ActivityCaption active={presentation().animate} text={rotulo()} /></Show>;
+
 
   // Sin envoltorio y con los datos de la derecha en un solo texto: cada
   // elemento de más se multiplica por los tramos del hilo (`open-task-cost`).
   return (
     <>
-      <span role="status" aria-live="polite" aria-atomic="true" class="sr-only">{props.stopping ? t("chat.turn.stopping") : presentation().animate ? t("chat.turn.working_aria") : ""}</span>
+      <span role="status" aria-live="polite" aria-atomic="true" class="sr-only">{props.corriendo && props.stopping ? t("chat.turn.stopping") : presentation().animate ? t("chat.turn.working_aria") : ""}</span>
       <Show
         when={hasContent() || props.corriendo || props.observed}
         fallback={<p class="m-0 mb-2 px-1 py-1.5 text-xs text-neutral-500">{duracion()}</p>}
       >
         <div class={cn("flex flex-wrap items-center gap-2", !desplegado() && "mb-2")}>
-          <Show when={!hasContent()}><span class={FILA_DEL_TRAMO}><span class="activity-label inline-flex min-w-0 items-center">{girando()}{caption()}</span><Show when={!props.stopping && !props.blocked}>{props.status?.()}</Show>{tiempo()}</span></Show>
+          <Show when={!hasContent()}><span class={FILA_DEL_TRAMO}><span class="activity-label inline-flex min-w-0 items-center">{girando()}{caption()}</span><Show when={props.corriendo && !props.stopping && !props.blocked}>{props.status?.()}</Show></span></Show>
           <Show when={hasContent()}>
             <button type="button" aria-expanded={desplegado()} aria-controls={panelId} onClick={() => props.onAlternar(!desplegado())} class={FILA_DEL_TRAMO}>
-              <span class="activity-label inline-flex min-w-0 items-center">{girando()}{caption()}</span><Show when={!props.stopping && !props.blocked}>{props.status?.()}</Show>{tiempo()}{chevron()}
+              <span class="activity-label inline-flex min-w-0 items-center">{girando()}{caption()}</span><Show when={props.corriendo && !props.stopping && !props.blocked}>{props.status?.()}</Show>{chevron()}
             </button>
           </Show>
           <Show when={hasChanges()}>

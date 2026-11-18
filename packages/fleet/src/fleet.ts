@@ -98,7 +98,7 @@ export function relayLink(relay: Required<Link>, state: Link["state"]): Link {
   };
 }
 
-export type FleetEvent = { name: string; payload: unknown };
+export type FleetEvent = { name: string; payload: unknown; seq?: number };
 
 export type FleetConfig = {
   /** La máquina de la ventana (sus ids van sueltos), o `null` en la web. */
@@ -802,7 +802,7 @@ export class Fleet {
         const unknown = unlinkedWorkspaces(page.events ?? [], member.info.linked ?? null).filter((w) => !this.linkedAnywhere(w));
         if (unknown.length) this.config.onUnlinked?.(info.id, unknown);
         const linked = linkedEvents(page.events ?? [], member.info.linked ?? null);
-        const events = this.config.panelIds === false ? linked.map((e) => ({ name: e.name, payload: e.payload })) : linked.map((e) => ({ name: e.name, payload: encodeEvent(this.context(), info.id, e.name, e.payload) }));
+        const events = this.config.panelIds === false ? linked.map((e) => ({ name: e.name, payload: e.payload, ...(e.seq === undefined ? {} : { seq: e.seq }) })) : linked.map((e) => ({ name: e.name, payload: encodeEvent(this.context(), info.id, e.name, e.payload), ...(e.seq === undefined ? {} : { seq: e.seq }) }));
         this.config.onEvents?.(info.id, events, page.gap === true, { cursor: page.cursor, runtime: page.runtime, replay: page.replay, replayId: page.replayId });
       }),
     );

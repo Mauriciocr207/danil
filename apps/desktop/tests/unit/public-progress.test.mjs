@@ -50,6 +50,7 @@ for (const streaming of [false, true]) test(`public messages remain outside acti
     publicMessages(fixture.doc);
     const disclosure = fixture.doc.querySelector("[data-activity-label]")?.closest("button");
     assert.ok(disclosure, "tools and reasoning retain their activity disclosure");
+    if (!streaming) assert.equal(disclosure.textContent, "Trabajó durante 1s");
     assert.equal(disclosure.getAttribute("aria-expanded"), "false"); disclosure.click();
     assert.ok(await until(() => fixture.doc.querySelector("[data-turn-activity-content] [data-reasoning-content]")));
     const panel = fixture.doc.querySelector("[data-turn-activity-content]");

@@ -2,14 +2,13 @@ import { type Component, type ComponentProps, type ParentProps, Show } from "sol
 import { Dynamic } from "solid-js/web";
 import type { HandoffPresentation } from "../../../conversation-handoff";
 import { t } from "../../../../lib/i18n";
-import { cn } from "../../../../lib/utils";
 import Adjuntos from "../../Attachments";
 
 export function handoffStatus(handoff: NonNullable<HandoffPresentation>): string {
   switch (handoff.phase) {
-    case "waiting-close": return t("chat.handoff.waiting_close");
-    case "submitting": return t("chat.handoff.submitting");
-    case "awaiting-start": return t("chat.handoff.awaiting_start");
+    case "waiting-close": return t("chat.activity.preparing");
+    case "submitting": return t("chat.activity.preparing");
+    case "awaiting-start": return t("chat.activity.preparing");
   }
 }
 
@@ -31,6 +30,6 @@ export function PendingHandoff(props: {
         <p class="m-0 leading-[1.5] break-words whitespace-pre-wrap">{message().text}</p>
       </Dynamic>
     </div>}</Show>
-    <Show when={props.showStatus !== false}><p class={cn("m-0 mt-2 text-caption text-neutral-500", pending() && "text-right")} role="status">{handoffStatus(handoff())}</p></Show>
+    <Show when={props.showStatus !== false}><p class="m-0 mt-2 text-caption text-neutral-500" role="status">{handoffStatus(handoff())}</p></Show>
   </section>}</Show>;
 }

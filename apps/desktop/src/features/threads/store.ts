@@ -106,7 +106,7 @@ export function createThreadsStore(deps: {
                 : m,
             );
       const { base, optimistic, readRevision: appliedRevision } = optimisticHistory.reconcile(previo, atada, persistidos, antepuesta, readRevision);
-      activity.reconcile(deps.scope.workspace(), session, previo?.base ?? [], base, vaciarVivo);
+      activity.reconcile(deps.scope.workspace(), session, previo?.base ?? [], base, vaciarVivo, antepuesta);
       const vivo = vaciarVivo
         ? []
         : vivoPrevio.filter((m) => !m.turno || !persistidos.has(m.turno));
