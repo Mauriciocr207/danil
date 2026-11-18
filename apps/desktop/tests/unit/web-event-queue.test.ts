@@ -20,3 +20,16 @@ test("overflow and remote gaps request reconciliation instead of silently droppi
   queue.push([], { gap: true }); assert.equal((await queue.poll()).gap, true);
   queue.close();
 });
+
+
+test("a connection resync wakes the reader without claiming lost live output", async () => {
+  const queue = createWebEventQueue();
+  const pending = queue.poll();
+  queue.push([], { resync: true });
+  let page;
+  try { page = await Promise.race([pending, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("resync did not wake the reader")), 100))]); } catch (error) { queue.close(); throw error; }
+  assert.equal(page.resync, true); assert.equal(page.gap, false);
+  queue.push([], { gap: true, cursor: 7 });
+  const lost = await queue.poll(); assert.equal(lost.gap, true); assert.equal(lost.resync, false);
+  queue.close();
+});

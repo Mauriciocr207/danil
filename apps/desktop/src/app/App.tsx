@@ -2284,9 +2284,9 @@ export default function App() {
     visibleSessions: tareasQueSeVen,
     applyBatches: applyPushed,
     applyPage: (page, recovered) => {
-      if (page.reset || page.gap || page.streams || recovered) window.dispatchEvent(new CustomEvent("harness:service-resync"));
+      if (page.reset || page.gap || page.resync || page.streams || recovered) window.dispatchEvent(new CustomEvent("harness:service-resync"));
       // Un stream de comando cortado (árbol, git) se relee, pero no es salida en vivo perdida.
-      if (page.reset || page.gap || page.streams) releerTrasHueco();
+      if (page.reset || page.gap || page.resync || page.streams) releerTrasHueco();
       const affectedTurns = vivas().length > 0;
       if (page.reset) {
         threads.flush();
