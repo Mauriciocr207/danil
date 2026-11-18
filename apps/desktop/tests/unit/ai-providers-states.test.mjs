@@ -129,7 +129,7 @@ test("Desktop reads the shared Treasury balance for linked workspaces", async ()
     reply = () => new Promise((resolve) => { respond = resolve; });
     app.w.dispatchEvent(new app.w.CustomEvent("danil:organization-changed"));
     await sleep(100);
-    assert.equal(status(), "Cargando…");
+    assert.equal(status(), "Consultando…");
     assert.ok(respond, "the new organization triggered a balance read");
     respond(balance("org_danil"));
     await sleep(300);
