@@ -88,3 +88,24 @@ test("la variable del CLI se lee danil y lo demás queda igual", () => {
   assert.equal(commandName("gh"), "gh");
   assert.equal(commandName("$DANIL_CLIX"), "$DANIL_CLIX");
 });
+
+test("un conector de claude.ai lleva la marca de su servicio", () => {
+  assert.equal(toolMarkId("claude_ai_Google_Drive"), "drive");
+  assert.equal(toolMarkId("claude_ai_Slack"), "slack");
+  assert.equal(toolMarkId("claude_ai_Figma"), "figma");
+  assert.equal(toolMarkId("claude_ai_Atlassian_Rovo"), "atlassian");
+  assert.equal(toolLabel("claude_ai_Google_Drive"), TOOL_LABELS.drive);
+  // Sin servicio conocido detrás del prefijo no hay marca: no es de Claude ni de nadie.
+  assert.equal(toolMarkId("claude_ai_Claude_Docs"), null);
+});
+
+test("quitar el prefijo y los guiones bajos no cambia lo que ya resolvía", () => {
+  // Cada alias, tal cual y con sufijo, sigue en su marca.
+  for (const [alias, id] of [["github", "github"], ["gh", "github"], ["google-drive", "drive"], ["jira", "atlassian"], ["figma-escritorio", "figma"], ["cua-driver", "cua"], ["postgres", "postgresql"], ["google-cloud", "googlecloud"], ["diagrams.net", "drawio"]] as const)
+    assert.equal(toolMarkId(alias), id, alias);
+  assert.equal(toolMarkId("google_drive"), "drive");
+  assert.equal(toolMarkId("my_server"), null);
+  assert.equal(toolMarkId("claude"), null);
+  // Los comandos siguen siendo coincidencia exacta: el prefijo es de conectores.
+  assert.equal(commandMarkId("claude_ai_Slack"), null);
+});
