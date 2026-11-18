@@ -232,3 +232,27 @@ test('regression: what the person adds or removes shows after a single round, wi
   assert.equal(rounds, before + 1, 'one round after the change');
   assert.deepEqual(list(d.sync.added()), ['labs'], 'the removal is not undone by the read taken before it was uploaded');
 });
+
+test('with the catalog down (503, source unsettled) nothing is seeded or kept locally; when it is back, what the rail shows is seeded, never empty', async () => {
+  const svc = service();
+  const w = world({ available: null, shown: new Set(['acme', 'ops']), hidden: new Set(['ops']) });
+  const d = device(svc, w);
+  await d.sync.sync();
+  assert.ok(!svc.calls.some((c) => c.startsWith('SEED')), 'no seed while the organization machine does not answer');
+  assert.equal(d.records.get('user_1:org_A')?.local ?? null, null, 'no local list is kept');
+  assert.equal(d.sync.added(), null, 'unknown, so the rail keeps what it showed');
+
+  const down = service({ down: 503 });
+  const e = device(down, world({ available: null }));
+  await e.sync.sync();
+  assert.equal(e.records.get('user_1:org_A')?.local ?? null, null, 'with the route also failing, still nothing kept');
+  assert.equal(e.sync.added(), null);
+
+  w.available = [{ id: 'acme', name: 'Acme' }, { id: 'ops', name: 'Ops' }, { id: 'labs', name: 'Labs' }];
+  d.retries.shift()?.();
+  await d.sync.sync();
+  const seeds = svc.calls.filter((c) => c.startsWith('SEED'));
+  assert.deepEqual(seeds, ['SEED acme'], 'seeded once with what the rail showed, minus the hidden one');
+  assert.ok(seeds.every((c) => c !== 'SEED '), 'never an empty seed');
+  assert.deepEqual(list(d.sync.added()), ['acme']);
+});
