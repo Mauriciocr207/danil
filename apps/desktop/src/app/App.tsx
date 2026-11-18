@@ -2436,6 +2436,7 @@ export default function App() {
       // marcada como viva para siempre, con su caja en «Detener» y sin nada
       // corriendo detrás.
       if (kind === "done") {
+        threads.finishActivity(session, workspace || workspaceActivo());
         setEnFondo((ids) => ids.filter((id) => id !== session));
         if (!esDelWorkspaceAbierto(workspace)) {
           advanceTurn(session);

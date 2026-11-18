@@ -218,6 +218,7 @@ export function createThreadsStore(deps: {
   }
   const soltarHilo = (session: string) => {
     deltasPorCuadro.vaciar();
+    if (activity.drop(deps.scope.workspace(), session)) activityChanged();
     setHilos((hs) => {
       historias.get(session)?.close();
       historias.delete(session);
@@ -283,6 +284,7 @@ export function createThreadsStore(deps: {
   function activateWorkspace(workspace: string | null) { if (!disposed) setHilos(workspace ? workspaceThreads.get(workspace) ?? {} : {}); }
   function resetService() {
     deltasPorCuadro.vaciar(); workspaceThreads.clear();
+    activity.clear(); activityChanged();
     setHilos(before => Object.fromEntries(Object.entries(before).map(([id, thread]) => [id, { ...thread, vivo: [] }])));
   }
   function adoptDraft(id: string) {
@@ -307,9 +309,8 @@ export function createThreadsStore(deps: {
   return {
     activities: (id: string, visible: readonly Msg[]) => { activityRevision(); return activity.project(deps.scope.workspace(), id, visible); },
     beginActivity: (id: string, startedAt: number | null) => { if (disposed) return; const thread = untrack(hilos)[id]; if (activity.begin(deps.scope.workspace(), id, startedAt, thread ? mensajesDelHilo(thread) : id === "" ? [] : null)) activityChanged(); },
-    finishActivity: (id: string) => { if (!disposed && activity.finish(deps.scope.workspace(), id)) activityChanged(); },
+    finishActivity: (id: string, workspace = deps.scope.workspace()) => { if (!disposed && activity.finish(workspace, id)) activityChanged(); },
     rows: hilos, current: hiloAbierto, messages: msgs, loading: cargandoHilo, origins: origenes, offline: apagadas, machineWaits, handovers: traspasos,
-
     olderAvailable: conAntiguos, recentAvailable: conRecientes, olderStatus: estadoAntiguos, recentTail: colaSuelta,
     appendLive, appendPersisted, commitUniqueTurn, replaceTurn, reviseOptimistic, rejectOptimistic, question, replay, finishSteps, event,
     read: leerTarea, acceptSession: loadResult, older: cargarAntiguos, latest,

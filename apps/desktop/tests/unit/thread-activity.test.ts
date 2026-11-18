@@ -97,3 +97,36 @@ test("closed run does not adopt unknown older history prepended before its saved
   const unknown = createActivityProjection(); unknown.begin("A", "s", null); unknown.finish("A", "s");
   unknown.reconcile("A", "s", [], [older], true); assert.deepEqual(unknown.project("A", "s", [older]), []);
 });
+test("a done from workspace A closes A while B stays active and A remains closed on return", async () => {
+  const { createRoot, createSignal } = await import("solid-js");
+  const { createThreadsStore } = await import("../../src/features/threads/index.ts");
+  const f = createRoot(dispose => {
+    const [workspace, setWorkspace] = createSignal<string | null>("A");
+    const store = createThreadsStore({ scope: { workspace, generation: () => 1, paged: () => false }, activeSession: () => "s", project: () => "p",
+      invoke: async <T>() => ({ turns: [] }) as T, route: () => undefined, liveThreads: () => new Set(["A/s", "B/s"]) });
+    const move = (next: string) => { store.saveWorkspace(workspace()); setWorkspace(next); store.activateWorkspace(next); };
+    return { store, move, dispose: () => { store.dispose(); dispose(); } };
+  });
+  try {
+    f.store.beginActivity("s", 1_000); f.store.appendLive("s", [message("A answer")]); f.move("B");
+    f.store.beginActivity("s", 2_000); f.store.appendLive("s", [message("B answer")]);
+    f.store.finishActivity("s", "A");
+    assert.equal(f.store.activities("s", f.store.messages())[0].active, true);
+    f.move("A"); assert.equal(f.store.activities("s", f.store.messages())[0].active, false);
+  } finally { f.dispose(); }
+});
+test("dropping a thread and resetting service remove its presentation activity", async () => {
+  const { createRoot } = await import("solid-js");
+  const { createThreadsStore } = await import("../../src/features/threads/index.ts");
+  const f = createRoot(dispose => {
+    const store = createThreadsStore({ scope: { workspace: () => "A", generation: () => 1, paged: () => false }, activeSession: () => "s", project: () => "p",
+      invoke: async <T>() => ({ turns: [] }) as T, route: () => undefined, liveThreads: () => new Set() });
+    return { store, dispose: () => { store.dispose(); dispose(); } };
+  });
+  try {
+    f.store.beginActivity("s", 1_000); f.store.appendLive("s", [message("first")]); f.store.drop("s");
+    assert.deepEqual(f.store.activities("s", f.store.messages()), []);
+    f.store.beginActivity("s", 2_000); f.store.appendLive("s", [message("second")]); f.store.resetService();
+    assert.deepEqual(f.store.activities("s", f.store.messages()), []);
+  } finally { f.dispose(); }
+});
