@@ -6473,7 +6473,7 @@ export default function App() {
           </Show>
         </>}
         machine={pp.sesion ? filaDe(pp.sesion)?.machine : undefined}
-        {...{ activities: threads.activities(pp.sesion ?? "", mensajes()) }}
+        activities={threads.activities(pp.sesion ?? "", mensajes())}
         msgs={mensajes()}
         /* Identidad de lo que tiene delante, no ids de proyecto/tarea: es lo
            único con lo que distingue «entró un mensaje» de «otra

@@ -2947,7 +2947,8 @@ export default function Chat(props: ChatProps) {
                       pasos={activitySteps(b().activity)}
                       razonamiento={b().activity?.messages.flatMap(message => message.razonamiento ?? []) ?? []}
                       corriendo={b().activity?.active ?? false}
-                      animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
+                      label={b().activity?.active && b().activity?.startedAt === null && b().activity?.messages.length === 0 ? t("chat.activity.syncing") : undefined}
+                      animando={!(b().activity?.startedAt === null && b().activity?.messages.length === 0) && !props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
                       duracion={b().activity?.durationMs == null ? null : formatearDuracion(b().activity!.durationMs!)}
                       abierto={Boolean(trabajos()[`activity:${b().activity?.key ?? ""}`])}
                       onAlternar={(open) => setTrabajos({ ...trabajos(), [`activity:${b().activity?.key ?? ""}`]: open })}
@@ -3682,6 +3683,7 @@ function RegistroDeTrabajo(props: {
   avance?: Avance[];
   corriendo: boolean;
   status?: JSX.Element;
+  label?: string;
   duracion?: string | null;
   abierto?: boolean;
   onAlternar: (abierto: boolean) => void;
@@ -3695,7 +3697,7 @@ function RegistroDeTrabajo(props: {
   // correcto, y «1 con error» alarmaba. El fallo del turno va aparte.
   const avance = () => props.avance ?? SIN_AVANCE;
   const todos = createMemo(() => [...avance().flatMap((a) => a.pasos), ...props.pasos]);
-  const rotulo = () =>
+  const rotulo = () => props.label ??
     cuentaDelTramo(todos(), props.corriendo) ??
     (props.corriendo ? t("chat.reasoning.thinking") : t("chat.activity.title"));
   const hasContent = () => todos().length > 0 || avance().length > 0 || Boolean(props.razonamiento?.length);
@@ -3723,7 +3725,7 @@ function RegistroDeTrabajo(props: {
   // elemento de más se multiplica por los tramos del hilo (`open-task-cost`).
   return (
     <>
-      <span role="status" aria-live="polite" aria-atomic="true" class="sr-only">{props.corriendo ? t("chat.turn.working_aria") : ""}</span>
+      <span role="status" aria-live="polite" aria-atomic="true" class="sr-only">{props.corriendo && props.animando !== false ? t("chat.turn.working_aria") : ""}</span>
       <Show
         when={todos().length > 0 || avance().length > 0 || props.razonamiento?.length || props.corriendo}
         fallback={<p class="m-0 mb-2 px-1 py-1.5 text-xs text-neutral-500">{duracion()}</p>}
