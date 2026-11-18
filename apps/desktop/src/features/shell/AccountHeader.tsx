@@ -3,12 +3,14 @@ import { t } from "../../lib/i18n";
 import { capabilities } from "../../lib/platform";
 import { ITEM_DE_MENU, Popover, PopoverAnchor, PopoverContent } from "../../ui/Popover";
 import { RETARDO_TOOLTIP, TooltipContent, TooltipRoot, TooltipTrigger } from "../../ui/Tooltip";
+import { cerrarConEscape as createEscapeCloser } from "../settings";
 
 const monogram = (name: string) => name.trim().slice(0, 1).toUpperCase() || "?";
-/** La cuenta de un grupo: la inicial de su correo; su menú la quita o vuelve a entrar. */
-export const AccountHeader = (p: { id: string; email: string | null; extra: boolean; signedIn: boolean; stale?: boolean; name?: string; children?: JSX.Element; accounts?: ReturnType<typeof capabilities>["webAccounts"] }) => {
+/** La cuenta de un grupo: la inicial de su organización o correo; su menú la quita o vuelve a entrar. */
+export const AccountHeader = (p: { id: string; email: string | null; extra: boolean; signedIn: boolean; stale?: boolean; name?: string; initialName?: string; children?: JSX.Element; accounts?: ReturnType<typeof capabilities>["webAccounts"] }) => {
     const accounts = () => p.accounts;
     const [accountMenu, setAccountMenu] = createSignal<string | null>(null);
+    createEscapeCloser(() => accountMenu() === p.id, () => setAccountMenu(null));
     const label = () => p.name ?? t("shell.workspaces.account", { email: p.email ?? "" });
     return (
       <Popover open={accountMenu() === p.id} onOpenChange={(open) => setAccountMenu(open ? p.id : null)} placement="right-start" gutter={4}>
@@ -23,7 +25,7 @@ export const AccountHeader = (p: { id: string; email: string | null; extra: bool
               onClick={() => setAccountMenu(p.id)}
             >
               <span aria-hidden="true" class="grid size-4 shrink-0 place-items-center rounded-full bg-neutral-200 text-[0.5625rem] font-semibold text-neutral-700">
-                {monogram(p.email ?? "?").slice(0, 1)}
+                {monogram(p.initialName ?? p.email ?? "?").slice(0, 1)}
               </span>
               <span aria-hidden="true" class="h-px flex-1 bg-border" />
             </TooltipTrigger>

@@ -35,11 +35,11 @@ test("D2a mounts context headers, opens later for one organization, and signs ou
   await sleep(100);
   doc.querySelector("[data-add-workspace]").click();
   assert.ok(await until(() => [...doc.querySelectorAll('[role="menuitem"]')].some((b) => b.textContent === "Agregar cuenta u organización")));
-  assert.ok(doc.body.textContent.includes("Nuevos disponibles"));
+  assert.ok(doc.body.textContent.includes("Hay workspaces nuevos para agregar"));
   [...doc.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent === "Agregar cuenta u organización").click();
   assert.ok(await until(() => logins.length === 1));
   assert.equal(logins[0].mode, "add");
-  assert.ok(await until(() => [...doc.querySelectorAll('[role="status"]')].some((p) => p.textContent === "Llegaste al máximo de 20 organizaciones conectadas. Cierra una para agregar otra.")), "the cause is visible inside the open add menu");
+  assert.ok(await until(() => [...doc.querySelectorAll('[role="alert"]')].some((p) => p.textContent === "Llegaste al máximo de 20 organizaciones conectadas. Cierra una para agregar otra.")), "the cause is visible inside the open add menu");
   assert.equal(doc.querySelectorAll("[data-account-header]").length, 4);
   rejectLogin = false;
   [...doc.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent === "Agregar cuenta u organización").click();
@@ -54,6 +54,11 @@ test("D2a mounts context headers, opens later for one organization, and signs ou
   assert.ok(await until(() => doc.querySelector('[data-removed-context="c"]')?.textContent === "No tienes acceso a los workspaces de esta organización"), "D1's removal cause stays visible in the add menu");
   doc.activeElement?.dispatchEvent(new app.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await sleep(100);
+  doc.querySelector('[data-account-header="b"]').click();
+  assert.ok(await until(() => [...doc.querySelectorAll('[role="menuitem"]')].some((b) => b.textContent === "Cerrar sesión de one@example.com")));
+  assert.equal(doc.querySelector('[data-account-header="b"] span').textContent.trim(), "O");
+  doc.activeElement?.dispatchEvent(new app.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.ok(await until(() => ![...doc.querySelectorAll('[role="menuitem"]')].some((b) => b.textContent === "Cerrar sesión de one@example.com")), "Escape closes the account menu");
   doc.querySelector('[data-account-header="b"]').click();
   assert.ok(await until(() => [...doc.querySelectorAll('[role="menuitem"]')].some((b) => b.textContent === "Cerrar sesión de one@example.com")));
   [...doc.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent === "Cerrar sesión de one@example.com").click();

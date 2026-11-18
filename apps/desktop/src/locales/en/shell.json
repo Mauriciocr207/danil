@@ -450,7 +450,7 @@
   "shell.workspaces.sessions_failed": "Could not complete",
   "shell.workspaces.free_workspace": "Your Free workspace",
   "shell.workspaces.session_group": "{email} · {name}",
-  "shell.workspaces.new_available": "New ones available",
+  "shell.workspaces.new_available": "There are new workspaces to add",
   "shell.workspaces.empty_no_org": "You do not have a Danil organization yet",
   "shell.workspaces.empty_no_access": "You do not have access to this organization’s workspaces",
   "shell.workspaces.empty_generic": "No Danil workspaces are available"

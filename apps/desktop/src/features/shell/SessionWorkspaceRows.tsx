@@ -31,11 +31,11 @@ function SessionGroup(props: RowsProps & { group: SessionRailGroup }) {
     finally { setBusy(false); }
   };
   return <>
-    <AccountHeader id={props.group.context_id} email={props.group.email} name={t("shell.workspaces.session_group", { email: props.group.email ?? "", name: props.group.org_name ?? props.group.org })} extra={false} signedIn>
+    <AccountHeader id={props.group.context_id} email={props.group.email} initialName={props.group.org_name ?? props.group.org} name={t("shell.workspaces.session_group", { email: props.group.email ?? "", name: props.group.org_name ?? props.group.org })} extra={false} signedIn>
       <p class="m-0 truncate px-2 py-1 text-caption text-neutral-500">{props.group.org_name ?? props.group.org}</p>
       <button role="menuitem" class={ITEM_DE_MENU} disabled={busy()} onClick={() => void close({ context: props.group.context_id })}>{t("shell.workspaces.close_org", { name: props.group.org_name ?? props.group.org })}</button>
       <button role="menuitem" class={ITEM_DE_MENU} disabled={busy()} onClick={() => void close({ email: props.group.email, family: props.group.family })}>{t("shell.workspaces.close_email", { email: props.group.email ?? "" })}</button>
-      <Show when={error()}><p role="status" class="m-0 px-2 py-1 text-caption text-neutral-500">{t("shell.workspaces.sessions_failed")}</p></Show>
+      <Show when={error()}><p role="alert" class="m-0 px-2 py-1 text-caption text-error-strong">{t("shell.workspaces.sessions_failed")}</p></Show>
     </AccountHeader>
     <Show when={props.group.available}>
       <KeyedList each={props.rows.filter((w) => props.group.available?.some((r) => r.id === w.id))} by={(w) => w.id}>{(w) => props.render(w)}</KeyedList>
