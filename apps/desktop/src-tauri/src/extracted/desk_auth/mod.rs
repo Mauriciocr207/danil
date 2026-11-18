@@ -204,7 +204,7 @@ pub(super) fn danil_sign_in(
     let pkce = pkce::Pkce::open().ok_or_else(|| coded("unavailable"))?;
     let redirect_uri = pkce.redirect_uri();
     let url = d.authorize_url(&pkce.challenge, &pkce.state, &redirect_uri, add);
-    let (url, supported_add) = d.prepare_authorize(url, add);
+    let url = d.prepare_authorize(url, add).map_err(|fail| error(&fail))?;
     let browser = login_browser::LoginBrowser::open(&app, url, add)?;
     let deadline = Instant::now() + LOGIN_WAIT;
     let code = loop {
@@ -223,7 +223,7 @@ pub(super) fn danil_sign_in(
     drop(browser);
     let verifier = pkce.verifier.clone();
     drop(pkce);
-    d.exchange(attempt, &code, &verifier, &redirect_uri, supported_add)
+    d.exchange(attempt, &code, &verifier, &redirect_uri, add)
         .map_err(|f| error(&f))?;
     // La sesión de antes (WorkOS a Supabase) no convive con la nueva.
     super::agents_session::retire_legacy(&app);

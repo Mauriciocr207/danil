@@ -7,6 +7,7 @@ struct VaultSet {
     records: Arc<Mutex<HashMap<String, String>>>,
     account: String,
     fail_save: bool,
+    fail_index: bool,
 }
 impl Vault for VaultSet {
     fn load(&self) -> Option<Stored> {
@@ -37,6 +38,9 @@ impl FamilyVault for VaultSet {
         self.records.lock().unwrap().get("index").cloned()
     }
     fn save_index(&self, index: &str) -> bool {
+        if self.fail_index {
+            return false;
+        }
         self.records
             .lock()
             .unwrap()
@@ -46,8 +50,8 @@ impl FamilyVault for VaultSet {
 }
 fn catalog(vault: &VaultSet) {
     vault.save_index(&json!({"version":1,"items":[
-        {"family":"family_a","email":"same@example.test","contexts":[{"context_id":"context_a","org":"org_a"}]},
-        {"family":"family_b","email":"same@example.test","contexts":[{"context_id":"context_b","org":"org_b"}]}
+        {"family":"family_a","session_id":"family_a","sub":"same_person","email":"same@example.test","contexts":[{"context_id":"context_a","org":"org_a"}]},
+        {"family":"family_b","session_id":"family_b","sub":"same_person","email":"same@example.test","contexts":[{"context_id":"context_b","org":"org_b"}]}
     ], "default_family":"family_a", "default_context":"context_a"}).to_string());
     for id in ["family_a", "family_b"] {
         vault.family(id).save(&Stored {
@@ -133,7 +137,7 @@ fn context_selects_own_bearer_and_requires_exact_echo_before_body() {
 fn missing_echo_discards_body_but_default_client_remains_compatible() {
     let vault = VaultSet::default();
     catalog(&vault);
-    let (edge, _) = serve(Arc::new(|req, _| match req.path.as_str() {
+    let (edge, seen) = serve(Arc::new(|req, _| match req.path.as_str() {
         "/v1/identity/desk/refresh" => (200, refresh_for(req)),
         _ => (200, json!({"items":[]})),
     }));
@@ -148,6 +152,10 @@ fn missing_echo_discards_body_but_default_client_remains_compatible() {
     assert!(families
         .fetch("GET", "/v1/workspaces", None, "key", None)
         .is_ok());
+    let seen = seen.lock().unwrap();
+    let requests: Vec<_> = seen.iter().filter(|r| r.path == "/v1/workspaces").collect();
+    assert_eq!(requests[0].context.as_deref(), Some("context_a"));
+    assert_eq!(requests[1].context, None);
 }
 #[test]
 fn failed_refresh_only_closes_its_family() {
@@ -241,7 +249,7 @@ fn different_families_do_not_wait_for_another_refresh() {
 }
 #[test]
 fn routes_are_exact_and_opaque() {
-    assert!(allowed("GET", "/v1/identity/sessions"));
+    assert!(!allowed("GET", "/v1/identity/sessions"));
     assert!(!allowed("POST", "/v1/identity/contexts"));
     for id in ["a/b", "../x", "x%2fy", "x?y", "", "a.b"] {
         assert!(!allowed(
@@ -249,7 +257,8 @@ fn routes_are_exact_and_opaque() {
             &format!("/v1/identity/contexts/{id}/logout")
         ));
     }
-    assert!(allowed("POST", "/v1/identity/sessions/family_a/logout"));
+    assert!(!allowed("POST", "/v1/identity/sessions/family_a/logout"));
+    assert!(!allowed("POST", "/v1/identity/contexts/context_a/logout"));
     assert!(!allowed("GET", "/v1/identity/sessions/family_a/logout"));
 }
 #[test]
@@ -309,6 +318,12 @@ fn logout_context_is_idempotent_and_does_not_reassign_default() {
     );
     assert!(vault.family("family_a").load().is_some());
     assert_eq!(families.status()["state"], "connected");
+    assert!(!seen
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|r| r.path == "/v1/identity/desk/logout"
+            || r.path.starts_with("/v1/identity/sessions/")));
     assert_eq!(count(&seen, "/v1/identity/contexts/context_a/logout"), 1);
     assert_eq!(
         seen.lock()
@@ -328,6 +343,7 @@ fn logout_family_only_removes_that_keychain_entry() {
     catalog(&vault);
     let mut index: Value = serde_json::from_str(&vault.index().unwrap()).unwrap();
     index["items"][1]["email"] = json!("different@example.test");
+    index["items"][1]["sub"] = json!("other_person");
     vault.save_index(&index.to_string());
     let (edge, _) = serve(Arc::new(|req, _| match req.path.as_str() {
         "/v1/identity/desk/refresh" => (200, refresh_for(req)),
@@ -386,7 +402,7 @@ fn adding_login_keeps_other_families_and_logout_all_cancels_pending_login() {
     let (edge, _) = serve(Arc::new(|req, _| match req.path.as_str() {
         "/v1/identity/desk/token" => (
             200,
-            json!({"access_token":"new_access","refresh_token":"new_refresh","sid":"family_c","expires_in":300}),
+            json!({"access_token":"new_access","refresh_token":"new_refresh","sid":"workos_sid_c","session_id":"family_c","expires_in":300}),
         ),
         "/v1/identity/desk/refresh" => (200, refresh_for(req)),
         _ => (204, Value::Null),
@@ -618,14 +634,281 @@ fn add_uses_local_family_id_keeps_new_context_and_exposes_sealed_choices() {
 }
 
 #[test]
-fn old_identity_authorize_falls_back_without_exposing_an_error() {
+fn old_identity_cannot_replace_existing_families_when_adding() {
     for status in [404, 501] {
         let (edge, seen) = serve(Arc::new(move |_, _| (status, Value::Null)));
-        let families = Families::new(edge, VaultSet::default(), || {});
-        let url = families.authorize_url("challenge", "state", "loopback", true);
-        let (url, add) = families.prepare_authorize(url, true);
-        assert!(!add);
-        assert!(!url.contains("mode=add"));
-        assert_eq!(seen.lock().unwrap().len(), 1);
+        let vault = VaultSet::default();
+        catalog(&vault);
+        let before = vault.records.lock().unwrap().clone();
+        let families = Families::new(edge, vault.clone(), || {});
+        families.begin_sign_in();
+        let url = families.authorize_url(
+            "real_challenge",
+            "real_state",
+            "http://127.0.0.1:1234/callback",
+            true,
+        );
+        assert_eq!(
+            families.prepare_authorize(url, true).unwrap_err().code(),
+            "not_available_yet"
+        );
+        assert_eq!(*vault.records.lock().unwrap(), before);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(!seen[0].path.contains("real_state"));
+        assert!(!seen[0].path.contains("real_challenge"));
+        assert!(seen[0].path.contains("mode=add"));
+    }
+}
+
+#[test]
+fn migration_with_an_existing_index_always_indexes_the_copied_refresh() {
+    let vault = VaultSet::default();
+    catalog(&vault);
+    vault.save(&Stored {
+        sid: "workos_legacy_sid".into(),
+        refresh_token: "refresh_legacy".into(),
+    });
+    let (edge, _) = serve(Arc::new(|req, _| (200, refresh_for(req))));
+    let families = Families::new(edge.clone(), vault.clone(), || {});
+    let index: Value = serde_json::from_str(&vault.index().unwrap()).unwrap();
+    let items = index["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    let new = items
+        .iter()
+        .find(|i| i["family"] != "family_a" && i["family"] != "family_b")
+        .unwrap();
+    assert!(new["session_id"].is_null());
+    let family = new["family"].as_str().unwrap();
+    assert_eq!(
+        vault.family(family).load().unwrap().refresh_token,
+        "refresh_legacy"
+    );
+    assert!(vault.load().is_none());
+    drop(families);
+    let restored = Families::new(edge, vault, || {});
+    assert!(restored.access().is_ok());
+}
+
+#[test]
+fn full_index_does_not_copy_an_unindexed_legacy_refresh() {
+    let vault = VaultSet::default();
+    let items: Vec<_> = (0..20)
+        .map(|n| json!({"family":format!("family_{n}"),"email":null,"contexts":[]}))
+        .collect();
+    vault.save_index(&json!({"version":1,"items":items}).to_string());
+    vault.save(&Stored {
+        sid: "legacy_sid".into(),
+        refresh_token: "legacy_refresh".into(),
+    });
+    let _families = Families::new("http://127.0.0.1:1".into(), vault.clone(), || {});
+    let records = vault.records.lock().unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(records.contains_key(""));
+}
+
+#[test]
+fn session_logout_falls_back_to_legacy_revocation_for_old_servers_or_missing_id() {
+    for new_status in [Some(404), Some(501), None] {
+        let vault = VaultSet::default();
+        catalog(&vault);
+        let mut index: Value = serde_json::from_str(&vault.index().unwrap()).unwrap();
+        index["items"][1]["sub"] = json!("other_person");
+        if new_status.is_none() {
+            index["items"][0]["session_id"] = Value::Null;
+        }
+        vault.save_index(&index.to_string());
+        let (edge, seen) = serve(Arc::new(move |req, _| match req.path.as_str() {
+            "/v1/identity/desk/refresh" => (200, refresh_for(req)),
+            "/v1/identity/sessions/family_a/logout" => (new_status.unwrap(), Value::Null),
+            "/v1/identity/desk/logout" => (204, Value::Null),
+            _ => (500, Value::Null),
+        }));
+        let families = Families::new(edge, vault.clone(), || {});
+        families.sign_out(Some("family_a"), None, "key").unwrap();
+        assert_eq!(count(&seen, "/v1/identity/desk/logout"), 1);
+        assert_eq!(
+            count(&seen, "/v1/identity/sessions/family_a/logout"),
+            usize::from(new_status.is_some())
+        );
+        let log = seen.lock().unwrap();
+        let logout = log
+            .iter()
+            .find(|r| r.path == "/v1/identity/desk/logout")
+            .unwrap();
+        assert_eq!(
+            logout.authorization.as_deref(),
+            Some("Bearer access_family_a")
+        );
+        assert!(vault.family("family_a").load().is_none());
+        assert!(vault.family("family_b").load().is_some());
+    }
+}
+
+#[test]
+fn scoped_error_status_drops_body_and_401_still_renews() {
+    for status in [401, 404, 501] {
+        let vault = VaultSet::default();
+        catalog(&vault);
+        let (edge, seen) = serve(Arc::new(move |req, n| match req.path.as_str() {
+            "/v1/identity/desk/refresh" => (200, refresh_for(req)),
+            "/v1/workspaces" if status == 401 && n > 0 => {
+                (200, json!({"__echo":"context_a","items":[]}))
+            }
+            _ => (
+                status,
+                json!({"sensitive":"foreign body","__location":"https://foreign.example.test"}),
+            ),
+        }));
+        let families = Families::new(edge, vault, || {});
+        let reply = families
+            .fetch("GET", "/v1/workspaces", None, "key", Some("context_a"))
+            .unwrap();
+        if status == 401 {
+            assert_eq!(reply.status, 200);
+            assert_eq!(count(&seen, "/v1/identity/desk/refresh"), 2);
+        } else {
+            assert_eq!(reply.status, status);
+            assert!(reply.body.is_null());
+            assert!(reply.location.is_none());
+        }
+    }
+}
+
+#[test]
+fn same_email_without_a_verified_sub_never_closes_another_family() {
+    let vault = VaultSet::default();
+    catalog(&vault);
+    let mut index: Value = serde_json::from_str(&vault.index().unwrap()).unwrap();
+    for item in index["items"].as_array_mut().unwrap() {
+        item["sub"] = Value::Null;
+    }
+    vault.save_index(&index.to_string());
+    let (edge, seen) = serve(Arc::new(|req, _| match req.path.as_str() {
+        "/v1/identity/desk/refresh" => (200, refresh_for(req)),
+        _ => (204, Value::Null),
+    }));
+    let families = Families::new(edge, vault.clone(), || {});
+    families.sign_out(Some("family_a"), None, "key").unwrap();
+    assert!(vault.family("family_b").load().is_some());
+    assert_eq!(count(&seen, "/v1/identity/sessions/family_b/logout"), 0);
+}
+
+#[test]
+fn workos_sid_is_not_a_server_session_id() {
+    let vault = VaultSet::default();
+    let (edge, seen) = serve(Arc::new(|req, _| match req.path.as_str() {
+        "/v1/identity/desk/token" => (
+            200,
+            json!({"access_token":"access","refresh_token":"refresh","expires_in":300,"sid":"workos_only"}),
+        ),
+        "/v1/identity/me" => (200, json!({"id":"person"})),
+        "/v1/identity/desk/logout" => (204, Value::Null),
+        _ => (404, Value::Null),
+    }));
+    let families = Families::new(edge, vault.clone(), || {});
+    let attempt = families.begin_sign_in();
+    families
+        .exchange(attempt, "code", "verifier", "redirect", true)
+        .unwrap();
+    let index: Value = serde_json::from_str(&vault.index().unwrap()).unwrap();
+    assert!(index["items"][0]["session_id"].is_null());
+    families
+        .sign_out(
+            Some(index["items"][0]["family"].as_str().unwrap()),
+            None,
+            "key",
+        )
+        .unwrap();
+    assert_eq!(count(&seen, "/v1/identity/desk/logout"), 1);
+    assert!(!seen
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|r| r.path.contains("/sessions/")));
+}
+
+#[test]
+fn failed_index_write_rolls_back_the_migrated_copy() {
+    let vault = VaultSet {
+        fail_index: true,
+        ..VaultSet::default()
+    };
+    vault.save(&Stored {
+        sid: "workos_sid".into(),
+        refresh_token: "refresh_legacy".into(),
+    });
+    let (edge, _) = serve(Arc::new(|req, _| (200, refresh_for(req))));
+    let families = Families::new(edge, vault.clone(), || {});
+    assert_eq!(vault.records.lock().unwrap().len(), 1);
+    assert!(families.access().is_ok());
+    assert!(vault.load().is_some());
+}
+
+#[test]
+fn network_during_login_or_logout_does_not_hold_the_set_lock() {
+    for adding in [false, true] {
+        let vault = VaultSet::default();
+        catalog(&vault);
+        let mut index: Value = serde_json::from_str(&vault.index().unwrap()).unwrap();
+        index["items"][1]["sub"] = json!("other_person");
+        vault.save_index(&index.to_string());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let (edge, _) = serve(Arc::new(move |req, _| {
+            if (!adding && req.path == "/v1/identity/sessions/family_a/logout")
+                || (adding
+                    && req.path == "/v1/identity/me"
+                    && req.authorization.as_deref() == Some("Bearer new_access"))
+            {
+                entered_tx.send(()).unwrap();
+                release_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap();
+                return if adding {
+                    (200, json!({"id":"new_person"}))
+                } else {
+                    (204, Value::Null)
+                };
+            }
+            match req.path.as_str() {
+                "/v1/identity/desk/token" => (
+                    200,
+                    json!({"access_token":"new_access","refresh_token":"new_refresh","expires_in":300,"session_id":"server_new"}),
+                ),
+                "/v1/identity/desk/refresh" => (200, refresh_for(req)),
+                "/v1/capabilities" => (404, Value::Null),
+                _ => (200, json!({"__echo":req.context})),
+            }
+        }));
+        let families = Arc::new(Families::new(edge, vault, || {}));
+        let actor = families.clone();
+        let first = std::thread::spawn(move || {
+            if adding {
+                let attempt = actor.begin_sign_in();
+                actor.exchange(attempt, "code", "verifier", "redirect", true)
+            } else {
+                actor.sign_out(Some("family_a"), None, "key")
+            }
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        let second = std::thread::spawn(move || {
+            done_tx
+                .send(
+                    families
+                        .fetch("GET", "/v1/workspaces", None, "key", Some("context_b"))
+                        .is_ok(),
+                )
+                .unwrap()
+        });
+        let result = done_rx.recv_timeout(Duration::from_secs(2));
+        release_tx.send(()).unwrap();
+        first.join().unwrap().unwrap();
+        second.join().unwrap();
+        assert_eq!(result.unwrap(), true);
     }
 }

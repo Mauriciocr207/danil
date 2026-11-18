@@ -166,7 +166,6 @@ pub(crate) fn allowed(method: &str, path: &str) -> bool {
         (method, path),
         ("GET", "/v1/capabilities")
             | ("GET", "/v1/identity/me")
-            | ("GET", "/v1/identity/sessions")
             | ("GET", "/v1/identity/organizations")
             | ("POST", "/v1/identity/organizations/select")
             | ("GET", "/v1/workspaces")
@@ -180,7 +179,6 @@ pub(crate) fn allowed(method: &str, path: &str) -> bool {
     }
     let parts: Vec<&str> = path.split('/').collect();
     match (method, parts.as_slice()) {
-        ("POST", ["", "v1", "identity", "contexts" | "sessions", id, "logout"]) => opaque_id(id),
         ("GET", ["", "v1", "machines", id]) => opaque_id(id),
         ("POST", ["", "v1", "machines", id, "start" | "tickets"]) => opaque_id(id),
         ("GET", ["", "v1", "operations", id]) => opaque_id(id),
@@ -251,7 +249,7 @@ pub(crate) fn request_keyed(
     body: Option<&Value>,
     key: &str,
 ) -> Result<Reply, Fail> {
-    request_context(url, method, bearer, body, key, None, false)
+    request_context(url, method, bearer, body, key, None)
 }
 
 pub(super) fn request_context(
@@ -261,7 +259,6 @@ pub(super) fn request_context(
     body: Option<&Value>,
     key: &str,
     context: Option<&str>,
-    require_echo: bool,
 ) -> Result<Reply, Fail> {
     let agent = agent();
     let auth = bearer.map(|t| format!("Bearer {t}"));
@@ -315,7 +312,16 @@ pub(super) fn request_context(
     let mut response = sent.map_err(|_| Fail::Unavailable {
         retry_after: Duration::from_secs(1),
     })?;
-    if let Some(context) = context.filter(|_| require_echo) {
+    let status = response.status().as_u16();
+    if context.is_some() && !(200..300).contains(&status) {
+        return Ok(Reply {
+            status,
+            body: Value::Null,
+            retry_after: None,
+            location: None,
+        });
+    }
+    if let Some(context) = context {
         if response
             .headers()
             .get("X-Danil-Session-Applied")
@@ -328,7 +334,6 @@ pub(super) fn request_context(
             });
         }
     }
-    let status = response.status().as_u16();
     let retry_after = response
         .headers()
         .get("Retry-After")
@@ -817,43 +822,15 @@ impl<V: Vault> Desk<V> {
         key: &str,
         context: Option<&str>,
     ) -> Result<Reply, Fail> {
-        self.fetch_scoped(method, path, body, key, context, true)
-    }
-
-    pub(super) fn fetch_scoped(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<&Value>,
-        key: &str,
-        context: Option<&str>,
-        require_echo: bool,
-    ) -> Result<Reply, Fail> {
         let url = format!("{}{path}", self.edge);
         let live = self.access()?;
-        let reply = request_context(
-            &url,
-            method,
-            Some(&live.access_token),
-            body,
-            key,
-            context,
-            require_echo,
-        )?;
+        let reply = request_context(&url, method, Some(&live.access_token), body, key, context)?;
         self.finish_authenticated(&live, false)?;
         if reply.status != 401 {
             return Ok(reply);
         }
         let live = self.access_for(live.generation, Some(&live.access_token))?;
-        let reply = request_context(
-            &url,
-            method,
-            Some(&live.access_token),
-            body,
-            key,
-            context,
-            require_echo,
-        )?;
+        let reply = request_context(&url, method, Some(&live.access_token), body, key, context)?;
         self.finish_authenticated(
             &live,
             reply.status == 401 && path.starts_with("/v1/identity/"),

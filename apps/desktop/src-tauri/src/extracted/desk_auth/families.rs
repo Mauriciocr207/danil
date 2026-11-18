@@ -36,6 +36,8 @@ struct Index {
     version: u8,
     #[serde(default)]
     legacy_retired: bool,
+    #[serde(default)]
+    legacy_family: Option<String>,
     items: Vec<Metadata>,
     default_family: Option<String>,
     default_context: Option<String>,
@@ -78,30 +80,36 @@ impl<V: FamilyVault> Families<V> {
         if !index.legacy_retired {
             if let Some(stored) = vault.load() {
                 let id = index
-                    .items
-                    .iter()
-                    .find(|m| m.session_id.as_deref() == Some(&stored.sid))
-                    .map(|m| m.family.clone())
+                    .legacy_family
+                    .clone()
+                    .filter(|id| session::opaque_id(id))
                     .unwrap_or_else(|| super::pkce::random(24).expect("OS randomness"));
-                if index.items.is_empty() {
+                if !index.items.iter().any(|m| m.family == id) && index.items.len() < 20 {
                     index.items.push(Metadata {
                         family: id.clone(),
-                        session_id: Some(stored.sid.clone()),
                         ..Metadata::default()
                     });
-                    index.default_family = Some(id.clone());
+                    if index.default_family.is_none() {
+                        index.default_family = Some(id.clone());
+                    }
                 }
                 index.version = 1;
                 index.legacy_retired = true;
+                index.legacy_family = None;
                 // El marcador evita resucitar el secreto anterior si falla su borrado.
-                if vault.family(&id).save(&stored)
+                if index.items.iter().any(|m| m.family == id)
+                    && vault.family(&id).save(&stored)
                     && vault.save_index(
                         &serde_json::to_string(&index).expect("public session metadata"),
                     )
                 {
                     vault.clear();
                 } else {
+                    if index.items.iter().any(|m| m.family == id) {
+                        vault.family(&id).clear();
+                    }
                     index.legacy_retired = false;
+                    index.legacy_family = Some(id.clone());
                     legacy_family = Some(id);
                 }
             }
@@ -144,6 +152,7 @@ impl<V: FamilyVault> Families<V> {
         let index = Index {
             version: 1,
             legacy_retired: set.legacy_family.is_none(),
+            legacy_family: set.legacy_family.clone(),
             items: set.families.iter().map(|f| f.metadata.clone()).collect(),
             default_family: set.default_family.clone(),
             default_context: set.default_context.clone(),
@@ -195,17 +204,29 @@ impl<V: FamilyVault> Families<V> {
         }
         url
     }
-    pub fn prepare_authorize(&self, url: String, add: bool) -> (String, bool) {
-        if add
-            && session::request(&url, "GET", None, None)
-                .is_ok_and(|r| matches!(r.status, 404 | 501))
-        {
-            return (
-                url.strip_suffix("&mode=add").unwrap_or(&url).to_owned(),
-                false,
-            );
+    pub fn prepare_authorize(&self, url: String, add: bool) -> Result<String, Fail> {
+        if add {
+            let disposable = super::pkce::random(32).ok_or_else(|| refused("unavailable"))?;
+            let verifier = super::pkce::random(32).ok_or_else(|| refused("unavailable"))?;
+            let mut probe = tauri::Url::parse(&url).map_err(|_| refused("invalid_request"))?;
+            let pairs: Vec<_> = probe
+                .query_pairs()
+                .map(|(key, value)| {
+                    let value = match key.as_ref() {
+                        "state" => disposable.clone(),
+                        "code_challenge" => super::pkce::challenge_of(&verifier),
+                        _ => value.into_owned(),
+                    };
+                    (key.into_owned(), value)
+                })
+                .collect();
+            probe.query_pairs_mut().clear().extend_pairs(pairs);
+            let reply = session::request(probe.as_str(), "GET", None, None)?;
+            if matches!(reply.status, 404 | 501) {
+                return Err(session::failure(&reply, "not_available_yet"));
+            }
         }
-        (url, add)
+        Ok(url)
     }
     pub fn capabilities(&self) -> session::Capabilities {
         Desk::new(&self.edge, self.vault.clone(), || {}).capabilities()
@@ -231,13 +252,16 @@ impl<V: FamilyVault> Families<V> {
             return Err(session::failure(&reply, "invalid_grant"));
         }
         let issued = session::tokens(&reply.body).ok_or_else(|| refused("invalid_response"))?;
-        let server_id = reply.body["session_id"]
-            .as_str()
-            .unwrap_or(&issued.3)
-            .to_owned();
-        if !session::opaque_id(&server_id) {
-            return Err(refused("invalid_response"));
-        }
+        let server_id = match reply.body.get("session_id") {
+            Some(value) => Some(
+                value
+                    .as_str()
+                    .filter(|id| session::opaque_id(id))
+                    .ok_or_else(|| refused("invalid_response"))?
+                    .to_owned(),
+            ),
+            None => None,
+        };
         let id = super::pkce::random(24).ok_or_else(|| refused("unavailable"))?;
         let mut contexts: Vec<Context> = match reply.body.get("contexts") {
             Some(value) => {
@@ -266,20 +290,17 @@ impl<V: FamilyVault> Families<V> {
         {
             return Err(refused("too_many_sessions"));
         }
-        if !add {
-            for f in &set.families {
-                f.desk.sign_out();
-            }
-            set.families.clear();
+        let previous = if !add {
             set.legacy_family = None;
+            set.default_family = None;
             set.default_context = None;
-        }
-        if let Some(old) = set.families.iter().find(|f| f.metadata.family == id) {
-            old.desk.forget();
-        }
-        if set.legacy_family.as_ref() == Some(&id) {
-            set.legacy_family = None;
-            self.vault.clear();
+            std::mem::take(&mut set.families)
+        } else {
+            Vec::new()
+        };
+        drop(set);
+        for old in previous {
+            old.desk.sign_out();
         }
         let notify = self.changed.clone();
         let desk = Arc::new(Desk::new(&self.edge, self.vault.family(&id), move || {
@@ -287,11 +308,17 @@ impl<V: FamilyVault> Families<V> {
         }));
         desk.install(issued);
         let profile = desk.status();
+        let mut set = lock(&self.set);
+        if set.attempt != attempt {
+            drop(set);
+            desk.sign_out();
+            return Err(refused("cancelled"));
+        }
         set.families.retain(|f| f.metadata.family != id);
         set.families.push(Family {
             metadata: Metadata {
                 family: id.clone(),
-                session_id: Some(server_id),
+                session_id: server_id,
                 sub: profile["account"].as_str().map(str::to_owned),
                 email: profile["email"].as_str().map(str::to_owned),
                 contexts,
@@ -302,9 +329,9 @@ impl<V: FamilyVault> Families<V> {
         if !add || set.default_family.is_none() {
             set.default_family = Some(id);
         }
-        self.prune_duplicates(&mut set);
-        self.persist(&set);
         drop(set);
+        self.prune_duplicates();
+        self.persist(&lock(&self.set));
         (self.changed)();
         Ok(())
     }
@@ -347,8 +374,10 @@ impl<V: FamilyVault> Families<V> {
                         if let Some(item) = items
                             .iter()
                             .find(|i| {
-                                i["session_id"].as_str()
-                                    == metadata.session_id.as_deref().or(Some(id.as_str()))
+                                metadata
+                                    .session_id
+                                    .as_deref()
+                                    .is_some_and(|server| i["session_id"].as_str() == Some(server))
                             })
                             .or_else(|| (items.len() == 1).then(|| &items[0]))
                         {
@@ -368,7 +397,7 @@ impl<V: FamilyVault> Families<V> {
                                     .take(20)
                                     .collect();
                                 if let Some(first) = contexts.first() {
-                                    if desk
+                                    if !desk
                                         .fetch_context(
                                             "GET",
                                             "/v1/identity/me",
@@ -376,7 +405,7 @@ impl<V: FamilyVault> Families<V> {
                                             "",
                                             Some(&first.context_id),
                                         )
-                                        .is_err()
+                                        .is_ok_and(|reply| (200..300).contains(&reply.status))
                                     {
                                         continue;
                                     }
@@ -453,7 +482,9 @@ impl<V: FamilyVault> Families<V> {
             });
             self.persist(&set);
         }
-        self.prune_duplicates(&mut set);
+        drop(set);
+        self.prune_duplicates();
+        let mut set = lock(&self.set);
         if set
             .default_family
             .as_ref()
@@ -504,53 +535,56 @@ impl<V: FamilyVault> Families<V> {
         if context.is_some_and(|c| !session::opaque_id(c)) {
             return Err(refused("session_not_in_set"));
         }
-        let default = lock(&self.set).default_context.clone();
-        let desk = self.selected(None, context.or(default.as_deref()))?;
-        // Sin selector explícito se conserva el contrato del cliente viejo, sin exigir eco.
-        desk.fetch_scoped(
-            method,
-            path,
-            body,
-            key,
-            context.or(default.as_deref()),
-            context.is_some(),
-        )
+        let desk = self.selected(None, context)?;
+        desk.fetch_context(method, path, body, key, context)
     }
-    fn prune_duplicates(&self, set: &mut Set<V>) {
-        for newer in (0..set.families.len()).rev() {
-            let newest = set.families[newer].metadata.clone();
-            for older in 0..newer {
-                let old = &mut set.families[older];
-                if !same_person(&newest, &old.metadata) {
-                    continue;
-                }
-                let duplicate_ids: Vec<_> = old
-                    .metadata
-                    .contexts
-                    .iter()
-                    .filter(|c| newest.contexts.iter().any(|n| n.org == c.org))
-                    .map(|c| c.context_id.clone())
-                    .collect();
-                for id in duplicate_ids {
-                    let Some(key) = super::pkce::random(18) else {
+    fn prune_duplicates(&self) {
+        let duplicates = {
+            let set = lock(&self.set);
+            let mut duplicates = Vec::new();
+            for newer in (0..set.families.len()).rev() {
+                for old in &set.families[..newer] {
+                    let newest = &set.families[newer].metadata;
+                    if !same_person(newest, &old.metadata) {
                         continue;
-                    };
-                    if old
-                        .desk
-                        .fetch(
-                            "POST",
-                            &format!("/v1/identity/contexts/{id}/logout"),
-                            None,
-                            &key,
-                        )
-                        .is_ok_and(|reply| matches!(reply.status, 200..=299 | 404))
-                    {
-                        old.metadata.contexts.retain(|c| c.context_id != id);
-                        if set.default_context.as_ref() == Some(&id) {
-                            set.default_context = None;
-                            set.default_family = None;
+                    }
+                    for context in &old.metadata.contexts {
+                        if newest.contexts.iter().any(|c| c.org == context.org) {
+                            duplicates.push((
+                                old.metadata.family.clone(),
+                                old.desk.clone(),
+                                context.context_id.clone(),
+                            ));
                         }
                     }
+                }
+            }
+            duplicates
+        };
+        for (family, desk, id) in duplicates {
+            let Some(key) = super::pkce::random(18) else {
+                continue;
+            };
+            if desk
+                .fetch(
+                    "POST",
+                    &format!("/v1/identity/contexts/{id}/logout"),
+                    None,
+                    &key,
+                )
+                .is_ok_and(|reply| matches!(reply.status, 200..=299 | 404))
+            {
+                let mut set = lock(&self.set);
+                if let Some(old) = set
+                    .families
+                    .iter_mut()
+                    .find(|f| f.metadata.family == family)
+                {
+                    old.metadata.contexts.retain(|c| c.context_id != id);
+                }
+                if set.default_context.as_ref() == Some(&id) {
+                    set.default_context = None;
+                    set.default_family = None;
                 }
             }
         }
@@ -591,77 +625,78 @@ impl<V: FamilyVault> Families<V> {
             if !session::opaque_id(id) {
                 return Err(refused("session_not_in_set"));
             }
-            let mut set = lock(&self.set);
-            let Some(anchor) = set
-                .families
-                .iter()
-                .find(|f| f.metadata.family == id)
-                .map(|f| f.metadata.clone())
-            else {
-                return Ok(());
-            };
-            let ids: Vec<_> = set
-                .families
-                .iter()
-                .filter(|f| same_person(&anchor, &f.metadata) || f.metadata.family == id)
-                .map(|f| f.metadata.family.clone())
-                .collect();
-            let mut failure = None;
-            for local in ids {
-                let Some(f) = set.families.iter().find(|f| f.metadata.family == local) else {
-                    continue;
+            let selected = {
+                let set = lock(&self.set);
+                let Some(anchor) = set.families.iter().find(|f| f.metadata.family == id) else {
+                    return Ok(());
                 };
-                let server_id = f
-                    .metadata
-                    .session_id
-                    .as_deref()
-                    .unwrap_or(&f.metadata.family);
-                let reply = f.desk.fetch(
-                    "POST",
-                    &format!("/v1/identity/sessions/{server_id}/logout"),
-                    None,
-                    &format!("{key}-{local}"),
-                );
-                match reply {
-                    Ok(reply) if matches!(reply.status, 200..=299 | 404) => {}
-                    Ok(reply) => {
+                set.families
+                    .iter()
+                    .filter(|f| {
+                        same_person(&anchor.metadata, &f.metadata) || f.metadata.family == id
+                    })
+                    .map(|f| (f.metadata.clone(), f.desk.clone()))
+                    .collect::<Vec<_>>()
+            };
+            let mut failure = None;
+            for (metadata, desk) in selected {
+                let result = match metadata.session_id.as_deref() {
+                    Some(server) => desk
+                        .fetch(
+                            "POST",
+                            &format!("/v1/identity/sessions/{server}/logout"),
+                            None,
+                            &format!("{key}-{}", metadata.family),
+                        )
+                        .map(|reply| (reply.status, Some(reply))),
+                    None => Ok((404, None)),
+                };
+                match result {
+                    Ok((404 | 501, _)) => {
+                        desk.sign_out();
+                    }
+                    Ok((200..=299, _)) | Err(Fail::NoSession) => desk.forget(),
+                    Ok((_, Some(reply))) => {
                         failure = Some(session::failure(&reply, "request_failed"));
                         continue;
                     }
-                    Err(Fail::NoSession) => {}
                     Err(error) => {
                         failure = Some(error);
                         continue;
                     }
+                    _ => continue,
                 }
-                f.desk.forget();
-                set.families.retain(|f| f.metadata.family != local);
-                if set.legacy_family.as_ref() == Some(&local) {
+                let mut set = lock(&self.set);
+                set.families
+                    .retain(|f| f.metadata.family != metadata.family);
+                if set.legacy_family.as_ref() == Some(&metadata.family) {
                     set.legacy_family = None;
                 }
-                if set.default_family.as_ref() == Some(&local) {
+                if set.default_family.as_ref() == Some(&metadata.family) {
                     set.default_family = None;
                     set.default_context = None;
                 }
+                self.persist(&set);
             }
-            self.persist(&set);
             if let Some(error) = failure {
-                drop(set);
                 (self.changed)();
                 return Err(error);
             }
         } else {
-            let mut set = lock(&self.set);
-            set.attempt += 1;
-            for f in &set.families {
+            let previous = {
+                let mut set = lock(&self.set);
+                set.attempt += 1;
+                set.legacy_family = None;
+                set.default_family = None;
+                set.default_context = None;
+                let previous = std::mem::take(&mut set.families);
+                self.persist(&set);
+                previous
+            };
+            for f in previous {
                 f.desk.sign_out();
             }
-            set.families.clear();
-            set.legacy_family = None;
-            set.default_family = None;
-            set.default_context = None;
             self.vault.clear();
-            self.persist(&set);
         }
         (self.changed)();
         Ok(())
@@ -669,12 +704,8 @@ impl<V: FamilyVault> Families<V> {
 }
 
 fn same_person(a: &Metadata, b: &Metadata) -> bool {
-    match (&a.sub, &b.sub) {
-        (Some(a), Some(b)) => a == b,
-        _ => a
-            .email
-            .as_ref()
-            .zip(b.email.as_ref())
-            .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b)),
-    }
+    a.sub
+        .as_deref()
+        .zip(b.sub.as_deref())
+        .is_some_and(|(a, b)| !a.is_empty() && a == b)
 }

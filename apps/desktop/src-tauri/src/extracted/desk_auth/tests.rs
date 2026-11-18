@@ -1155,3 +1155,23 @@ fn old_exchange_cannot_replace_new_login() {
 
 #[path = "family_tests.rs"]
 mod family_tests;
+
+#[test]
+fn loopback_accepts_a_callback_split_across_tcp_reads() {
+    let pkce = Pkce::open().unwrap();
+    let port = pkce.port;
+    let state = pkce.state.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let sender = std::thread::spawn(move || {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.write_all(b"GET /callback?code=").unwrap();
+        ready_tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(30));
+        let _ =
+            stream.write_all(format!("abc&state={state} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes());
+    });
+    ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let returned = pkce.poll().unwrap();
+    sender.join().unwrap();
+    assert_eq!(returned, Some(Returned::Code("abc".into())));
+}
