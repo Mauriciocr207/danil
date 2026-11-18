@@ -185,3 +185,61 @@ for (const startedOnSession of [false, true]) test(`adoption keeps the active dr
   const next = message("next output"); model.observe("A", "s", [], [next]); model.finish("A", "s");
   assert.equal(model.project("A", "s", [...visible, next]).some(activity => activity.active), false);
 });
+
+for (const deferred of [false, true]) test(`recovered active activity stays between accepted input and saved response (${deferred ? "deferred history" : "snapshot"})`, () => {
+  const model = createActivityProjection();
+  const user = message("hola", { role: "user", turno: "u", clave: "u:0" });
+  const answer = message("saved response", { turno: "a", clave: "a:0" });
+  model.begin("A", "s", null, deferred ? null : [user, answer]);
+  if (deferred) model.reconcile("A", "s", [], [user, answer], false);
+  const activity = model.project("A", "s", [user, answer])[0];
+  assert.equal(activity.anchor, answer); assert.equal(activity.anchorIndex, 1);
+  assert.deepEqual(activity.messages, [], "placement does not invent history ownership");
+  assert.equal(activity.active, true);
+});
+
+test("accepted new input replaces the historical input boundary before its output arrives", () => {
+  const model = createActivityProjection();
+  const oldUser = message("old input", { role: "user", turno: "old-user", clave: "old-user:0" });
+  const oldAnswer = message("old response", { turno: "old-answer", clave: "old-answer:0" });
+  model.begin("A", "s", 1_000, [oldUser, oldAnswer]);
+  const user = message("new input", { role: "user" });
+  model.observe("A", "s", [oldUser, oldAnswer], [oldUser, oldAnswer, user]);
+  assert.equal(model.project("A", "s", [oldUser, oldAnswer, user])[0].anchorIndex, 3);
+  const savedAnswer = message("saved before live output", { turno: "answer", clave: "answer:0" });
+  model.reconcile("A", "s", [], [oldUser, oldAnswer, user, savedAnswer], false);
+  const output = message("late live output");
+  model.observe("A", "s", [], [output]);
+  const activity = model.project("A", "s", [oldUser, oldAnswer, user, savedAnswer, output])[0];
+  assert.equal(activity.anchor, savedAnswer); assert.equal(activity.anchorIndex, 3);
+  assert.deepEqual(activity.messages, [user, output]);
+});
+
+test("prepending history and replacing user objects preserve the captured boundary identity", () => {
+  const model = createActivityProjection();
+  const user = message("hola", { role: "user", turno: "u", clave: "u:0" });
+  const answer = message("saved response", { turno: "a", clave: "a:0" });
+  model.begin("A", "s", null, [user, answer]);
+  const older = message("older input", { role: "user", turno: "older", clave: "older:0" });
+  const restoredUser = { ...user }, restoredAnswer = { ...answer };
+  model.reconcile("A", "s", [user, answer], [older, restoredUser, restoredAnswer], false);
+  const activity = model.project("A", "s", [older, restoredUser, restoredAnswer])[0];
+  assert.equal(activity.anchor, restoredAnswer); assert.equal(activity.anchorIndex, 2);
+  assert.deepEqual(activity.messages, []);
+  model.finish("A", "s");
+  assert.deepEqual(model.project("A", "s", [older, restoredUser, restoredAnswer]), []);
+});
+
+test("adoption preserves the accepted draft input anchor ahead of recovered response", () => {
+  const model = createActivityProjection();
+  const older = message("older", { turno: "older", clave: "older:0" });
+  model.begin("A", "s", 1_000, []); model.observe("A", "s", [], [older]); model.finish("A", "s");
+  model.begin("A", "", 2_000, []);
+  const user = message("accepted", { role: "user" }); model.observe("A", "", [], [user]);
+  model.adopt("A", "", "s");
+  const answer = message("recovered answer", { turno: "answer", clave: "answer:0" });
+  model.reconcile("A", "s", [], [older, user, answer], false);
+  const active = model.project("A", "s", [older, user, answer]).find(activity => activity.active)!;
+  assert.equal(active.anchor, answer); assert.equal(active.anchorIndex, 2);
+  assert.deepEqual(active.messages, [user]);
+});
