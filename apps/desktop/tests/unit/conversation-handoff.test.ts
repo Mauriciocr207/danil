@@ -96,8 +96,8 @@ for (const order of ["terminal-first", "ack-first"] as const) test(`the real que
   else { f.stopAck(); await pending; assert.equal(f.sends(), 0); f.terminal(); }
   assert.equal(f.sends(), 1); assert.equal(f.handoff.view(scope).pending?.phase, "submitting");
   assert.deepEqual(f.handoff.presentation(scope), { phase: "submitting" });
-  f.handoff.observe({ kind: "terminal", scope }); assert.equal(f.sends(), 1);
-  f.handoff.observe({ kind: "accepted", scope }); assert.equal(f.handoff.view(scope).pending?.phase, "awaiting-start"); f.dispose();
+  f.handoff.observe({ kind: "accepted", scope }); assert.equal(f.handoff.view(scope).pending?.phase, "awaiting-start");
+  f.handoff.observe({ kind: "terminal", scope }); assert.equal(f.sends(), 1); assert.equal(f.handoff.view(scope).pending, null); f.dispose();
 });
 test("a rejected stop preserves the original object in the real queue through a natural close", async () => {
   const f = integrated(); await f.queue.openSession("s", "p");
@@ -162,4 +162,14 @@ test("stop then a newly typed queued input shares the original RPC barrier in th
   assert.equal(f.queue.items()[0], original); assert.equal(f.sends(), 0);
   assert.equal((f.handoff.presentation(scope) as { pendingMessage: unknown }).pendingMessage, original);
   f.stopAck(); await Promise.all([stopping, replacement]); assert.equal(f.sends(), 1); f.dispose();
+});
+
+for (const phase of ["submitting", "awaiting-start"] as const) test(`an authoritative terminal before started retires ${phase} without resending the consumed queue item`, async () => {
+  const f = fixture(); f.idle(); await f.handoff.replaceWithQueued(scope, "one");
+  f.handoff.observe({ kind: "dispatching", scope, itemIds: ["one"] });
+  if (phase === "awaiting-start") f.handoff.observe({ kind: "accepted", scope });
+  f.handoff.observe({ kind: "terminal", scope });
+  assert.equal(f.handoff.view(scope).pending, null); assert.equal(f.handoff.blocked(scope), false);
+  assert.deepEqual(f.released, ["one"]); f.handoff.observe({ kind: "accepted", scope });
+  assert.equal(f.handoff.presentation(scope), null); f.dispose();
 });

@@ -101,6 +101,7 @@ export function createConversationHandoff(deps: Dependencies) {
     const entry = entries.get(key(fact.scope));
     if (!entry) return;
     if (fact.kind === "terminal" && entry.kind === "cancelling") { entry.terminal = "observed"; settle(entry); }
+    else if (fact.kind === "terminal" && (entry.kind === "submitting" || entry.kind === "awaiting-start")) { entries.delete(key(entry.scope)); publish(); }
     else if (fact.kind === "dispatching" && entry.kind === "ready" && fact.itemIds.includes(entry.queueItemId)) {
       entries.set(key(entry.scope), { kind: "submitting", scope: entry.scope, queueItemId: entry.queueItemId, error: null }); publish();
     } else if (fact.kind === "accepted" && entry.kind === "submitting") {
