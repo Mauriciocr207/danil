@@ -403,12 +403,12 @@ export class Fleet {
     // Lo que una máquina contestó en `list_workspaces` manda; las hijas son de todos.
     const lists = (id: string) => !!this.listings.get(id)?.some((w) => w.id === workspace);
     const listed = order.filter((id) => lists(id) || this.info(id)?.child === true);
-    if (order.some(lists)) return listed;
+    const registered = this.registry?.find(row => row.id === workspace);
+    if (order.some(lists)) return order.filter(id => listed.includes(id) || (!this.listings.has(id) && (registered?.computers.includes(id) ?? false)));
     // Una máquina de organización cuya lista ya se conoce no toma lo que no lista.
     const known = (id: string) => this.info(id)?.kind === "organization" && this.listings.has(id);
     if (this.registry) {
-      const w = this.registry.find((x) => x.id === workspace);
-      return order.filter((id) => !known(id) && ((w?.computers.includes(id) ?? false) || this.info(id)?.child === true || (this.info(id)?.linked?.has(workspace) ?? false)));
+      return order.filter((id) => !known(id) && ((registered?.computers.includes(id) ?? false) || this.info(id)?.child === true || (this.info(id)?.linked?.has(workspace) ?? false)));
     }
     return order.filter((id) => {
       const linked = this.info(id)?.linked ?? null;

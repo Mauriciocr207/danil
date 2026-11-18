@@ -457,3 +457,22 @@ test("an unavailable member makes the aggregate unknown instead of an incomplete
   mac.setState("offline");
   await assert.rejects(router.handle("list_active_turns", { workspace: "w" })); router.close();
 });
+
+test("execution authority retains an unknown registered member until that member's own listing settles", async () => {
+  const vm = fakeLink({ list_active_turns: ["running-on-cold-vm"] });
+  const mac = fakeLink({ list_workspaces: { workspaces: [{ id: "w" }], active: "w" }, list_active_turns: [] });
+  let finish!: (answer: { value: unknown; cached: null }) => void;
+  const call = vm.call;
+  vm.call = (id, command, workspace, folder, args, timeout) => command === "list_workspaces"
+    ? new Promise(resolve => { finish = resolve; }) : call(id, command, workspace, folder, args, timeout);
+  const { router, fleet } = web({ cmp_vm: vm, cmp_mac: mac });
+  try {
+    await router.handle("list_workspaces");
+    assert.deepEqual(fleet.membersOf("w"), ["cmp_vm", "cmp_mac"]);
+    assert.deepEqual(await router.handle("list_active_turns", { workspace: "w" }), ["cmp_vm~running-on-cold-vm"]);
+    const settled = fleet.read({ machine: "cmp_vm", workspace: null, command: "list_workspaces", args: {} });
+    finish({ value: { workspaces: [{ id: "other" }], active: "other" }, cached: null }); await settled;
+    assert.deepEqual(fleet.membersOf("w"), ["cmp_mac"], "a known negative listing overrides registry membership");
+    assert.deepEqual(await router.handle("list_active_turns", { workspace: "w" }), []);
+  } finally { router.close(); }
+});
