@@ -3777,7 +3777,7 @@ function RegistroDeTrabajo(props: {
 function RespuestasDeAvance(props: { avance: Avance[]; visualBudget: VisualBudget; visualScope?: string; readVisual?: (file: string) => Promise<string>; openVisual?: (file: string) => Promise<void> }) {
   return <Index each={props.avance.filter(chunk => chunk.outside)}>{(chunk) => <>
     <Show when={textoVisible(chunk().msg.text)}>{(text) => <TextoConSiguientes texto={text()} vivo={false} rapida={null} readVisual={props.readVisual} openVisual={props.openVisual} owner={props.visualScope ?? ""} visualBudget={props.visualBudget} />}</Show>
-    <Show when={chunk().msg.historyRefs?.length}><HistoryDetails refs={chunk().msg.historyRefs!} turnId={chunk().msg.turno} /></Show>
+    <Show when={chunk().msg.historyRefs?.length}><HistoryDetails refs={chunk().msg.historyRefs!} turnId={chunk().msg.turno} renderText={(text) => <TextoConSiguientes texto={text} vivo={false} rapida={null} readVisual={props.readVisual} openVisual={props.openVisual} owner={props.visualScope ?? ""} visualBudget={props.visualBudget} />} /></Show>
     <Show when={chunk().msg.images?.length ? chunk().msg.images : null}>{(images) => <ImagenesEntregadas items={images()} />}</Show>
   </>}</Index>;
 }
@@ -3886,7 +3886,7 @@ function TrabajoDeAgente(props: {
       </Show>
 
       </div>
-      <Show when={props.msg.historyRefs?.length}><HistoryDetails refs={props.msg.historyRefs!} turnId={props.msg.turno} /></Show>
+      <Show when={props.msg.historyRefs?.length}><HistoryDetails refs={props.msg.historyRefs!} turnId={props.msg.turno} renderText={(text) => <TextoConSiguientes texto={text} vivo={props.vivo} rapida={props.rapida} readVisual={props.readVisual} openVisual={props.openVisual} owner={props.visualScope ?? ""} visualBudget={props.visualBudget} />} /></Show>
       <Show when={props.msg.images?.length ? props.msg.images : null}>
         {(images) => <ImagenesEntregadas items={images()} />}
       </Show>
