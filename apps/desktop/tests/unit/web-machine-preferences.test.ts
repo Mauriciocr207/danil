@@ -48,3 +48,25 @@ test('the last picked projects follow the person on the web', () => {
     } finally { setCapabilities(original); dispose(); }
   });
 });
+
+test('the projects hidden from the picker follow the person on the web', () => {
+  const values = new Map<string, string>();
+  Object.assign(globalThis, { localStorage: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) } });
+  const original = capabilities();
+  const person = (id: string) => setCapabilities({ ...original, nativeWindow: false, webAccounts: {
+    current: { user_id: id, email: null, name: null, extra: false }, others: () => [], open: () => {}, add: () => {}, remove: async () => {}, signOut: () => {},
+  } });
+  createRoot(dispose => {
+    try {
+      const [read, write] = createPref<Record<string, string[]>>('projects.hidden', {});
+      person('user_A');
+      write({ w: ['p1'] });
+      assert.equal(values.get('danil.web.user_A.preferences.projects.hidden'), '{"w":["p1"]}');
+      assert.equal(values.has('harness.layout.projects.hidden'), false, 'not shared by the browser');
+      person('user_B');
+      assert.deepEqual(read(), {});
+      person('user_A');
+      assert.deepEqual(read(), { w: ['p1'] });
+    } finally { setCapabilities(original); dispose(); }
+  });
+});

@@ -72,7 +72,6 @@ import TaskFilesRow, { taskFilesWidth } from "../features/code/TaskFilesRow";
 import { TaskSide, TaskSideShell } from "../features/code/TaskSide";
 import { moviendoHueco } from "../lib/sites";
 const DeleteTaskDialog = lazy(() => import("../features/projects/DeleteTaskDialog"));
-const DanilWorkspaceStep = lazy(() => import("../features/shell/DanilWorkspaceStep"));
 const HandoverDialog = lazy(() => import("../features/chat/HandoverDialog"));
 const TaskFilesCard = lazy(() => import("../features/code/TaskFiles"));
 import { createTaskFiles, type TaskSideMode } from "../lib/taskFiles";
@@ -99,7 +98,7 @@ import { createdTasks } from "../features/projects/agentPageFilters";
 import BaseBranchPicker from "../features/projects/BaseBranchPicker";
 import { watchHandlerStatus, watchHandlerStatuses } from "../features/projects/handlerPresence";
 import { EmptyContext, ProjectPicker } from "../features/projects/Projects";
-import { activityByProject, type PickedAt, rememberPick } from "../features/projects";
+import { activeTaskCounts, activityByProject, type HiddenProjects, hiddenIn, type PickedAt, picksIn, rememberPick, setHidden, storedPicks, taskCountOf } from "../features/projects";
 import { bringHereLabel, canBringHere, carryOrigin, machineName, machineOf, machineWakes, machines, refetchMachines, remoteChildScope, runOn, senderTaskId, setRunOn, setTaskRowMachine } from "../features/machines/store";
 import { canonicalAgentId, isFreeRouterModel, lastActivity, launcherOf, OPENCODE, withRemoteLaunchers } from "@terminus/tasks";
 import type { CarriedBase, CarryCheck } from "../features/machines/carry";
@@ -159,7 +158,6 @@ import { createUsage } from "../features/shell/usage";
 import AvisoDeVersion from "../features/shell/VersionNotice";
 import CloseGuard from "../features/shell/CloseGuard";
 import WorkspaceColumn from "../features/shell/WorkspaceColumn";
-import { signedInCount } from "../features/shell/workspace-directory";
 import Sitio from "../features/sites/Site";
 import { VELO_DE_FONDO } from "../lib/chat-background";
 import { fondoDeChat, fondoPropio, imagenDelWorkspace, veloDeFondo } from "../lib/chat-background-store";
@@ -453,12 +451,24 @@ export default function App() {
   // Lo que ordena el selector de proyectos: sus tareas vivas y la última vez que se eligió, por workspace.
   const actividadDeProyectos = createMemo(() => activityByProject(sesiones(), lastActivity));
   const [proyectosElegidos, setProyectosElegidos] = createPref<Record<string, PickedAt>>("projects.last_picked", {});
-  const elegidosAqui = () => proyectosElegidos()[workspaceActivo() ?? ""] ?? {};
+  // Lo guardado puede venir de otra versión o estar roto: se lee con tolerancia.
+  const elegidosAqui = () => picksIn(proyectosElegidos(), workspaceActivo() ?? "");
   function recordarEleccion(id: string) {
     const workspace = workspaceActivo();
     if (!workspace || !id) return;
     const existentes = new Set([...projectList(), ...composerProjects()].map((p) => p.id));
-    setProyectosElegidos({ ...proyectosElegidos(), [workspace]: rememberPick(elegidosAqui(), id, Date.now(), existentes) });
+    setProyectosElegidos({ ...storedPicks(proyectosElegidos()), [workspace]: rememberPick(elegidosAqui(), id, Date.now(), existentes) });
+  }
+  // Las tareas activas que la ventana ya cargó: el `sessions` del motor cuenta también las archivadas.
+  const tareasActivas = createMemo(() => activeTaskCounts(sesiones()));
+  // Apartados del selector, por workspace. Solo el selector los mira: ni el riel ni las tareas cambian.
+  const [proyectosOcultos, setProyectosOcultos] = createPref<HiddenProjects>("projects.hidden", {});
+  const ocultosAqui = createMemo(() => hiddenIn(proyectosOcultos(), workspaceActivo()));
+  function ocultarDelSelector(id: string, ocultar: boolean) {
+    const workspace = workspaceActivo();
+    if (!workspace || !id) return;
+    const existentes = [...projectList(), ...composerProjects()].map((p) => p.id);
+    setProyectosOcultos(setHidden(proyectosOcultos(), workspace, id, ocultar, existentes));
   }
   /**
    * Las tareas que la pantalla ya pinta y Rust todavía no ha escrito.
@@ -808,10 +818,11 @@ export default function App() {
     ),
   );
   /** El panel conserva workspace y conversación; el título pertenece a la tira. */
-  const tareasEnVentanas = createMemo<(Pick<TaskTab, "id" | "session" | "project"> & { workspace: string | null })[]>((previous) =>
-    conservar(previous ?? [], pestanas.open().filter(isTaskTab).map(({ id, session, project }) =>
-      ({ id, session, project, workspace: workspaceActivo() })), (p) => p.id),
+  const tareasEnVentanas = createMemo<(Pick<TaskTab, "id" | "session"> & { workspace: string | null })[]>((previous) =>
+    conservar(previous ?? [], pestanas.open().filter(isTaskTab).map(({ id, session }) =>
+      ({ id, session, workspace: workspaceActivo() })), (p) => p.id),
   );
+  const proyectoDePestana = (id: string) => pestanas.open().find(tab => tab.id === id)?.project ?? "";
   /** Las tareas con pestaña: la lista viva las trae aunque estén archivadas. */
   const sesionesConPestana = createMemo(
     () =>
@@ -1131,7 +1142,7 @@ export default function App() {
   });
   onCleanup(threads.dispose);
   const hilos = threads.rows, hiloAbierto = threads.current, msgs = threads.messages, cargandoHilo = threads.loading;
-  const origenes = threads.origins, apagadas = threads.offline, encendiendo = threads.waking, traspasos = threads.handovers;
+  const origenes = threads.origins, apagadas = threads.offline, machineWaits = threads.machineWaits, traspasos = threads.handovers;
   const conAntiguos = threads.olderAvailable, conRecientes = threads.recentAvailable, estadoAntiguos = threads.olderStatus, colaSuelta = threads.recentTail;
   const leerTarea = threads.read, cargarAntiguos = threads.older, soltarHilo = threads.drop;
   function avisar(sesion: string) {
@@ -1143,14 +1154,13 @@ export default function App() {
     if (id === sessionId() && (session.subagent || session.parent)) composer.useProfile({ model: modeloDeSubtarea(session), effort: session.effort });
   }
   /**
-   * La máquina que se enciende para el mensaje que la tarea de esta celda acaba
-   * de mandar. Una tarea que nace aún no tiene id: su pestaña provisional, o el
-   * borrador, es la que se mira.
+   * El destino que demora el envío. Si la tarea aún no tiene id,
+   * la espera se muestra en su pestaña provisional o en el borrador.
    */
-  const encendiendoEn = (sesion: string | null | undefined) => {
+  const esperaMaquinaEn = (sesion: string | null | undefined) => {
     const id = sesion ?? (sessionId() ? null : pestanas.active());
-    const machine = (id ? encendiendo()[id] : undefined) ?? (sesion || sessionId() ? undefined : encendiendo()[claveAbierta()]);
-    return machine ? { name: machineName(machine), wakes: machineWakes(machine) } : null;
+    const wait = (id ? machineWaits()[id] : undefined) ?? (sesion || sessionId() ? undefined : machineWaits()[claveAbierta()]);
+    return wait ? { phase: wait.phase, name: machineName(wait.machine), wakes: machineWakes(wait.machine) } : null;
   };
   // Encendida por otra vía (otra ventana, otra acción), la tarea se vuelve a leer de su motor.
   createEffect(on(() => {
@@ -1229,7 +1239,7 @@ export default function App() {
     const id = sessionId();
     return id ? vivas().includes(id) : arrancando();
   };
-  const marcarViva = (id: string, desde = Date.now()) =>
+  const marcarViva = (id: string, desde?: number) =>
     batch(() => {
       const workspace = workspaceActivo();
       if (workspace) liveThreads.add(liveThreadKey(workspace, id));
@@ -1237,13 +1247,15 @@ export default function App() {
       // Otro turno: el `done` que llegue ya no es del que cerró sin desenlace.
       sinDesenlace.delete(id);
       setVivas((v) => (v.includes(id) ? v : [...v, id]));
-      setDesdeDeTurno((d) => (id in d ? d : { ...d, [id]: desde }));
+      setDesdeDeTurno((d) => (id in d || desde === undefined ? d : { ...d, [id]: desde }));
+      threads.beginActivity(id, desdeDeTurno()[id] ?? null);
     });
   const marcarQuieta = (id: string) =>
     batch(() => {
       const workspace = workspaceActivo();
       if (workspace) liveThreads.delete(liveThreadKey(workspace, id));
       enviarFiltro();
+      threads.finishActivity(id);
       setVivas((v) => v.filter((x) => x !== id));
       setDesdeDeTurno((d) => {
         if (!(id in d)) return d;
@@ -2424,6 +2436,7 @@ export default function App() {
       // marcada como viva para siempre, con su caja en «Detener» y sin nada
       // corriendo detrás.
       if (kind === "done") {
+        threads.finishActivity(session, workspace || workspaceActivo());
         setEnFondo((ids) => ids.filter((id) => id !== session));
         if (!esDelWorkspaceAbierto(workspace)) {
           advanceTurn(session);
@@ -3739,6 +3752,9 @@ export default function App() {
     get onRemoveFromSpace() {
       return multipleSpaces() ? removeFromActiveSpace : undefined;
     },
+    activeTasks: (id) => taskCountOf({ id, sessions: 0 }, tareasActivas()),
+    hiddenInPicker: (id) => ocultosAqui().has(id),
+    onSetHiddenInPicker: (id, hide) => ocultarDelSelector(id, hide),
     onOpenMaterial: (id) => {
       cerrarAjustes();
       setMaterialPedido(id);
@@ -5036,8 +5052,8 @@ export default function App() {
     const selectedBase = draftBases()[claveBorrador] ?? null;
     const pendientes = destination ? drafts.peek(claveBorrador)?.sourceIds ?? [] : sourceIds();
     const excluidas = destination ? drafts.peek(claveBorrador)?.excludedSourceIds ?? [] : excludedSourceIds();
-    if (abierta) marcarViva(abierta);
-    else setArrancando(true);
+    if (abierta) marcarViva(abierta, Date.now());
+    else { threads.beginActivity("", Date.now()); setArrancando(true); }
     // Conversar es editar: la pestaña de la tarea deja de ser vista.
     if (abierta) pestanas.pin(abierta);
     // La tarea se pinta antes de que Rust la cree. Lo que la retrasaba no era
@@ -5088,11 +5104,11 @@ export default function App() {
     // Mandar a una tarea de una máquina apagada la enciende: el proxy espera a que
     // conteste y entrega una sola vez.
     const dormida = abierta ? apagadas()[abierta] ?? null : null;
-    if (abierta && dormida) threads.markWaking(abierta, dormida);
+    if (abierta && dormida) threads.markMachineWait(abierta, { machine: dormida, phase: "waking" });
     // Y crear en la elegida en «Ejecutar en» si está apagada: el aviso cuelga de la pestaña que nace.
     const destino = creationOptions?.headers["x-terminus-machine"] ?? null;
     const naceDormida = destino && machines().find((x) => x.id === destino)?.on === false ? destino : null;
-    if (provisional && naceDormida) threads.markWaking(provisional, naceDormida);
+    if (provisional && naceDormida) threads.markMachineWait(provisional, { machine: naceDormida, phase: "waking" });
     try {
       const llevado = llevar ? await llevar(claveBorrador) : null;
       if (llevar && !llevado) throw CARRY_STOPPED;
@@ -5168,7 +5184,17 @@ export default function App() {
         command: m.text.trimStart().startsWith("!"),
         setProvider: (provider) =>
           invoke("set_session_provider", { project: proyecto, session: abierta ?? "", provider }, opcionesDeLaTarea(abierta, workspaceActivo())),
-        send: mandarTurno,
+        send: () => {
+          const target = opciones?.headers?.["x-terminus-machine"];
+          const machine = target ? machines().find((row) => row.id === target) : undefined;
+          if (dormida || naceDormida || !machine || machine.local || !machine.on || machine.connection !== "unknown") return mandarTurno();
+          const waitingId = abierta ?? provisional ?? claveBorrador;
+          const wait = { machine: machine.id, phase: "connecting" } as const;
+          threads.markMachineWait(waitingId, wait);
+          return mandarTurno().finally(() => {
+            if (machineWaits()[waitingId] === wait) threads.markMachineWait(waitingId, null);
+          });
+        },
       });
       const id = traspaso.answer;
       threads.acknowledgeOptimistic(clave, [...entrando, turnoPropio]);
@@ -5178,11 +5204,11 @@ export default function App() {
         drafts.handover(null, claveBorrador);
       }
       if (provisional && naceDormida) {
-        threads.markWaking(provisional, null);
+        threads.markMachineWait(provisional, null);
         void refetchMachines();
       }
       if (abierta && dormida) {
-        threads.markWaking(abierta, null);
+        threads.markMachineWait(abierta, null);
         threads.markAwake(abierta);
         void refreshSessions(grupos());
         void leerTarea(proyecto, abierta)
@@ -5210,7 +5236,7 @@ export default function App() {
           threads.reviseOptimistic(id, turnoPropio, { author: signature?.person ?? null });
         }
       });
-      if (!abierta) setArrancando(false);
+      if (!abierta) { threads.finishActivity(""); setArrancando(false); }
       // Las fuentes de este mensaje salen del borrador; las de otro
       // que siga esperando, no. Va por id: da igual qué se esté mirando.
       drafts.sentSources(id, pendientes);
@@ -5238,8 +5264,8 @@ export default function App() {
       if (finishedTurns.has(id)) void settleTurn(id, finishedTurns.get(id));
       return true;
     } catch (e) {
-      if (abierta && dormida) threads.markWaking(abierta, null);
-      if (provisional && naceDormida) threads.markWaking(provisional, null);
+      if (abierta && dormida) threads.markMachineWait(abierta, null);
+      if (provisional && naceDormida) threads.markMachineWait(provisional, null);
       // Sin esto queda una tarea que nadie creó: la fila y la pestaña se
       // pintaron contando con que Rust aceptara el turno.
       if (provisional) {
@@ -5263,7 +5289,7 @@ export default function App() {
         return true;
       }
       if (abierta === sessionId()) taskQueues.retain("fallo");
-      if (!abierta) setArrancando(false);
+      if (!abierta) { threads.finishActivity(""); setArrancando(false); }
       if (abierta) marcarQuieta(abierta);
       threads.appendLive(clave, [{
                   role: "system",
@@ -5919,6 +5945,9 @@ export default function App() {
           sources={sources()}
           activity={actividadDeProyectos()}
           picked={elegidosAqui()}
+          hidden={ocultosAqui()}
+          onShow={(id) => ocultarDelSelector(id, false)}
+          taskCounts={tareasActivas()}
           onPick={(id) => {
             recordarEleccion(id);
             elegirProyecto(id);
@@ -6443,6 +6472,7 @@ export default function App() {
           </Show>
         </>}
         machine={pp.sesion ? filaDe(pp.sesion)?.machine : undefined}
+        activities={threads.activities(pp.sesion ?? "", mensajes())}
         msgs={mensajes()}
         /* Identidad de lo que tiene delante, no ids de proyecto/tarea: es lo
            único con lo que distingue «entró un mensaje» de «otra
@@ -6593,7 +6623,7 @@ export default function App() {
           reintento()?.session === pp.sesion ? reintento() : null
         }
         enFondo={enFondo().includes(pp.sesion ?? "")}
-        encendiendo={encendiendoEn(pp.sesion)}
+        machineWait={esperaMaquinaEn(pp.sesion)}
         inicioDelTurno={desdeDeTurno()[pp.sesion ?? ""] ?? null}
         terminal={terminales()[pp.sesion ?? ""] ?? null}
         carpetaDeTerminal={carpetasDeTerminal()[pp.sesion ?? ""] ?? null}
@@ -7065,7 +7095,7 @@ export default function App() {
               <Show when={montadas().has(p.id)}>
                 <PanelDeChat
                   sesion={p.session}
-                  proyecto={p.project}
+                  proyecto={proyectoDePestana(p.id)}
                   soloLectura={!manda()}
                 />
               </Show>
@@ -7103,11 +7133,11 @@ export default function App() {
                   }}
                   delegated={() => delegatedPanels().get(`${workspaceActivo()}/${p.session}`)?.()} />}>
                   <Suspense fallback={null}>
-                    <TaskFilesCard project={p.project} session={p.session} files={archivosDeTarea}
+                    <TaskFilesCard project={proyectoDePestana(p.id)} session={p.session} files={archivosDeTarea}
                       visible={visible()} readOnly={editorDeletionLocked(p.session)}
                       expandedOnly={paneles.isSplit() || compacta()}
                       onSaved={() => window.dispatchEvent(new CustomEvent("harness:copia"))}
-                      onExportChat={() => exportarChat(p.session, p.project)}
+                      onExportChat={() => exportarChat(p.session, proyectoDePestana(p.id))}
                       onMoved={archivoMovido} onRemoved={archivoBorrado} />
                   </Suspense>
                 </TaskSideShell>
@@ -7627,12 +7657,6 @@ export default function App() {
           onOpenFolder={abrirProyecto}
           onNewTask={(id) => nuevaSesion(id)}
         />
-        {/* Con la sesión de la ventana recién abierta, la hoja para sincronizar el workspace abierto. */}
-        <Show when={capabilities().workspaceDirectory?.onSession && signedInCount() > 0}>
-          <Suspense fallback={null}>
-            <DanilWorkspaceStep />
-          </Suspense>
-        </Show>
         {/* El velo del marco cubre la columna y el hueco alrededor de la caja: un solo tono también en la esquina. */}
         <div class="tab-veil window-frame relative flex min-h-0 flex-1 overflow-visible">
           <WorkspaceColumn

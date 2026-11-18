@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { bareCommand, commandProgram, commandSummary } from "../src/command.ts";
+import { bareCommand, commandMarkProgram, commandProgram, commandSummary } from "../src/command.ts";
 
 const summary = (command: string) => commandSummary(command);
 const program = (command: string) => commandProgram(command);
@@ -64,4 +64,29 @@ test("un comando largo se corta por palabra, no a media palabra", () => {
   assert.ok(texto.length <= 64, texto);
   assert.ok(texto.endsWith("…"), texto);
   assert.ok(!/\s…$/.test(texto), texto);
+});
+
+test("el CLI de Danil se lee danil en la fila y el comando real no cambia", () => {
+  assert.equal(summary('"$DANIL_CLI" task show qx1q8d3m --json'), "danil task show qx1q8d3m --json");
+  assert.equal(summary("${DANIL_CLI} task list"), "danil task list");
+  assert.equal(summary('cd /repo && "$TERMINUS_CLI" guide'), "danil guide");
+  assert.equal(summary("bash -lc '\"$DANIL_CLI\" task list --json'"), "danil task list --json");
+  assert.equal(bareCommand('"$DANIL_CLI" task show qx1q8d3m --json'), '"$DANIL_CLI" task show qx1q8d3m --json');
+  assert.equal(bareCommand("bash -lc '\"$DANIL_CLI\" task list --json'"), '"$DANIL_CLI" task list --json');
+  assert.equal(program('"$DANIL_CLI" task show x'), "$DANIL_CLI");
+});
+
+test("la marca mira a través de los lanzadores; el texto no", () => {
+  assert.equal(commandMarkProgram("npx playwright test"), "playwright");
+  assert.equal(commandMarkProgram("npx -y wrangler@3 deploy"), "wrangler");
+  assert.equal(commandMarkProgram("bunx supabase start"), "supabase");
+  assert.equal(commandMarkProgram("uvx --from x psql"), "psql");
+  assert.equal(commandMarkProgram("pnpm exec wrangler deploy"), "wrangler");
+  assert.equal(commandMarkProgram("pnpm dlx vercel"), "vercel");
+  assert.equal(commandMarkProgram("yarn dlx playwright install"), "playwright");
+  assert.equal(commandMarkProgram("pnpm install"), "pnpm");
+  assert.equal(commandMarkProgram("yarn add x"), "yarn");
+  assert.equal(commandMarkProgram("npx"), "npx");
+  assert.equal(commandMarkProgram("cd /x && gh pr view 12"), "gh");
+  assert.equal(summary("npx playwright test"), "npx playwright test");
 });

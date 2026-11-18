@@ -8,7 +8,7 @@ export { type Plural, type Word, type WordKey, WORDS, word } from "./words.ts";
 export { type WebLayout, MOBILE_WEB_DIR, PHONE_QUERY, WEB_LAYOUT_KEY, chosenWebLayout } from "./webLayout.ts";
 export { ASTRO_BODIES, ASTRO_COLORS, ASTRO_SHAPES, astroBody, astroColors, isAstroBody, type AstroBody, type AstroNode } from "./astro.ts";
 export { type AgentMark, type AgentMarkId, type MarkPath, AGENT_MARKS, agentMarkId } from "./agentMarks.ts";
-export { type ToolMark, type ToolMarkId, type ToolMarkPath, TOOL_LABELS, toolLabel, toolMarkId, toolMonogram } from "./toolMarks.ts";
+export { type ToolMark, type ToolMarkId, type ToolMarkPath, TOOL_LABELS, commandMarkId, commandName, toolLabel, toolMarkId, toolMonogram } from "./toolMarks.ts";
 
 export { astroMotion, astroBlink } from "./astroMotion.ts";
 export { ACCESS_CONTACT, accessMailto } from "./contact.ts";

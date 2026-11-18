@@ -30,6 +30,8 @@
   "settings.projects.reveal_finder": "Open in Finder",
   "settings.projects.reveal_other": "Show in file explorer",
   "settings.projects.material": "Material it reads",
+  "settings.projects.hide_in_picker": "Hide from the picker",
+  "settings.projects.show_in_picker": "Show in the picker",
   "settings.projects.remove": "Remove project",
   "settings.projects.delete_empty": "The project will be deleted.",
   "settings.projects.delete_with_tasks": {

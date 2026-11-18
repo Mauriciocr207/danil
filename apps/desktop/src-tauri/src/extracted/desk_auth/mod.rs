@@ -11,8 +11,7 @@ mod tests;
 
 use serde_json::{json, Value};
 use session::{Desk, Fail, Stored, Vault};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 
@@ -20,9 +19,6 @@ use tauri::Emitter;
 const EDGE: &str = "https://edge.danil.ai";
 const LOGIN_WAIT: Duration = Duration::from_secs(600);
 const KEYCHAIN_ACCOUNT: &str = "danil";
-
-/// Un inicio de sesión nuevo deja sin efecto al que seguía esperando.
-static CONNECT: AtomicU64 = AtomicU64::new(0);
 
 /// `DANIL_EDGE_URL` cambia el borde solo en builds de depuración.
 fn edge() -> String {
@@ -69,19 +65,19 @@ impl Vault for Keychain {
 fn desk(app: &tauri::AppHandle) -> &'static Desk<Keychain> {
     static DESK: OnceLock<Desk<Keychain>> = OnceLock::new();
     DESK.get_or_init(|| {
+        let app = app.clone();
         Desk::new(
             edge(),
             Keychain {
                 service: format!("{}.desk-session", app.config().identifier),
             },
+            move || announce(&app, &disconnected()),
         )
     })
 }
 
-/// La persona de `/v1/identity/me`, leída una vez por sesión.
-fn profile() -> &'static Mutex<Option<Value>> {
-    static P: OnceLock<Mutex<Option<Value>>> = OnceLock::new();
-    P.get_or_init(Default::default)
+fn disconnected() -> Value {
+    json!({ "state": "disconnected" })
 }
 
 fn error(fail: &Fail) -> Value {
@@ -127,37 +123,6 @@ fn storage(persisted: bool) -> &'static str {
     }
 }
 
-fn status(app: &tauri::AppHandle) -> Value {
-    let d = desk(app);
-    if !d.has_session() {
-        return json!({ "state": "disconnected" });
-    }
-    match d.access(false) {
-        Err(Fail::NoSession) => {
-            *profile().lock().unwrap_or_else(PoisonError::into_inner) = None;
-            return json!({ "state": "disconnected" });
-        }
-        // Con refresh guardado pero sin `identity` ahora: la sesión sigue.
-        Err(_) => return status_from(None, true),
-        Ok(_) => {}
-    }
-    let cached = profile()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
-    let me = cached.or_else(|| {
-        let me = d
-            .call("GET", "/v1/identity/me", None, Duration::from_secs(3))
-            .ok()?;
-        *profile().lock().unwrap_or_else(PoisonError::into_inner) = Some(me.clone());
-        Some(me)
-    });
-    if !d.has_session() {
-        return json!({ "state": "disconnected" });
-    }
-    status_from(me.as_ref(), d.persisted())
-}
-
 fn announce(app: &tauri::AppHandle, value: &Value) {
     let _ = app.emit("danil-connect", value.clone());
 }
@@ -166,13 +131,13 @@ fn announce(app: &tauri::AppHandle, value: &Value) {
 #[allow(dead_code)]
 pub(crate) fn bearer(app: &tauri::AppHandle) -> Result<(String, String), Value> {
     let d = desk(app);
-    let live = d.access(false).map_err(|f| error(&f))?;
+    let live = d.access().map_err(|f| error(&f))?;
     Ok((d.edge().to_owned(), live.access_token))
 }
 
 #[tauri::command(async)]
 pub(super) fn danil_session_status(app: tauri::AppHandle) -> Value {
-    status(&app)
+    desk(&app).status()
 }
 
 /// Abre el navegador del sistema en `identity`, espera la vuelta por loopback y
@@ -181,8 +146,8 @@ pub(super) fn danil_session_status(app: tauri::AppHandle) -> Value {
 #[tauri::command(async)]
 pub(super) fn danil_sign_in(app: tauri::AppHandle, name: Option<String>) -> Result<Value, Value> {
     let _ = name;
-    let generation = CONNECT.fetch_add(1, Ordering::SeqCst) + 1;
     let d = desk(&app);
+    let attempt = d.begin_sign_in();
     if d.capabilities()
         .announces(session::capability_of("/v1/identity/desk/authorize"))
         == Some(false)
@@ -195,7 +160,7 @@ pub(super) fn danil_sign_in(app: tauri::AppHandle, name: Option<String>) -> Resu
     super::env::open_external(url).map_err(|_| coded("browser"))?;
     let deadline = Instant::now() + LOGIN_WAIT;
     let code = loop {
-        if CONNECT.load(Ordering::SeqCst) != generation {
+        if !d.is_signing_in(attempt) {
             return Err(coded("cancelled"));
         }
         if Instant::now() > deadline {
@@ -209,27 +174,28 @@ pub(super) fn danil_sign_in(app: tauri::AppHandle, name: Option<String>) -> Resu
     };
     let verifier = pkce.verifier.clone();
     drop(pkce);
-    d.exchange(&code, &verifier, &redirect_uri)
+    let live = d
+        .exchange(attempt, &code, &verifier, &redirect_uri)
         .map_err(|f| error(&f))?;
     // La sesión de antes (WorkOS a Supabase) no convive con la nueva.
     super::agents_session::retire_legacy(&app);
-    *profile().lock().unwrap_or_else(PoisonError::into_inner) = None;
-    let value = status(&app);
-    announce(&app, &value);
+    let value = d.status();
+    d.publish_if_current(live.generation, || announce(&app, &value));
     Ok(value)
 }
 
 /// Cierra la sesión de esta instalación en `identity` y la borra del llavero.
 #[tauri::command(async)]
 pub(super) fn danil_sign_out(app: tauri::AppHandle) -> Result<Value, Value> {
-    CONNECT.fetch_add(1, Ordering::SeqCst);
-    desk(&app).sign_out();
+    let d = desk(&app);
+    let signed_out = d.sign_out();
     super::agents_session::retire_legacy(&app);
     // La cuenta del motor tampoco queda conectada; un motor sin la orden no impide salir.
     let _ = super::proxy::engine_call(&app, "danil_disconnect", json!({}));
-    *profile().lock().unwrap_or_else(PoisonError::into_inner) = None;
-    let value = json!({ "state": "disconnected" });
-    announce(&app, &value);
+    let value = disconnected();
+    if let Some(generation) = signed_out {
+        d.publish_if_current(generation, || announce(&app, &value));
+    }
     Ok(value)
 }
 
@@ -255,15 +221,19 @@ pub(super) fn danil_edge_fetch(
         Some(_) => return Err(coded("invalid_request")),
         None => pkce::random(18).ok_or_else(|| coded("unavailable"))?,
     };
-    match desk(&app).fetch(&method, &path, body.as_ref(), &key) {
-        Ok(reply) => Ok(edge_reply(&method, &reply, &key)),
-        Err(Fail::NoSession) => {
-            *profile().lock().unwrap_or_else(PoisonError::into_inner) = None;
-            announce(&app, &json!({ "state": "disconnected" }));
-            Err(error(&Fail::NoSession))
-        }
-        Err(f) => Err(error(&f)),
-    }
+    edge_fetch(desk(&app), &method, &path, body.as_ref(), &key)
+}
+
+fn edge_fetch<V: Vault>(
+    desk: &Desk<V>,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    key: &str,
+) -> Result<Value, Value> {
+    desk.fetch(method, path, body, key)
+        .map(|reply| edge_reply(method, &reply, key))
+        .map_err(|fail| error(&fail))
 }
 
 pub(crate) fn edge_reply(method: &str, reply: &session::Reply, key: &str) -> Value {

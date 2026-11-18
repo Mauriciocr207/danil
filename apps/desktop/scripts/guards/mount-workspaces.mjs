@@ -56,24 +56,38 @@ tile("w").dispatchEvent(new columnApp.w.MouseEvent("contextmenu", { bubbles: tru
 await sleep(80);
 assert.ok(!items().includes("Ocultar de la barra"), "el abierto no se oculta");
 await escape();
-tile("w3").dispatchEvent(new columnApp.w.KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }));
-await sleep(80);
-[...doc.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent.trim() === "Ocultar de la barra").click();
-await sleep(80);
+const hideTile = async (id) => {
+  tile(id).dispatchEvent(new columnApp.w.KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }));
+  await sleep(80);
+  [...doc.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent.trim() === "Ocultar de la barra").click();
+  await sleep(80);
+};
+await hideTile("w3");
 assert.equal(tile("w3"), null, "ocultar lo quita del riel");
 assert.equal(columnApp.w.localStorage.getItem("harness.layout.workspaces.hidden"), '["w3"]');
+await hideTile("w4");
 assert.equal(add().dataset.attention, "asked", "el «+» lleva lo más urgente de los ocultos");
 assert.ok(add().querySelector('[data-attention-badge="asked"]'));
+assert.match(add().getAttribute("aria-label"), /^Agregar workspace\. Un workspace oculto: /, "y dice que el estado es de un oculto");
 add().click();
 await sleep(100);
-const hiddenRow = doc.querySelector('[data-hidden-workspace="w3"]');
-assert.ok(hiddenRow?.querySelector('[data-attention-badge="asked"]'), "la fila del oculto lleva su distintivo");
+const hiddenRow = (id) => doc.querySelector(`[data-hidden-workspace="${id}"]`);
+assert.ok(hiddenRow("w3")?.querySelector('[data-attention-badge="asked"]'), "la fila del oculto lleva su distintivo");
 assert.equal(items()[0], "Crear workspace", "crear sigue arriba");
-hiddenRow.querySelector("[data-show-workspace]").click();
+const eye = (id) => hiddenRow(id).querySelector("[data-show-workspace]");
+eye("w3").focus();
+eye("w3").click();
 await sleep(80);
+assert.equal(doc.activeElement, eye("w4"), "al mostrar uno, el foco pasa a la fila vecina");
+doc.activeElement.dispatchEvent(new columnApp.w.KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+assert.equal(doc.activeElement?.getAttribute("role"), "menuitem", "y las flechas siguen recorriendo el menú");
+eye("w4").focus();
+eye("w4").click();
+await sleep(80);
+assert.equal(doc.activeElement?.textContent.trim(), "Crear workspace", "sin ocultos, el foco queda en la primera fila");
 await escape();
 assert.deepEqual([...doc.querySelectorAll("[data-workspace-column] [data-workspace-tile]")].map((b) => b.textContent.trim()),
-  ["AC", "B", "GL", "D"], "mostrarlo lo devuelve a su lugar");
+  ["AC", "B", "GL", "D"], "mostrarlos los devuelve a su lugar");
 assert.equal(add().dataset.attention, undefined, "sin ocultos el «+» queda como antes");
 const columnRow = (id) => doc.querySelector(`[data-sesion="${id}"]`);
 // La tarjeta del riel: sin ver es el punto verde; vista no lleva punto y se apaga.

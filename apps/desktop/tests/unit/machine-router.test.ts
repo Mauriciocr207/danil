@@ -12,6 +12,7 @@ import "../helpers/catalog.ts";
 import { withoutAbout } from "../../src/lib/taskMentions.ts";
 import { createRouter, unconfirmedOpen } from "../../src/features/machines/router.ts";
 import type { EngineWorkspace } from "../../src/features/machines/engine-workspaces.ts";
+import { notHere, silent } from "../../src/features/settings/github-account/failures.ts";
 import { runsWorkspace } from "../../src/features/machines/runs-workspace.ts";
 
 type Args = Record<string, unknown>;
@@ -48,7 +49,7 @@ const row = (id: string, title = id) => ({ id, title, updated_at: 0 });
 const VM: MachineInfo = { id: "cmp_vm", name: "Danil VM", wakes: true };
 const MAC: MachineInfo = { id: "cmp_mac", name: "Mac de Ana", wakes: false };
 
-function setup(links: Record<string, ReturnType<typeof fakeLink>>, local: Record<string, unknown> = {}, picked: string | null = null, home?: () => { wakes?: boolean; os?: "linux" | "macos" | "windows" }, directory?: () => { workspace_id: string | null; name: string; owner?: boolean }[], engineWorkspaces?: () => readonly EngineWorkspace[] | null) {
+function setup(links: Record<string, ReturnType<typeof fakeLink>>, local: Record<string, unknown> = {}, picked: string | null = null, home?: () => { wakes?: boolean; os?: "linux" | "macos" | "windows" }, engineWorkspaces?: () => readonly EngineWorkspace[] | null) {
   const native: { command: string; args: Args; options: unknown }[] = [];
   const changes: string[][] = [];
   const fleet = new Fleet({ self: "cmp_home", connect: (info) => links[info.id], deadlines: { read: 40, action: 200, intent: 400 } });
@@ -73,7 +74,6 @@ function setup(links: Record<string, ReturnType<typeof fakeLink>>, local: Record
     onSlices: (c) => changes.push(c),
     pickedFor: () => picked,
     home,
-    directory,
     engineWorkspaces,
   });
   fleet.setMachines([VM, MAC].filter((m) => links[m.id]));
@@ -757,7 +757,7 @@ test("with the engine's view, an organization's workspace stays in the switcher 
     { id: "solo", name: "Solo", local: true, organization: false, machines: [] },
     { id: FOUNDATION.id, name: FOUNDATION.name, local: false, organization: true, machines: ["cmp_vm"] },
   ];
-  const { router, fleet } = setup({ cmp_vm: fakeLink({}), cmp_mac: fakeLink({}) }, { list_workspaces: { workspaces: [{ id: "solo", name: "Solo" }], active: "solo" } }, null, undefined, undefined, () => known);
+  const { router, fleet } = setup({ cmp_vm: fakeLink({}), cmp_mac: fakeLink({}) }, { list_workspaces: { workspaces: [{ id: "solo", name: "Solo" }], active: "solo" } }, null, undefined, () => known);
   // La cuenta de la ventana no trae a Nube IA: el workspace abierto no es de ninguna cuenta.
   fleet.setMachines([MAC]);
   fleet.setRegistry(MEMBER_REGISTRY);
@@ -777,18 +777,6 @@ test("with the engine's view, an organization's workspace stays in the switcher 
 
   known = null;
   assert.deepEqual(await ids(), ["solo", "w", ORG.id], "an engine without the feature falls back to the fleet");
-});
-
-test("without `organization` in the row, the directory names the workspace an organization's VM brings", async () => {
-  const directory = () => [{ workspace_id: "w", name: "W", owner: true }, { workspace_id: ORG.id, name: ORG.name, owner: false }];
-  const { router, fleet } = setup({ cmp_vm: fakeLink({}) }, {}, null, undefined, directory);
-  fleet.setMachines([{ id: "cmp_vm", name: "Nube IA", wakes: true, linked: new Set([ORG.id]) }]);
-  fleet.setRegistry(MEMBER_REGISTRY);
-  const listed = (await router.handle("list_workspaces")) as { workspaces: { id: string }[] };
-  assert.ok(listed.workspaces.some((w) => w.id === ORG.id));
-  assert.deepEqual(await pickable(router), ["cmp_home"]);
-  await router.handle("set_active_workspace", { id: ORG.id });
-  assert.deepEqual(await pickable(router), ["cmp_home", "cmp_vm"]);
 });
 
 test("cloning on this computer in an organization's workspace makes it local first and clones here, not on the server", async () => {
@@ -1021,4 +1009,25 @@ test("a slow machine with a new open tab delays the list at most FRESH_WAIT and 
   assert.ok(confirmed.some(r => r.id === "cmp_vm~child"));
   assert.deepEqual(unconfirmedOpen(confirmed), []);
   router.close();
+});
+
+
+test("remote GitHub account status distinguishes absent command from real authorization failure", async () => {
+  for (const [failure, absent, code = "command_failed"] of [
+    [{ what: { clave: "shell.service.command" }, detail: "github_account_status" }, true],
+    [{ what: { clave: "providers.github.error.expired" }, detail: "private-sentinel" }, false],
+    [{ scope: "machine", private: "private-sentinel" }, false, "command_not_allowed"],
+  ] as const) {
+    const link = fakeLink({});
+    link.call = () => Promise.reject({ code, detail: failure });
+    const { router, fleet } = setup({ cmp_vm: link });
+    await router.handle("list_workspaces");
+    await assert.rejects(router.handle("github_account_status", { scope: "w" }, on("cmp_vm")), (error: { detail: string }) => {
+      assert.equal(notHere(error), absent);
+      assert.equal(silent(error), absent);
+      assert.ok(!JSON.stringify(error).includes("private-sentinel"));
+      return true;
+    });
+    fleet.close();
+  }
 });

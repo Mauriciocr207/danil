@@ -61,14 +61,12 @@ export function MachinePicker(props: { workspace: string | null; project?: Proje
     const id = rememberedRunOn(props.workspace);
     return cloudInventory() === "initial" && !!id && id !== "local" && !isGuestMachine(id) && !machines().some((m) => m.id === id);
   };
-  /** Se está confirmando la elegida: el inventario aún no llega o su canal no tiene estado. */
-  const confirmando = () => cloudInitial() || elegida()?.connection === "unknown";
-  /** El nombre conocido de la elegida (o de la recordada, en frío); `null` si solo se sabe el id. */
-  const conocido = () => {
-    const id = elegida()?.id ?? (cloudInitial() ? rememberedRunOn(props.workspace) : null);
-    if (!id) return null;
-    const name = elegida() ? nombre(elegida() as Machine) : machineName(id, false);
-    return name && name !== id ? name : null;
+  const etiqueta = () => {
+    const chosen = elegida();
+    if (chosen) return nombre(chosen);
+    const remembered = cloudInitial() ? rememberedRunOn(props.workspace) : null;
+    const name = remembered ? machineName(remembered, false) : null;
+    return name && name !== remembered ? name : t("shell.machines.label");
   };
   const muestra = () => cloudInitial() || machines().length > 1 || (!!props.shared && sharedMachines().length > 0);
   const tono = (power: string) => (power === "running" ? "success" : power === "starting" ? "working" : power === "stopping" ? "warning" : power === "unknown" ? "neutral" : "off") as "success" | "working" | "warning" | "neutral" | "off";
@@ -90,12 +88,9 @@ export function MachinePicker(props: { workspace: string | null; project?: Proje
           aria-label={t("shell.machines.label")}
         >
           <MachineIcon wakes={elegida() ? wakesOf(elegida() as Machine) : false} size={12} />
-          {/* «Conectando…» solo sin nombre conocido; con él, el punto dice que se está confirmando. */}
-          <Show when={confirmando() && !conocido()} fallback={<span class="truncate">{conocido() ?? (elegida() ? nombre(elegida() as Machine) : t("shell.machines.label"))}</span>}>
-            <span class="truncate" role="status" data-machine-connecting="">{t("shell.machines.connecting")}</span>
-          </Show>
-          <Show when={elegida() || (confirmando() && conocido())}>
-            <SignalDot tone={confirmando() ? "working" : (elegida() as Machine).on ? "success" : "off"} />
+          <span class="truncate">{etiqueta()}</span>
+          <Show when={elegida()}>
+            {(chosen) => <SignalDot tone={chosen().on ? "success" : "off"} />}
           </Show>
           <ChevronDown size={11} aria-hidden="true" />
         </PopoverTrigger>
@@ -112,10 +107,10 @@ export function MachinePicker(props: { workspace: string | null; project?: Proje
                   onClick={() => elegir(m)}
                 >
                   <MachineIcon wakes={wakesOf(m)} size={12} />
-                  <SignalDot tone={m.connection === "unknown" ? "working" : m.on ? "success" : "off"} pulse={m.connection === "unknown"} />
+                  <SignalDot tone={m.on ? "success" : "off"} />
                   <span class="flex-1 truncate">{nombre(m)}</span>
                   <span class="text-2xs" data-machine-reason={razon(m) ? "" : undefined}>
-                    {m.connection === "unknown" ? t("shell.machines.connecting") : razon(m)?.label ?? (m.on ? t("shell.machines.on") : t("shell.machines.off"))}
+                    {razon(m)?.label ?? (m.on ? t("shell.machines.on") : t("shell.machines.off"))}
                   </span>
                   <span class="flex w-3 shrink-0">
                     <Show when={elegida()?.id === m.id}>

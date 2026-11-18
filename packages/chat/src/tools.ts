@@ -8,7 +8,8 @@
  * fila. El mapa de servidores a servicios vive en `@terminus/design`
  * (`toolMarkId`), porque es el mismo en todos los clientes.
  */
-import { toolLabel, toolMarkId, type ToolMarkId } from "../../design/src/index.ts";
+import { commandMarkId, TOOL_LABELS, toolLabel, toolMarkId, type ToolMarkId } from "../../design/src/index.ts";
+import { commandMarkProgram } from "./command.ts";
 
 /** El servidor y su herramienta, ya separados. */
 export type McpCall = { server: string; tool: string };
@@ -58,4 +59,22 @@ export function toolSource(name: string, call?: McpCall | null): ToolSource | nu
   const mcp = call ?? mcpCallFromName(name);
   if (!mcp) return null;
   return { server: mcp.server, tool: mcp.tool, mark: toolMarkId(mcp.server), label: toolLabel(mcp.server) };
+}
+
+/**
+ * El servicio de un comando de shell: la marca y su nombre accesible. No lleva
+ * rótulo escrito en la fila —el programa ya nombra el servicio—, así que es un
+ * tipo aparte de `ToolSource`.
+ */
+export type CommandSource = { program: string; mark: ToolMarkId; label: string };
+
+/**
+ * De qué servicio es un comando, o `null` si el programa no tiene marca: `ls`,
+ * `npm` o `aws-vault` siguen con el icono de terminal.
+ */
+export function commandSource(cmd: string | null | undefined): CommandSource | null {
+  if (!cmd) return null;
+  const program = commandMarkProgram(cmd);
+  const mark = commandMarkId(program);
+  return program && mark ? { program, mark, label: TOOL_LABELS[mark] } : null;
 }
