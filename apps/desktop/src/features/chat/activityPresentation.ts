@@ -38,6 +38,7 @@ export function presentActivity(input: {
   if (!action) return { label: input.label ?? t("chat.activity.running"), animate };
   switch (action.kind) {
     case "step": {
+      if (!action.step.corriendo) return { label: t("chat.activity.continuing"), animate };
       const row = rotuloDeFila({ clase: action.step.clase, pasos: [action.step] });
       return { label: [row.verbo, row.sujeto].filter(Boolean).join(" "), animate };
     }
