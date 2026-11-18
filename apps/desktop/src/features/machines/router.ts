@@ -18,6 +18,7 @@
 import { type AccountWorkspace, type SystemId, callWorkspace, isDeferrable, systemOf } from "@terminus/computers";
 import { AttentionBook, type Envelope, type Fleet, FleetError, type MachineInfo, type Slice, classOf, registryRow, unwrap, wrap } from "@terminus/fleet";
 import { clavesConocidas, t } from "../../lib/i18n.ts";
+import { readActiveTurns } from "./active-turns-read.ts";
 import type { EngineWorkspace } from "./engine-workspaces.ts";
 import { markUnconfirmedOpen } from "./unconfirmedOpen.ts";
 
@@ -28,11 +29,8 @@ type Options = { headers?: HeadersInit } | undefined;
 export type Invoke = (command: string, args?: Args, options?: Options) => Promise<unknown>;
 type Failure = { what: unknown; detail: unknown };
 
-/**
- * Lecturas del contenido de un workspace: cada máquina suma su parte. `list_live_turns`
- * no: son los procesos de esta computadora, los que cerrar la ventana detiene.
- */
-const FAN = new Set(["list_projects", "list_portfolios", "list_live_sessions", "list_active_turns", "list_spaces", "list_workspace_attention", "list_session_git", "list_task_mentions"]);
+/** Content reads may use display copies; list_live_turns remains local to the window. */
+const FAN = new Set(["list_projects", "list_portfolios", "list_live_sessions", "list_spaces", "list_workspace_attention", "list_session_git", "list_task_mentions"]);
 const CONTEXT = new Set(["add_folder", "add_repo_url", "set_workspace_source", "set_root", "list_sources", "source_freshness", "source_detail", "update_source", "remove_source", "list_source_branches", "set_source_skill"]);
 const STORAGE = new Set(["list_storage", "reclaim_storage", "empty_build_cache", "collect_orphans"]);
 const LISTING = new Set(["list_workspaces", "workspaces_startup"]);
@@ -96,7 +94,6 @@ const CHANGES: Record<string, SliceChange> = {
   list_workspaces: "workspaces",
   workspaces_startup: "workspaces",
   list_live_sessions: "sessions",
-  list_active_turns: "sessions",
   list_projects: "projects",
   list_portfolios: "projects",
   list_spaces: "spaces",
@@ -908,6 +905,7 @@ export function createRouter(config: RouterConfig) {
     if (FILES.test(command) && ((machine && machine !== self && fleet.has(machine)) || namesOther(args)))
       throw { what: t("shell.machines.local_only"), detail: "machine_files" };
     try {
+      if (command === "list_active_turns") return await readActiveTurns(args, workspace, { fleet, self, machine, native: local ? () => native(command, args, options) : null, here: !elsewhere(workspace) });
       if (machine && machine === self && (STORAGE.has(command) || command === "list_workspaces" || command === "workspaces_startup" || command === "set_provider_consent")) {
         if (STORAGE.has(command) && !hasHere(workspace)) throw missing(machine);
         return await native(command, fleet.argsFor(machine, args), withoutHeader(options, "x-terminus-machine"));

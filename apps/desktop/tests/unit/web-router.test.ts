@@ -425,3 +425,35 @@ test("web history forwards its cursor to the host and preserves its bounded page
     assert.equal(mac.calls[0].args.id, "t1");
   } finally { router.close(); }
 });
+
+for (const [before, after] of [[["t1"], []], [[], ["t1"]]] as const) test("runtime authority waits for a new answer instead of returning the saved active slice " + before.length, async () => {
+  const answers: Record<string, unknown> = { list_active_turns: [...before] };
+  const vm = fakeLink(answers), { router, fleet } = web({ cmp_vm: vm });
+  await router.handle("list_workspaces");
+  await fleet.read({ machine: "cmp_vm", workspace: "w", command: "list_active_turns", args: { workspace: "w" } });
+  let answer!: (value: string[]) => void, began!: () => void;
+  const started = new Promise<void>(done => { began = done; });
+  const call = vm.call;
+  vm.call = (id, command, workspace, folder, args, timeout) => command !== "list_active_turns" ? call(id, command, workspace, folder, args, timeout)
+    : new Promise<{ value: unknown; cached: null }>(done => { began(); answer = value => done({ value, cached: null }); });
+  let resolved = false; const reading = router.handle("list_active_turns", { workspace: "w" }).then(value => { resolved = true; return value; });
+  await started; const premature = resolved;
+  answer([...after]); assert.deepEqual(await reading, after.map(id => "cmp_vm~" + id));
+  assert.equal(premature, false, "a stored positive or negative is not current execution authority"); router.close();
+});
+
+test("a cached relay response with an invalid time is still not runtime authority", async () => {
+  const vm = fakeLink({ list_active_turns: ["t1"] }), { router, fleet } = web({ cmp_vm: vm });
+  await router.handle("list_workspaces");
+  await fleet.read({ machine: "cmp_vm", workspace: "w", command: "list_active_turns", args: { workspace: "w" } });
+  vm.call = async () => ({ value: [], cached: { updated_at: "invalid-time" } });
+  await assert.rejects(router.handle("list_active_turns", { workspace: "w" })); router.close();
+});
+
+test("an unavailable member makes the aggregate unknown instead of an incomplete idle list", async () => {
+  const vm = fakeLink({ list_active_turns: [] }), mac = fakeLink({ list_active_turns: ["t1"] });
+  const { router, fleet } = web({ cmp_vm: vm, cmp_mac: mac }); await router.handle("list_workspaces");
+  await fleet.read({ machine: "cmp_mac", workspace: "w", command: "list_active_turns", args: { workspace: "w" } });
+  mac.setState("offline");
+  await assert.rejects(router.handle("list_active_turns", { workspace: "w" })); router.close();
+});
