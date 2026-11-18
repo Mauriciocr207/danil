@@ -4,14 +4,17 @@ import { fleet } from "../helpers/fake-relay.mjs";
 import { boot, sleep } from "../helpers/jsdom-app.mjs";
 import { HOME, local, localNewTask, remote, SESSION_A, SESSION_B, TOKEN, until, write } from "../helpers/desktop-account.mjs";
 
-const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+const deferred = () => { let resolve, reject; const promise = new Promise((r, j) => { resolve = r; reject = j; }); return { promise, resolve, reject }; };
 const cloud = (id = "cmp_cloud", name = "Nube") => ({ machine_id: id, name, state: "running", connection: "connected" });
 const ok = (items = [cloud()]) => ({ status: 200, body: { items } });
 const picker = app => app.w.document.querySelector('[aria-label="Ejecutar en"]');
-const connecting = app => app.w.document.querySelector('[data-machine-connecting]');
+const connecting = app => {
+  const trigger = picker(app);
+  return trigger?.textContent.includes("Conectando") ? trigger : null;
+};
 const rows = app => app.w.__TAURI_INTERNALS__.invoke("machine_list");
 const changed = (app, name = "harness:account-computers") => app.w.dispatchEvent(new app.w.CustomEvent(name));
-async function mount(name, read, { remembered = false, known = null, extra = {}, signed = false, nativeList, relay = () => Response.json({ computers: [HOME] }) } = {}) {
+async function mount(name, read, { remembered = false, known = null, extra = {}, signed = false, nativeList, capabilities, relay = () => Response.json({ computers: [HOME] }) } = {}) {
   let requests = 0;
   const sends = [];
   const f = fleet({ cmp_cloud: { state: "online", table: remote("Nube", "Tarea nube", { send_message: args => { sends.push(args); return "t9"; } }) }, cmp_b: { state: "online", table: remote("B", "Tarea B") } });
@@ -20,7 +23,7 @@ async function mount(name, read, { remembered = false, known = null, extra = {},
     ...(signed ? { danil_sessions: [SESSION_A], danil_workspace_account: { account: SESSION_A.account }, account_relay_token: TOKEN } : {}),
     ...(nativeList ? { machine_list: nativeList } : {}),
     danil_edge_fetch: async ({ path }) => {
-      if (path === "/v1/capabilities") return { status: 200, body: { contract: "mvp-v1", items: [{ name: "machines", version: 1, status: "available" }] } };
+      if (path === "/v1/capabilities") return capabilities ? capabilities() : { status: 200, body: { contract: "mvp-v1", items: [{ name: "machines", version: 1, status: "available" }] } };
       if (path.endsWith("/tickets")) return { status: 201, body: { ticket: "qa", url: `wss://machines-session.danil.ai/v1/machines/${path.split("/")[3]}/session`, session_expires_at: new Date(Date.now() + 60000).toISOString() } };
       if (path === "/v1/machines") return read(++requests);
       return { status: 404, body: null };
@@ -39,7 +42,7 @@ async function mount(name, read, { remembered = false, known = null, extra = {},
 }
 function watch(app) {
   const seen = [];
-  const sample = () => seen.push({ picker: !!picker(app), connecting: !!connecting(app) });
+  const sample = () => seen.push({ picker: !!picker(app), connecting: !!connecting(app), label: picker(app)?.textContent.trim() ?? null });
   const observer = new app.w.MutationObserver(sample);
   observer.observe(app.w.document.body, { subtree: true, childList: true, characterData: true });
   sample();
@@ -95,18 +98,18 @@ test("C3 R: una local con inventario resuelto no monta selector durante refresh 
   assert.deepEqual(app.failures, []);
 });
 
-for (const retrying of [false, true]) test(`${retrying ? "C5" : "C4"} G: recordada inicial ${retrying ? "503 y retry" : "pendiente"} muestra Conectando y luego su nombre`, async () => {
+for (const retrying of [false, true]) test(`${retrying ? "C5" : "C4"} G: recordada inicial ${retrying ? "503 y retry" : "pendiente"} muestra el destino genérico y luego su nombre`, async () => {
   const gate = deferred();
   const { app, requests } = await mount(retrying ? "C5" : "C4", n => retrying && n === 1 ? { status: 503, body: null } : gate.promise, { remembered: true });
   if (retrying) assert.ok(await until(() => requests() > 1));
-  const initial = !!connecting(app);
+  const initial = picker(app)?.textContent;
   gate.resolve(ok()); await ready(app);
-  assert.ok(initial, "no finge la local");
+  assert.equal(initial?.trim(), "Ejecutar en", "no finge la local");
   assert.ok(await until(() => picker(app)?.textContent.includes("Nube")));
   assert.deepEqual(app.failures, []);
 });
 
-test("C6 G: la máquina elegida muestra Conectando mientras el canal aún no tiene estado", async () => {
+test("C6 G: la máquina elegida conserva su nombre mientras el canal aún no tiene estado", async () => {
   const app = await boot("listo", "desktop-machine-channel-connecting", local([], {
     danil_connect_status: { state: "disconnected", online: false },
     guest_machine_list: [],
@@ -117,13 +120,12 @@ test("C6 G: la máquina elegida muestra Conectando mientras el canal aún no tie
   }));
   const doc = app.w.document;
   localNewTask(doc).click();
-  assert.ok(await until(() => doc.querySelector('[data-machine-connecting]'), 500));
-  assert.match(doc.querySelector('[data-machine-connecting]').textContent, /Conectando…/);
-  const picker = doc.querySelector('[aria-label="Ejecutar en"]');
-  picker.click();
+  assert.ok(await until(() => picker(app)));
+  assert.match(picker(app).textContent, /cmp_wait/);
+  assert.equal(connecting(app), null);
+  picker(app).click();
   assert.ok(await until(() => doc.querySelector('[data-machine-option="cmp_wait"]')));
-  assert.match(doc.querySelector('[data-machine-option="cmp_wait"]').textContent, /Conectando…/);
-  assert.ok(!doc.querySelector('[data-machine-option="cmp_wait"]').textContent.includes("apagada"));
+  assert.match(doc.querySelector('[data-machine-option="cmp_wait"]').textContent, /apagada/);
   assert.deepEqual(app.failures, []);
 });
 
@@ -240,16 +242,16 @@ for (const order of ["old-first", "latest-first"]) test(`C14 R: whoAmI retenidos
   assert.deepEqual(app.failures, []);
 });
 
-test("C13b G: recordada resuelta con conexión unknown e inventario inicial sí muestra Conectando", async () => {
+test("C13b G: recordada resuelta con conexión unknown conserva su nombre", async () => {
   const gate = deferred();
   const { app, requests } = await mount("C13b", () => gate.promise, { remembered: true, nativeList: [
     { id: "local", local: true, active: false, on: true, hosts: true },
     { id: "cmp_cloud", local: false, active: true, on: false, connection: "unknown", hosts: true },
   ] });
   assert.equal(requests(), 1, "el inventario inicial sigue pendiente");
-  const waiting = !!connecting(app);
+  const label = picker(app)?.textContent;
   gate.resolve(ok([])); await sleep(100);
-  assert.equal(waiting, true, "sin estado del canal la elegida espera aunque la fila esté resuelta");
+  assert.match(label, /cmp_cloud/);
   assert.deepEqual(app.failures, []);
 });
 
@@ -286,7 +288,7 @@ for (const when of ["start", "danil:organization-changed"]) for (const [kind, de
   assert.deepEqual(app.failures, []);
 });
 
-// Arranque en frío (light-state-sync): con el último nombre guardado, «Ejecutar en» abre con la máquina y solo el punto dice que se confirma.
+// Arranque en frío: el último nombre guardado identifica el destino.
 test("C16 G: recordada inicial con nombre guardado nunca muestra Conectando", async () => {
   const gate = deferred();
   const { app } = await mount("C16", () => gate.promise, { remembered: true, known: { cmp_cloud: "Nube" } });
@@ -298,7 +300,7 @@ test("C16 G: recordada inicial con nombre guardado nunca muestra Conectando", as
   assert.ok(await until(() => picker(app)?.textContent.includes("Nube")));
   observed.stop();
   assert.match(label, /Nube/, "el chip abre con el nombre guardado");
-  assert.equal(tone, "working", "el punto dice que se está confirmando");
+  assert.equal(tone, undefined, "el inventario pendiente no muestra punto");
   assert.ok(observed.seen.every(s => !s.connecting), "el chip nunca muestra Conectando");
   assert.deepEqual(app.failures, []);
 });
@@ -310,5 +312,75 @@ test("C17 G: el inventario guarda id y nombre de sus máquinas, y nada más", as
   const saved = JSON.parse(app.w.localStorage.getItem("harness.layout.machines.known_names"));
   assert.equal(saved.cmp_gone, undefined, "la que ya no está se olvida");
   assert.ok(Object.values(saved).every(v => typeof v === "string"), "solo nombres");
+  assert.deepEqual(app.failures, []);
+});
+
+
+for (const phase of ["connecting", "failed", "online", "waking", "local"]) test(`C19 G: aviso de conexión solo durante un envío remoto pendiente (${phase})`, async () => {
+  const reply = deferred();
+  const sends = [];
+  const list = [
+    { id: "local", local: true, active: true, on: true, hosts: true },
+    ...(phase === "local" ? [] : [{ id: "cmp_cloud", local: false, active: false, on: phase !== "waking", connection: phase === "online" ? "online" : "unknown", hosts: true }]),
+  ];
+  const { app } = await mount(`C19-${phase}`, () => ok([]), {
+    remembered: phase !== "local",
+    known: { cmp_cloud: "Nube" },
+    nativeList: list,
+    extra: { send_message: (_args, options) => { sends.push(options); return reply.promise; } },
+  });
+  const statusNotice = (text) => app.w.document.querySelector(`[role="status"][aria-label="${text}"]`);
+  const connectingNotice = () => statusNotice("Conectando con Nube");
+  const wakingNotice = () => statusNotice("Encendiendo Nube");
+  assert.equal(connectingNotice(), null, "no hay aviso antes de enviar");
+  await write(app, "Revisa este cambio");
+  assert.ok(await until(() => sends.length > 0));
+  const observed = { connecting: !!connectingNotice(), waking: !!wakingNotice() };
+  if (phase === "failed") reply.reject({ what: "Conexión de prueba interrumpida", detail: "test_remote_failure" });
+  else reply.resolve("t1");
+  assert.deepEqual(observed, { connecting: phase === "connecting" || phase === "failed", waking: phase === "waking" });
+  assert.equal(sends[0]?.headers?.["x-terminus-machine"], phase === "local" ? "local" : "cmp_cloud");
+  assert.ok(await until(() => !connectingNotice() && !wakingNotice()), "se quita el aviso cuando termina la espera");
+  assert.deepEqual(app.failures, []);
+});
+
+
+for (const eventFirst of [true, false]) test(`C18 R: el aviso repetido sin sesión no reinicia el inventario (${eventFirst ? "evento primero" : "respuesta primero"})`, async () => {
+  let reads = 0;
+  let offline = false;
+  let emit = () => {};
+  const { app, requests } = await mount(`C18-${eventFirst}`, () => ok([]), {
+    remembered: true,
+    capabilities: () => {
+      reads++;
+      if (offline) {
+        if (eventFirst) emit();
+        throw { detail: "no_session" };
+      }
+      return { status: 200, body: { contract: "mvp-v1", items: [{ name: "machines", version: 1, status: "available" }] } };
+    },
+  });
+  assert.ok(await until(() => requests() === 1 && !picker(app)));
+  const disconnected = { state: "disconnected" };
+  emit = () => app.emit("danil-connect", disconnected);
+  offline = true;
+  emit();
+  if (eventFirst) {
+    // El IPC viejo vuelve a emitir durante la primera lectura.
+    const once = emit;
+    emit = () => { emit = () => {}; once(); };
+  }
+  assert.ok(await until(() => reads >= 2 && !picker(app)));
+  const observed = watch(app);
+  const before = reads;
+  for (let i = 0; i < 5; i++) app.emit("danil-connect", disconnected);
+  await sleep(100);
+  observed.stop();
+  assert.equal(reads, before, "un aviso repetido no vuelve a consultar el borde");
+  assert.ok(observed.seen.every(s => s.label === null), "el selector no reaparece con la recordada ausente");
+  assert.ok(!app.commands.includes("machine_start"));
+  offline = false;
+  app.emit("danil-connect", { state: "connected", account: "user_alberto" });
+  assert.ok(await until(() => requests() === 2), "un inicio de sesión sí vuelve a leer");
   assert.deepEqual(app.failures, []);
 });

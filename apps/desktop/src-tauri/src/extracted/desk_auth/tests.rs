@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
@@ -207,7 +207,7 @@ fn the_loopback_only_accepts_its_own_state() {
 
 #[test]
 fn authorize_goes_to_identity_with_pkce_and_loopback() {
-    let desk = Desk::new("https://edge.danil.ai/", MemoryVault::default());
+    let desk = Desk::new("https://edge.danil.ai/", MemoryVault::default(), || {});
     let url = desk.authorize_url("chal", "st", "http://127.0.0.1:4321/callback");
     assert_eq!(
         url,
@@ -227,9 +227,14 @@ fn exchange_keeps_refresh_in_the_vault_and_access_in_memory() {
         _ => (404, Value::Null),
     }));
     let vault = MemoryVault::default();
-    let desk = Desk::new(base, vault.clone());
+    let desk = Desk::new(base, vault.clone(), || {});
     let live = desk
-        .exchange("code_1", "verifier_1", "http://127.0.0.1:9/callback")
+        .exchange(
+            desk.begin_sign_in(),
+            "code_1",
+            "verifier_1",
+            "http://127.0.0.1:9/callback",
+        )
         .unwrap();
     assert_eq!(live.access_token, "acc_1");
     let sent = log.lock().unwrap()[0].clone();
@@ -242,7 +247,7 @@ fn exchange_keeps_refresh_in_the_vault_and_access_in_memory() {
     assert!(record.contains("ref_1"));
     assert!(!record.contains("acc_1"), "el access no va al llavero");
     // El access vigente se usa sin otra llamada.
-    assert_eq!(desk.access(false).unwrap().access_token, "acc_1");
+    assert_eq!(desk.access().unwrap().access_token, "acc_1");
     assert_eq!(log.lock().unwrap().len(), 1);
 }
 
@@ -254,9 +259,14 @@ fn a_bad_code_is_refused_without_a_session() {
             json!({"type":"x","title":"x","status":400,"code":"invalid_grant"}),
         )
     }));
-    let desk = Desk::new(base, MemoryVault::default());
+    let desk = Desk::new(base, MemoryVault::default(), || {});
     let got = desk
-        .exchange("c", "v", "http://127.0.0.1:9/callback")
+        .exchange(
+            desk.begin_sign_in(),
+            "c",
+            "v",
+            "http://127.0.0.1:9/callback",
+        )
         .unwrap_err();
     assert_eq!(got.code(), "invalid_grant");
     assert!(!desk.has_session());
@@ -279,11 +289,11 @@ fn concurrent_callers_refresh_once() {
         refresh_token: "ref_1".into(),
         sid: "sid_1".into(),
     });
-    let desk = Arc::new(Desk::new(base, vault.clone()));
+    let desk = Arc::new(Desk::new(base, vault.clone(), || {}));
     let threads: Vec<_> = (0..8)
         .map(|_| {
             let desk = desk.clone();
-            std::thread::spawn(move || desk.access(false).map(|l| l.access_token))
+            std::thread::spawn(move || desk.access().map(|l| l.access_token))
         })
         .collect();
     for t in threads {
@@ -310,8 +320,8 @@ fn a_rejected_refresh_forgets_the_session() {
         refresh_token: "ref_1".into(),
         sid: "s".into(),
     });
-    let desk = Desk::new(base, vault.clone());
-    assert_eq!(desk.access(false).unwrap_err(), Fail::NoSession);
+    let desk = Desk::new(base, vault.clone(), || {});
+    assert_eq!(desk.access().unwrap_err(), Fail::NoSession);
     assert!(vault.load().is_none());
 }
 
@@ -328,8 +338,8 @@ fn identity_down_keeps_the_refresh() {
         refresh_token: "ref_1".into(),
         sid: "s".into(),
     });
-    let desk = Desk::new(base, vault.clone());
-    assert!(matches!(desk.access(false), Err(Fail::Unavailable { .. })));
+    let desk = Desk::new(base, vault.clone(), || {});
+    assert!(matches!(desk.access(), Err(Fail::Unavailable { .. })));
     assert!(vault.load().is_some());
 }
 
@@ -341,9 +351,14 @@ fn signed_in(handler: Arc<Handler>) -> (Desk<MemoryVault>, Arc<Mutex<Vec<Req>>>,
         _ => inner(r, n),
     }));
     let vault = MemoryVault::default();
-    let desk = Desk::new(base, vault.clone());
-    desk.exchange("c", "v", "http://127.0.0.1:9/callback")
-        .unwrap();
+    let desk = Desk::new(base, vault.clone(), || {});
+    desk.exchange(
+        desk.begin_sign_in(),
+        "c",
+        "v",
+        "http://127.0.0.1:9/callback",
+    )
+    .unwrap();
     (desk, log, vault)
 }
 
@@ -362,7 +377,13 @@ fn a_missing_route_is_retried_until_it_appears() {
         _ => (404, Value::Null),
     }));
     let me = desk
-        .call("GET", "/v1/identity/me", None, Duration::from_secs(10))
+        .call(
+            desk.generation(),
+            "GET",
+            "/v1/identity/me",
+            None,
+            Duration::from_secs(10),
+        )
         .unwrap();
     assert_eq!(me["id"], "user_1");
     assert_eq!(count(&log, "/v1/identity/me"), 3);
@@ -375,7 +396,13 @@ fn a_route_the_edge_does_not_announce_is_not_hammered() {
         _ => (404, Value::Null),
     }));
     let got = desk
-        .call("GET", "/v1/workspaces", None, Duration::from_secs(10))
+        .call(
+            desk.generation(),
+            "GET",
+            "/v1/workspaces",
+            None,
+            Duration::from_secs(10),
+        )
         .unwrap_err();
     assert_eq!(got.code(), "not_available_yet");
     assert!(got.retry_after().unwrap() >= Duration::from_secs(30));
@@ -388,6 +415,7 @@ fn without_capabilities_a_missing_route_gives_up_within_budget() {
     let started = std::time::Instant::now();
     let got = desk
         .call(
+            desk.generation(),
             "GET",
             "/v1/identity/organizations",
             None,
@@ -418,7 +446,13 @@ fn an_expired_access_is_renewed_once_and_repeated() {
         _ => (404, Value::Null),
     }));
     let got = desk
-        .call("GET", "/v1/workspaces", None, Duration::from_secs(5))
+        .call(
+            desk.generation(),
+            "GET",
+            "/v1/workspaces",
+            None,
+            Duration::from_secs(5),
+        )
         .unwrap();
     assert_eq!(got["items"][0]["id"], "ws_1");
     assert_eq!(count(&log, "/v1/identity/desk/refresh"), 1);
@@ -434,8 +468,14 @@ fn a_revoked_session_ends_after_one_renewal() {
         ),
     }));
     assert_eq!(
-        desk.call("GET", "/v1/identity/me", None, Duration::from_secs(5))
-            .unwrap_err(),
+        desk.call(
+            desk.generation(),
+            "GET",
+            "/v1/identity/me",
+            None,
+            Duration::from_secs(5)
+        )
+        .unwrap_err(),
         Fail::NoSession
     );
     assert!(vault.load().is_none());
@@ -448,7 +488,7 @@ fn sign_out_revokes_in_identity_and_forgets() {
         "/v1/identity/desk/logout" => (204, Value::Null),
         _ => (404, Value::Null),
     }));
-    desk.sign_out();
+    assert!(desk.sign_out().is_some());
     let sent = log.lock().unwrap().clone();
     let desk_logout = sent
         .iter()
@@ -481,8 +521,8 @@ fn sign_out_after_a_restart_renews_to_revoke() {
         refresh_token: "ref_1".into(),
         sid: "s".into(),
     });
-    let desk = Desk::new(base, vault.clone());
-    desk.sign_out();
+    let desk = Desk::new(base, vault.clone(), || {});
+    assert!(desk.sign_out().is_some());
     let logout = log
         .lock()
         .unwrap()
@@ -509,6 +549,7 @@ fn writes_carry_an_idempotency_key() {
     }));
     let got = desk
         .call(
+            desk.generation(),
             "POST",
             "/v1/workspaces/select",
             Some(&json!({"workspace":"1"})),
@@ -847,4 +888,218 @@ fn capabilities_count_only_version_one_and_available() {
     assert_eq!(caps.announces("workspaces"), Some(false));
     assert_eq!(caps.announces("identity.organizations"), Some(false));
     assert_eq!(caps.announces("identity.desk"), Some(false));
+}
+
+fn with_notices(base: String, vault: MemoryVault) -> (Desk<MemoryVault>, Arc<AtomicUsize>) {
+    let notices = Arc::new(AtomicUsize::new(0));
+    let count = notices.clone();
+    let desk = Desk::new(base, vault, move || {
+        count.fetch_add(1, Ordering::SeqCst);
+    });
+    (desk, notices)
+}
+
+#[test]
+fn fetch_without_a_session_returns_no_session_without_announcing() {
+    let (base, log) = serve(Arc::new(|_, _| (500, Value::Null)));
+    let (desk, notices) = with_notices(base, MemoryVault::default());
+    for _ in 0..2 {
+        let error = super::edge_fetch(&desk, "GET", "/v1/machines", None, "k").unwrap_err();
+        assert_eq!(error["detail"], "no_session");
+    }
+    assert!(log.lock().unwrap().is_empty());
+    assert_eq!(notices.load(Ordering::SeqCst), 0);
+}
+
+fn login(desk: &Desk<MemoryVault>, code: &str) -> session::Live {
+    desk.exchange(
+        desk.begin_sign_in(),
+        code,
+        "v",
+        "http://127.0.0.1:9/callback",
+    )
+    .unwrap()
+}
+
+fn stored_session() -> MemoryVault {
+    let vault = MemoryVault::default();
+    vault.save(&Stored {
+        refresh_token: "ref_1".into(),
+        sid: "sid_1".into(),
+    });
+    vault
+}
+
+#[test]
+fn a_revoked_stored_session_announces_once_from_status() {
+    let (base, log) = serve(Arc::new(|_, _| (401, Value::Null)));
+    let vault = stored_session();
+    let (desk, notices) = with_notices(base, vault.clone());
+
+    assert_eq!(desk.status()["state"], "disconnected");
+    assert_eq!(notices.load(Ordering::SeqCst), 1);
+    assert!(vault.load().is_none());
+
+    let error = super::edge_fetch(&desk, "GET", "/v1/machines", None, "k").unwrap_err();
+    assert_eq!(error["detail"], "no_session");
+    assert_eq!(desk.status()["state"], "disconnected");
+    assert_eq!(notices.load(Ordering::SeqCst), 1);
+    assert_eq!(count(&log, "/v1/identity/desk/refresh"), 1);
+}
+
+const WAIT: Duration = Duration::from_secs(5);
+
+fn paused_response() -> (
+    mpsc::Receiver<()>,
+    mpsc::Sender<()>,
+    impl Fn() + Send + Sync + 'static,
+) {
+    let (arrived, wait) = mpsc::channel();
+    let (release, blocked) = mpsc::channel();
+    let blocked = Mutex::new(blocked);
+    let pause = move || {
+        arrived.send(()).unwrap();
+        blocked.lock().unwrap().recv_timeout(WAIT).unwrap();
+    };
+    (wait, release, pause)
+}
+
+#[test]
+fn concurrent_identity_rejections_announce_once() {
+    let (requests, release_initial, pause_initial) = paused_response();
+    let (rejected, release_retry, pause_retry) = paused_response();
+    let (base, log) = serve(Arc::new(move |r, _| match r.path.as_str() {
+        "/v1/identity/desk/token" => (200, issued(1, 300)),
+        "/v1/identity/desk/refresh" => (200, issued(2, 300)),
+        "/v1/identity/me" if r.authorization.as_deref() == Some("Bearer acc_2") => {
+            pause_retry();
+            (401, Value::Null)
+        }
+        "/v1/identity/me" => {
+            pause_initial();
+            (401, Value::Null)
+        }
+        _ => (404, Value::Null),
+    }));
+    let vault = MemoryVault::default();
+    let (desk, notices) = with_notices(base, vault.clone());
+    login(&desk, "old");
+    std::thread::scope(|scope| {
+        let fetch = || super::edge_fetch(&desk, "GET", "/v1/identity/me", None, "k");
+        let one = scope.spawn(fetch);
+        let two = scope.spawn(fetch);
+        for _ in 0..2 {
+            requests.recv_timeout(WAIT).unwrap();
+        }
+        for _ in 0..2 {
+            release_initial.send(()).unwrap();
+        }
+        rejected.recv_timeout(WAIT).unwrap();
+        rejected.recv_timeout(WAIT).unwrap();
+        assert_eq!(
+            notices.load(Ordering::SeqCst),
+            0,
+            "rotar conserva la sesión"
+        );
+        release_retry.send(()).unwrap();
+        release_retry.send(()).unwrap();
+        assert_eq!(one.join().unwrap().unwrap_err()["detail"], "no_session");
+        assert_eq!(two.join().unwrap().unwrap_err()["detail"], "no_session");
+    });
+    assert!(vault.load().is_none());
+    assert_eq!(notices.load(Ordering::SeqCst), 1);
+    assert_eq!(count(&log, "/v1/identity/desk/refresh"), 1);
+}
+
+#[test]
+fn old_refresh_responses_leave_new_login_intact() {
+    for status in [200, 401] {
+        let (refreshing, release, pause) = paused_response();
+        let (base, _) = serve(Arc::new(move |r, _| match r.path.as_str() {
+            "/v1/identity/desk/token" => (200, issued(3, 300)),
+            "/v1/identity/desk/refresh" => {
+                pause();
+                (status, issued(2, 300))
+            }
+            _ => (404, Value::Null),
+        }));
+        let vault = stored_session();
+        let (desk, notices) = with_notices(base, vault.clone());
+        std::thread::scope(|scope| {
+            let old = scope.spawn(|| desk.access());
+            refreshing.recv_timeout(WAIT).unwrap();
+            login(&desk, "new");
+            release.send(()).unwrap();
+            assert_eq!(old.join().unwrap().unwrap_err(), Fail::NoSession);
+        });
+        assert_eq!(desk.access().unwrap().access_token, "acc_3");
+        assert_eq!(vault.load().unwrap().refresh_token, "ref_3");
+        assert_eq!(notices.load(Ordering::SeqCst), 0, "refresh {status}");
+    }
+}
+
+#[test]
+fn old_identity_responses_leave_new_profile_intact() {
+    for status in [200, 401] {
+        let (reading, release, pause) = paused_response();
+        let (base, _) = serve(Arc::new(move |r, n| match r.path.as_str() {
+            "/v1/identity/desk/token" => (200, issued(if n == 0 { 1 } else { 3 }, 300)),
+            "/v1/identity/desk/refresh" => (200, issued(2, 300)),
+            "/v1/identity/me" if r.authorization.as_deref() == Some("Bearer acc_2") => {
+                pause();
+                (status, json!({"id": "old"}))
+            }
+            "/v1/identity/me" if r.authorization.as_deref() == Some("Bearer acc_3") => {
+                (200, json!({"id": "new"}))
+            }
+            "/v1/identity/me" => (401, Value::Null),
+            _ => (404, Value::Null),
+        }));
+        let vault = MemoryVault::default();
+        let (desk, notices) = with_notices(base, vault.clone());
+        login(&desk, "old");
+        std::thread::scope(|scope| {
+            let old = scope.spawn(|| desk.status());
+            reading.recv_timeout(WAIT).unwrap();
+            login(&desk, "new");
+            assert_eq!(desk.status()["account"], "new");
+            release.send(()).unwrap();
+            assert_eq!(old.join().unwrap()["account"], "new");
+        });
+        assert_eq!(desk.status()["account"], "new");
+        assert_eq!(vault.load().unwrap().refresh_token, "ref_3");
+        assert_eq!(notices.load(Ordering::SeqCst), 0, "identity {status}");
+    }
+}
+
+#[test]
+fn old_exchange_cannot_replace_new_login() {
+    let (exchanging, release, pause) = paused_response();
+    let (base, _) = serve(Arc::new(move |r, _| match r.path.as_str() {
+        "/v1/identity/desk/token" if r.body["code"] == "old" => {
+            pause();
+            (200, issued(1, 300))
+        }
+        "/v1/identity/desk/token" => (200, issued(2, 300)),
+        _ => (404, Value::Null),
+    }));
+    let vault = MemoryVault::default();
+    let (desk, notices) = with_notices(base, vault.clone());
+    std::thread::scope(|scope| {
+        let old = scope.spawn(|| {
+            desk.exchange(
+                desk.begin_sign_in(),
+                "old",
+                "v",
+                "http://127.0.0.1:9/callback",
+            )
+        });
+        exchanging.recv_timeout(WAIT).unwrap();
+        login(&desk, "new");
+        release.send(()).unwrap();
+        assert_eq!(old.join().unwrap().unwrap_err().code(), "cancelled");
+    });
+    assert_eq!(desk.access().unwrap().access_token, "acc_2");
+    assert_eq!(vault.load().unwrap().refresh_token, "ref_2");
+    assert_eq!(notices.load(Ordering::SeqCst), 0);
 }

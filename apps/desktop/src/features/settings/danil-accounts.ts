@@ -7,6 +7,7 @@
 import { createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { invoke } from "../../lib/invoke";
 import { listen } from "../../lib/serviceEvents";
+import { listenDanilConnectionChange } from "../../lib/danilConnectionEvents";
 import { failureCode } from "./danil-account";
 import { machines } from "../machines/store";
 import {
@@ -93,8 +94,7 @@ export function createDanilAccounts(options: { workspace?: (() => string | null 
       if (Array.isArray(e.payload)) setSessions(e.payload);
       void readOf();
     });
-    // El primer inicio de sesión llega también por aquí; un motor anterior solo manda este.
-    const connect = listen("danil-connect", () => void reload());
+    const connect = listenDanilConnectionChange(() => void reload());
     const moved = () => void readOf();
     if (reading === "active") window.addEventListener("harness:workspace", moved);
     onCleanup(() => {
