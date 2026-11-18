@@ -43,6 +43,10 @@ test("la marca sale del nombre del servidor, con sufijos y alias", () => {
   assert.equal(toolMarkId("github.com"), "github");
   // El programa `git` es Git, no GitHub.
   assert.equal(toolMarkId("git"), "git");
+  // El MCP `workos` y el CLI `workos` llevan la marca de WorkOS.
+  assert.equal(toolMarkId("workos"), "workos");
+  assert.equal(toolMarkId("workos-mcp"), "workos");
+  assert.equal(commandMarkId("workos"), "workos");
 });
 
 test("un servidor que no conocemos no lleva marca, y no se inventa una", () => {
