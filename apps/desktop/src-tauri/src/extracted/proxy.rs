@@ -67,6 +67,9 @@ struct Fed {
 }
 // Cuánto espera `service_poll` lo empujado antes de contestar sin eventos.
 const PUSH_WAIT: Duration = Duration::from_secs(20);
+// El motor no espera en `service stream read`: un stream quieto (un árbol vigilado) se lee cada vez menos.
+const STREAM_WAIT_MIN: Duration = Duration::from_millis(100);
+const STREAM_WAIT_MAX: Duration = Duration::from_secs(1);
 const HISTORY_TURNS: u64 = 150;
 
 pub(super) struct State {
@@ -612,6 +615,13 @@ pub(super) fn handle(invoke: tauri::ipc::Invoke) {
         resolve(&resolver, Err(failure(&Error::new("service_busy"))));
     }
 }
+fn next_stream_wait(previous: Duration, delivered: bool) -> Duration {
+    if delivered {
+        STREAM_WAIT_MIN
+    } else {
+        (previous * 2).min(STREAM_WAIT_MAX)
+    }
+}
 fn machine_off() -> Value {
     json!({"what":{"clave":"shell.service.machine_off"},"detail":"machine_off"})
 }
@@ -683,6 +693,7 @@ fn stream(
         .push((id.clone(), workspace.clone()));
     let cancel = Arc::new(AtomicBool::new(false));
     let mut cursor = None;
+    let mut wait = STREAM_WAIT_MIN;
     let result = (|| -> Result<(), Value> {
         while !state.closed.load(Ordering::SeqCst) && !cancel.load(Ordering::SeqCst) {
             let value = client
@@ -699,6 +710,7 @@ fn stream(
                 return Err(failure(&Error::new("io")));
             }
             let mut latest = cursor.unwrap_or(0);
+            wait = next_stream_wait(wait, !page.events.is_empty());
             for event in page.events {
                 if event.seq <= latest || event.seq > page.cursor {
                     return Err(failure(&Error::new("invalid_request")));
@@ -725,7 +737,7 @@ fn stream(
             if page.done {
                 return Ok(());
             }
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(wait);
         }
         if cancel.load(Ordering::SeqCst) {
             Ok(())
@@ -1115,6 +1127,18 @@ pub(super) fn machine_list(app: tauri::AppHandle) -> Result<Value, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn un_stream_quieto_se_lee_cada_vez_menos_y_vuelve_al_llegar_algo() {
+        let mut wait = STREAM_WAIT_MIN;
+        let mut seen = vec![];
+        for _ in 0..6 {
+            wait = next_stream_wait(wait, false);
+            seen.push(wait.as_millis());
+        }
+        assert_eq!(seen, [200, 400, 800, 1000, 1000, 1000]);
+        assert_eq!(next_stream_wait(wait, true), STREAM_WAIT_MIN);
+    }
 
     #[test]
     fn un_destino_no_local_no_pasa_al_ipc_nativo() {

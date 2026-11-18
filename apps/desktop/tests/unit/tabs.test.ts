@@ -1133,3 +1133,44 @@ test("un guardado inválido no impide entrar a otro espacio ni borra las pestañ
     assert.deepEqual(tabs.open().map(tab => tab.id), ["task"]);
   }
 });
+
+test("an unchanged remote Git answer is asked less often until something changes", async (t) => {
+  const { watchSessionGit } = await import("../../src/features/projects/taskGit.ts");
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const fake = new EventTarget();
+  const row = { ...UNKNOWN_GIT, kind: "branch" as const, branch: "feature", head: "a", repository: "repo-a" };
+  let remoteCalls = 0;
+  let remoteHead = "a";
+  Object.assign(fake, { __TAURI_INTERNALS__: { transformCallback: () => 1, invoke: async (_: string, args: { remote: boolean }) => {
+    if (!args.remote) return { s: { ...row } };
+    remoteCalls++;
+    return { s: { ...row, head: remoteHead } };
+  } } });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: fake, writable: true });
+  Object.defineProperty(globalThis, "document", { configurable: true, value: Object.assign(new EventTarget(), { hidden: false }), writable: true });
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 1_000_000 });
+  const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+  const advance = async (ms: number) => { for (let i = 0; i < ms / 1_000; i++) { t.mock.timers.tick(1_000); await flush(); } };
+  const watcher = watchSessionGit("remote-backoff-test");
+  try {
+    await flush();
+    assert.equal(remoteCalls, 1);
+    await advance(60_000);
+    assert.ok(remoteCalls <= 5, `a quiet minute asked the remote ${remoteCalls} times`);
+    const quiet = remoteCalls;
+    await advance(120_000);
+    assert.ok(remoteCalls - quiet <= 4 && remoteCalls - quiet >= 4, `two quiet minutes at the ceiling asked ${remoteCalls - quiet} times`);
+    const beforeFocus = remoteCalls;
+    fake.dispatchEvent(new Event("focus"));
+    await flush();
+    assert.equal(remoteCalls, beforeFocus + 1, "focus asks at once");
+    await advance(6_000);
+    assert.equal(remoteCalls, beforeFocus + 2, "focus brings back the short interval");
+  } finally {
+    watcher.release();
+    t.mock.timers.reset();
+    Object.defineProperty(globalThis, "window", { configurable: true, value: previousWindow, writable: true });
+    Object.defineProperty(globalThis, "document", { configurable: true, value: previousDocument, writable: true });
+  }
+});

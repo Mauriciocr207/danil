@@ -86,12 +86,12 @@ export function watchSessionGit(project: string, routing?: { workspace: string; 
     let localReady = false;
     let localFailed = false;
     let lastLocal = 0;
-    let lastRemote = 0;
+    let lastRemote = 0, remoteEvery = 3_000;
     const queueKey = Symbol();
     const priority = () => [...new Set([...interests.values()].flat())];
     const current = (started: number) => !disposed && started === generation;
     const remote = () => {
-      if (disposed || remoteBusy || !localReady || document.hidden || Date.now() - lastRemote < 3_000) return;
+      if (disposed || remoteBusy || !localReady || document.hidden || Date.now() - lastRemote < remoteEvery) return;
       remoteBusy = true;
       lastRemote = Date.now();
       const started = generation;
@@ -102,14 +102,14 @@ export function watchSessionGit(project: string, routing?: { workspace: string; 
             if (!current(started) || document.hidden) return;
             const result = await readTaskGit(remote => withDeadline(invoke<Record<string, GitStatus>>("list_session_git", { project, remote, priority: priority(), progress: new Channel<Record<string, GitStatus>>() }, options)), { phase: "remote" });
             if (current(started)) {
-              if (!localFailed) setError(null);
+              if (!localFailed) setError(null); const before = rows();
               setRows(previous => {
               const merged = mergeRemoteGit(previous, result);
               const next = localFailed || Date.now() - lastLocal >= 30_000 ? staleGit(merged) : merged;
-              // El remoto pregunta cada 3 s y casi siempre trae lo mismo.
               return conservarFilas(previous, Object.fromEntries(Object.entries(next).map(([id, row]) =>
                 [id, previous[id] && mismoGit(previous[id], row) ? previous[id] : row])));
               });
+              remoteEvery = rows() === before ? Math.min(remoteEvery * 2, 30_000) : 3_000; // Sin cambios, pregunta cada vez menos.
             }
           } catch (error) {
             if (current(started)) { setError(error); setRows(staleGit); }
@@ -157,7 +157,7 @@ export function watchSessionGit(project: string, routing?: { workspace: string; 
       void refresh();
     }, 15_000);
     const remoteTimer = setInterval(() => void remote(), 3_000);
-    const focus = () => { lastRemote = 0; void refresh(); };
+    const focus = () => { lastRemote = 0; remoteEvery = 3_000; void refresh(); };
     const workspace = () => {
       generation++;
       remoteQueue.delete(queueKey);
@@ -167,7 +167,7 @@ export function watchSessionGit(project: string, routing?: { workspace: string; 
       localFailed = false;
       lastLocal = 0;
       pending = false;
-      lastRemote = 0;
+      lastRemote = 0; remoteEvery = 3_000;
       setRows({});
       void refresh();
     };
@@ -175,7 +175,7 @@ export function watchSessionGit(project: string, routing?: { workspace: string; 
     window.addEventListener("harness:workspace", workspace);
     window.addEventListener("focus", focus);
     document.addEventListener("visibilitychange", visible);
-    entry = { rows, error, refresh: () => void refresh(), interests, dispose: () => {
+    entry = { rows, error, refresh: () => { remoteEvery = 3_000; void refresh(); }, interests, dispose: () => {
       disposed = true;
       remoteQueue.delete(queueKey);
       clearInterval(timer);
