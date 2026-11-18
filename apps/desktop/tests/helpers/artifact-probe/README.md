@@ -2,7 +2,8 @@
 
 This fixture mounts the production `ArtifactViewer` with controlled `preview_file`
 responses. It checks stale success, stale failure and switching task scope while
-retaining the same path. It does not prove authentication or engine transport.
+retaining the same path, plus a refreshed task lookup with an unchanged machine
+and an actual machine change. It does not prove authentication or engine transport.
 
 From `apps/desktop`:
 

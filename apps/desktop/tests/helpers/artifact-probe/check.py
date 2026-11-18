@@ -33,6 +33,20 @@ with sync_playwright() as playwright:
         page.evaluate("probe.resolve(1, 'New scope')")
         expect(page.get_by_text("New scope", exact=True)).to_be_visible()
         results.append("same path in different task reloads without stale display")
+        page.goto(url)
+        page.locator("[data-probe-ready]").wait_for(state="attached")
+        page.evaluate("probe.resolve(0, 'Stable document')")
+        expect(page.get_by_text("Stable document", exact=True)).to_be_visible()
+        page.evaluate("probe.refreshMachine()")
+        assert page.evaluate("probe.reads()") == 1, "unchanged machine triggered another preview read"
+        expect(page.get_by_text("Stable document", exact=True)).to_be_visible()
+        results.append("same-machine lookup refresh keeps preview and single read")
+        page.evaluate("probe.refreshMachine('machine-two')")
+        assert page.evaluate("probe.reads()") == 2
+        expect(page.get_by_text("Stable document", exact=True)).to_have_count(0)
+        page.evaluate("probe.resolve(1, 'Moved document')")
+        expect(page.get_by_text("Moved document", exact=True)).to_be_visible()
+        results.append("changed machine invalidates and reloads preview")
         print(json.dumps({"passed": results, "transport": "controlled preview_file; real component and Chromium"}))
     finally:
         browser.close()

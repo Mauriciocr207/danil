@@ -1,4 +1,4 @@
-import { createEffect, createSignal, on, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { invoke } from "../../lib/invoke.ts";
 import { machineOf } from "../machines/store";
 import { FileMachine } from "../../ui/fileMachine";
@@ -29,7 +29,7 @@ export default function VisorDeArtefacto(props: {
   /** La tarea de la pestaña: si corre en otra máquina, el archivo está en su disco. */
   session?: string;
 }) {
-  const machine = () => machineOf(props.session)?.headers["x-terminus-machine"];
+  const machine = createMemo(() => machineOf(props.session)?.headers["x-terminus-machine"]);
   const [preview, setPreview] = createSignal<Preview | null>(null);
   const [fallo, setFallo] = createSignal<string | null>(null);
 
