@@ -1,0 +1,126 @@
+import ChevronRight from "lucide-solid/icons/chevron-right";
+import { createMemo, createUniqueId, Index, type JSX, Show } from "solid-js";
+import { t } from "../../../../lib/i18n";
+import { sharedLazy } from "../../../../lib/sharedLazy";
+import { cuentaDelTramo, partesDelTramo, type Paso } from "../../../../lib/steps";
+import { cn } from "../../../../lib/utils";
+import { Markdown } from "../../../../ui/Markdown";
+import type { ActivityChunk } from "../../activityBlocks";
+import { ActivityDots } from "../../ActivityDots";
+import McpAppView from "../../McpAppView";
+import type { Msg, Razonamiento } from "../../messageTypes";
+import LineaDeTiempo, { SUPERFICIE_DE_EJECUCION } from "../../Timeline";
+type Avance = ActivityChunk<Msg>;
+const SIN_AVANCE: Avance[] = [];
+/** La cabecera de un tramo, entera o partida (ver `RegistroDeTrabajo`). */
+const FILA_DEL_TRAMO =
+  "inline-flex min-w-0 max-w-full items-center gap-2 rounded-sm py-1.5 text-left text-ui font-normal text-neutral-500 hover:text-neutral-950 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary";
+// Chunk aparte: el bloque de razonamiento solo lo carga un turno que lo trae.
+const Reasoning = sharedLazy(() => import("../../Reasoning"));
+export function RegistroDeTrabajo(props: {
+  pasos: Paso[];
+  /** Lo que el turno hizo y dijo antes de su respuesta; se pliega con los pasos. */
+  avance?: Avance[];
+  corriendo: boolean;
+  status?: () => JSX.Element;
+  blocked?: boolean;
+  observed?: boolean;
+  label?: string;
+  duracion?: string | null;
+  abierto?: boolean;
+  onAlternar: (abierto: boolean) => void;
+  razonamiento?: Razonamiento[];
+  animando?: boolean;
+  /** Con él, «Editó N archivos» abre los cambios en el panel de la tarea. */
+  onVerCambios?: () => void;
+}) {
+  const panelId = createUniqueId();
+  // Sin contar los pasos con error: fallar y reintentar es normal en un turno
+  // correcto, y «1 con error» alarmaba. El fallo del turno va aparte.
+  const avance = () => props.avance ?? SIN_AVANCE;
+  const todos = createMemo(() => [...avance().flatMap((a) => a.pasos), ...props.pasos]);
+  const rotulo = () => props.label ??
+    cuentaDelTramo(todos(), props.corriendo) ??
+    (props.corriendo ? t("chat.reasoning.thinking") : t("chat.activity.title"));
+  const hasContent = () => todos().length > 0 || avance().length > 0 || Boolean(props.razonamiento?.length);
+  const hasChanges = () => props.onVerCambios && partesDelTramo(todos(), props.corriendo).some(part => part.clase === "editar");
+  const duracion = () =>
+    !props.corriendo && props.duracion ? t("chat.work.duration", { duration: props.duracion }) : null;
+  // El chevron y el cuerpo leen esto; si divergen, el primer clic abre lo que ya se veía abierto.
+  const desplegado = () => Boolean(props.abierto);
+  const chevron = () => (
+    <ChevronRight
+      size={13}
+      strokeWidth={1.5}
+      class={cn("shrink-0 transition-transform motion-reduce:transition-none", desplegado() && "rotate-90")}
+      aria-hidden="true"
+    />
+  );
+  const girando = () => <ActivityDots active={props.corriendo} paused={props.animando === false} />;
+  const caption = () => <><Show when={!props.blocked}><span class="min-w-0 truncate" data-activity-label="">{rotulo()}</span></Show><Show when={props.blocked}>{props.status?.()}</Show></>;
+  const tiempo = () => (
+    <Show when={duracion()}>
+      <span class="pointer-events-none shrink-0 text-xs whitespace-nowrap text-neutral-500">{duracion()}</span>
+    </Show>
+  );
+
+  // Sin envoltorio y con los datos de la derecha en un solo texto: cada
+  // elemento de más se multiplica por los tramos del hilo (`open-task-cost`).
+  return (
+    <>
+      <span role="status" aria-live="polite" aria-atomic="true" class="sr-only">{props.corriendo && props.animando !== false ? t("chat.turn.working_aria") : ""}</span>
+      <Show
+        when={todos().length > 0 || avance().length > 0 || props.razonamiento?.length || props.corriendo || props.observed}
+        fallback={<p class="m-0 mb-2 px-1 py-1.5 text-xs text-neutral-500">{duracion()}</p>}
+      >
+        <div class={cn("flex flex-wrap items-center gap-2", !desplegado() && "mb-2")}>
+          <Show when={!hasContent()}><span class={FILA_DEL_TRAMO}><span class="activity-label inline-flex min-w-0 items-center">{girando()}{caption()}</span><Show when={!props.blocked}>{props.status?.()}</Show>{tiempo()}</span></Show>
+          <Show when={hasContent()}>
+            <button type="button" aria-expanded={desplegado()} aria-controls={panelId} onClick={() => props.onAlternar(!desplegado())} class={FILA_DEL_TRAMO}>
+              <span class="activity-label inline-flex min-w-0 items-center">{girando()}{caption()}</span><Show when={!props.blocked}>{props.status?.()}</Show>{tiempo()}{chevron()}
+            </button>
+          </Show>
+          <Show when={hasChanges()}>
+            <button type="button" onClick={() => props.onVerCambios?.()} class={FILA_DEL_TRAMO}>{t("chat.work.open_changes")}</button>
+          </Show>
+        </div>
+
+        <Show when={desplegado()}>
+          <div id={panelId} class={cn(SUPERFICIE_DE_EJECUCION, "mb-2")} data-turn-activity-content="">
+            <Index each={avance()}>
+              {(tramo) => (
+                <>
+                  <Show when={tramo().pasos.length > 0}>
+                    <LineaDeTiempo pasos={tramo().pasos} individual />
+                  </Show>
+                  {/* La fila de siempre y no prosa suelta: dentro del pliegue
+                      una ráfaga sin su rótulo se lee como algo que el agente dijo. */}
+                  <Show when={tramo().msg.razonamiento?.length ? tramo().msg.razonamiento : null}>
+                    {(bloques) => (
+                      <Reasoning bloques={bloques()} />
+                    )}
+                  </Show>
+                  <div class="px-1 py-1 text-sm text-neutral-500">
+                    <Show when={!tramo().outside}><Markdown>{tramo().msg.text}</Markdown></Show>
+                  </div>
+                </>
+              )}
+            </Index>
+            <Show when={props.pasos.length > 0}>
+              <LineaDeTiempo pasos={props.pasos} individual />
+            </Show>
+            <Show when={props.razonamiento?.length ? props.razonamiento : null}>{(blocks) => <Reasoning bloques={blocks()} />}</Show>
+      <Index each={todos()}>
+        {(step) => (
+          <Show when={!step().corriendo && step().mcpApp}>
+            {(call) => <McpAppView call={call()} />}
+          </Show>
+        )}
+      </Index>
+          </div>
+        </Show>
+      </Show>
+
+    </>
+  );
+}
