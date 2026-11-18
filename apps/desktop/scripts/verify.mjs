@@ -82,6 +82,7 @@ const steps = [
   ["Machine preferences stay with the browser person", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/web-machine-preferences.test.ts")], root],
   ["Hidden workspaces leave the rail, keep their place and stay with the browser person", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/hidden-workspaces.test.ts")], root],
   ["Danil workspaces are added by the person, seeded once atomically and kept local on 404/501/403", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/workspace-added-sync.test.ts")], root],
+  ["The added list goes through Desk's edge and the web cookie with CSRF, and its record stays per person and organization", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/workspace-added-transport.test.ts")], root],
   ["Messaging stays isolated from Desk and web", process.execPath, [join(root, "scripts/guards/messaging-isolation.mjs")], root],
   ["Messaging isolation guard rejects reintroduced transports", process.execPath, ["--test", join(root, "tests/unit/messaging-isolation.test.mjs")], root],
   ["Web uses platform without direct database dependencies", process.execPath, [join(root, "scripts/guards/web-platform.mjs")], root],
