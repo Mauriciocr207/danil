@@ -15,6 +15,7 @@
  * suma su rebanada con `merge`.
  */
 import { type AccountWorkspace, type Blocked, type CallResult, type DeferredFrame, type EngineInfo, type EventsPage, type MachineState, type SystemId, cachedAt, callWorkspace, isDeferrable, linkedAttention, linkedEvents, linkedListing, requestId, unlinkedWorkspaces } from "../../computers/src/index.ts";
+import { COMMAND_NOT_HERE, isScopeRefusal, isUnknownCommand } from "../../protocol/src/index.ts";
 import { DEADLINES, type Deadlines, PASSIVE, classOf } from "./deadlines.ts";
 import { FleetError, fromRelay } from "./errors.ts";
 import { argsFor } from "./ids.ts";
@@ -581,7 +582,9 @@ export class Fleet {
       if (e.code === "machine_off") slice = before?.has ? { ...before, status: "cached", error: e.code } : keep("off", e.code);
       else if (e.code === "version_mismatch") slice = keep("outdated", e.code);
       else if (e.code === "license_required") slice = keep("license_required", e.code);
-      else slice = keep("no_answer", e.code);
+      // Classify before discarding the relay detail: the old engine wraps
+      // unknown commands in command_failed. Never cache its arbitrary details.
+      else slice = keep("no_answer", isScopeRefusal(e) ? COMMAND_NOT_HERE : isUnknownCommand(e) ? "command" : e.code);
     }
     return this.settle(slice, key);
   }
