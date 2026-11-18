@@ -410,3 +410,16 @@ test("la línea de estado no repite un comando cuya fila ya se ve", async () => 
   const read = { kind: "read" as const, name: "Read", target: "/a.ts", ok: null, running: true };
   assert.equal(statusNamesStep(read, true), true, "la regla es solo de comandos");
 });
+
+test("la línea de estado pone la marca del servicio delante del comando que nombra", async () => {
+  const { statusCommandMark } = await import("../src/lib/steps.ts");
+  const { commandSummary } = await import("@terminus/chat/command");
+  const step = (target: string) => ({ kind: "run" as const, name: "Bash", target, ok: null, running: true });
+  assert.equal(statusCommandMark(step("git fetch --all --prune"), false)?.mark, "git", "pie del chat: «Ejecutando [Git] git fetch …»");
+  const cli = step('"$DANIL_CLI" task show --task x --json');
+  assert.equal(statusCommandMark(cli, false)?.mark, "danil");
+  assert.equal(commandSummary(cli.target), "danil task show --task x --json", "el texto es el resumen, no `$DANIL_CLI`");
+  assert.equal(statusCommandMark(step("./build-local.sh --fast"), false), null, "un programa desconocido no lleva marca");
+  assert.equal(statusCommandMark(step("git fetch --all --prune"), true), null, "si la línea no nombra el comando, no hay marca");
+  assert.equal(statusCommandMark({ kind: "read" as const, name: "Read", target: "/a.ts", ok: null, running: true }, false), null);
+});
