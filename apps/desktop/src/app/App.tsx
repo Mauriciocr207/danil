@@ -99,7 +99,7 @@ import { createdTasks } from "../features/projects/agentPageFilters";
 import BaseBranchPicker from "../features/projects/BaseBranchPicker";
 import { watchHandlerStatus, watchHandlerStatuses } from "../features/projects/handlerPresence";
 import { EmptyContext, ProjectPicker } from "../features/projects/Projects";
-import { activeTaskCounts, activityByProject, type HiddenProjects, hiddenIn, type PickedAt, rememberPick, setHidden } from "../features/projects";
+import { activeTaskCounts, activityByProject, type HiddenProjects, hiddenIn, type PickedAt, rememberPick, setHidden, taskCountOf } from "../features/projects";
 import { bringHereLabel, canBringHere, carryOrigin, machineName, machineOf, machineWakes, machines, refetchMachines, remoteChildScope, runOn, senderTaskId, setRunOn, setTaskRowMachine } from "../features/machines/store";
 import { canonicalAgentId, isFreeRouterModel, lastActivity, launcherOf, OPENCODE, withRemoteLaunchers } from "@terminus/tasks";
 import type { CarriedBase, CarryCheck } from "../features/machines/carry";
@@ -3749,6 +3749,7 @@ export default function App() {
     get onRemoveFromSpace() {
       return multipleSpaces() ? removeFromActiveSpace : undefined;
     },
+    activeTasks: (id) => taskCountOf({ id, sessions: 0 }, tareasActivas()),
     hiddenInPicker: (id) => ocultosAqui().has(id),
     onSetHiddenInPicker: (id, hide) => ocultarDelSelector(id, hide),
     onOpenMaterial: (id) => {

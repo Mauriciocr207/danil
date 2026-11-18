@@ -18,6 +18,7 @@ import { workdirIconKind } from "../code/workdirKind";
 import WorkdirIcon, { workdirKindLabel } from "../code/WorkdirIcon";
 import { SettingsBlock, SettingsPanel, SettingsSection } from "./layout";
 import { PickerVisibilityItem } from "./PickerVisibilityItem";
+import { TaskCountCell } from "./TaskCountCell";
 import "../../locales/settingsPhrases";
 
 /** Lo que la página necesita de la ventana. Getters: leerlos en `Settings` remontaría el panel. */
@@ -30,6 +31,8 @@ export type ContextoDeProyectos = {
   readonly onRemoveFromSpace?: (id: string) => void;
   /** Abre la vista del proyecto, donde se elige el material que lee. */
   onOpenMaterial: (id: string) => void;
+  /** Tareas activas (sin archivadas); `null` si no se conoce. El aviso de borrado sigue con `sessions`: se borran todas. */
+  activeTasks: (id: string) => number | null;
   /** Apartarlo del selector de la tarea nueva (`PickerVisibilityItem`); no borra nada ni lo saca de aquí. */
   hiddenInPicker?: (id: string) => boolean; onSetHiddenInPicker?: (id: string, hide: boolean) => void;
 };
@@ -102,13 +105,7 @@ export default function ManageProjects(props: { contexto: ContextoDeProyectos })
             {ubicacion() ?? t("settings.projects.no_location")}
           </span>
         </TableCell>
-        <TableCell
-          class={cn("text-xs tabular-nums", p().sessions > 0 ? "text-neutral-700" : "text-neutral-500")}
-        >
-          {p().sessions > 0
-            ? t("settings.projects.tasks", { count: p().sessions })
-            : t("settings.projects.no_tasks")}
-        </TableCell>
+        <TaskCountCell count={props.contexto.activeTasks(p().id)} />
         <TableCell class="text-right">
           {/* Una sola `PopoverContent` con dos vistas: cambiarla por otra la
               reposiciona a mitad de una decisión irreversible. */}

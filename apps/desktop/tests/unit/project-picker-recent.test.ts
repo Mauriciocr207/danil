@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activeTaskCounts, activityByProject, byRecent, hiddenIn, pickerSections, recentProjects, rememberPick, setHidden } from "../../src/features/projects/recent.ts";
+import { activeTaskCounts, activityByProject, byRecent, hiddenIn, pickerSections, recentProjects, rememberPick, setHidden, taskCountOf } from "../../src/features/projects/recent.ts";
 import { lastActivity } from "../../../../packages/tasks/src/view.ts";
 
 const DAY = 86_400_000;
@@ -126,4 +126,13 @@ test("the task count is of active tasks only; a project without a read list has 
   const counts = activeTaskCounts({ "": [row()], a: [row(), row(false), row(null), row(true)], b: [row(true)], c: [] });
   assert.deepEqual(counts, { a: 3, b: 0, c: 0 });
   assert.equal("d" in counts, false, "unknown, not zero");
+});
+
+test("the picker row and Settings → Projects read the same active count: archived out, unknown is no number", () => {
+  const counts = activeTaskCounts({ app: [{ archived: false }, { archived: true }, {}], archived: [{ archived: true }] });
+  const engine = (id: string) => ({ id, sessions: 363 });
+  assert.equal(taskCountOf(engine("app"), counts), 2, "the engine's 363 includes archived tasks");
+  assert.equal(taskCountOf(engine("archived"), counts), 0);
+  assert.equal(taskCountOf(engine("off-machine"), counts), null, "no list read: no number, not 0 nor 363");
+  assert.equal(taskCountOf(engine("app"), undefined), 363, "without counts, the engine's number as before");
 });
