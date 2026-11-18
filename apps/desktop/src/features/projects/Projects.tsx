@@ -18,6 +18,7 @@ import { type Project, type Source } from "../../lib/model";
 import { lineaDeProcedencia, procedencia } from "../../lib/sourceOrigin";
 import { Badge } from "../../ui/Badge";
 import WorkdirIcon, { workdirKindLabel } from "../code/WorkdirIcon";
+import { byRecent, type PickedAt, recentProjects } from "./recent";
 
 
 /**
@@ -71,19 +72,33 @@ export function ProjectPicker(props: {
   onAdministrar?: () => void;
   /** Dónde corre la tarea: va antes del proyecto, que es de esa máquina. */
   machine?: JSX.Element;
+  /** Última actividad de las tareas vivas de cada proyecto, en ms. */
+  activity?: Record<string, number>;
+  /** Última vez que se eligió cada proyecto aquí, en ms. */
+  picked?: PickedAt;
 }) {
-  const [abierto, setAbierto] = createSignal(false);
+  const [abierto, setAbiertoCrudo] = createSignal(false);
   const [busca, setBusca] = createSignal("");
+  const [todos, setTodos] = createSignal(false);
+  const setAbierto = (open: boolean) => {
+    if (!open) setTodos(false);
+    setAbiertoCrudo(open);
+  };
 
   const actual = () => props.projects.find((p) => p.id === props.project) ?? null;
 
   /** Sin acentos ni mayúsculas: buscar «administracion» encuentra la con tilde. */
   const plano = (s: string) =>
     s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+  const recientes = () => recentProjects(props.projects, props.activity ?? {}, props.picked ?? {}, props.project);
+  // Con texto se busca en todo y sin corte.
   const filtradas = () => {
     const q = plano(busca().trim());
-    return q ? props.projects.filter((p) => plano(p.name).includes(q)) : props.projects;
+    if (q) return byRecent(props.projects.filter((p) => plano(p.name).includes(q)), props.activity ?? {}, props.picked ?? {});
+    const { visible, rest } = recientes();
+    return todos() ? [...visible, ...rest] : visible;
   };
+  const plegados = () => (busca().trim() || todos() ? 0 : recientes().rest.length);
   const sinNada = () => filtradas().length === 0;
 
   function elegir(id: string) {
@@ -163,6 +178,12 @@ export function ProjectPicker(props: {
                 </button>
               )}
             </For>
+
+            <Show when={plegados() > 0}>
+              <button class={cn(ITEM_DE_MENU, "text-neutral-700")} data-more-projects="" onClick={() => setTodos(true)}>
+                {t("projects.picker.more", { n: plegados() })}
+              </button>
+            </Show>
 
             <Show when={sinNada()}>
               <p class="m-0 px-2 py-3 text-center text-caption">

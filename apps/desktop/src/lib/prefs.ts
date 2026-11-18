@@ -12,8 +12,11 @@ import { capabilities } from "./platform.ts";
  * migración sepa a dónde apuntaba la app anterior.
  */
 const NS = "harness.layout.";
+// En la web, de la persona y no del navegador; se releen al cambiar de persona.
+const PER_PERSON = new Set(["machines.run_on", "machines.known_names", "workspaces.hidden", "projects.last_picked"]);
+const REREAD = new Set(["machines.run_on", "workspaces.hidden", "projects.last_picked"]);
 function storageKey(key: string) {
-  const person = ["machines.run_on", "machines.known_names", "workspaces.hidden"].includes(key) && !capabilities().nativeWindow ? capabilities().webAccounts?.current.user_id : null;
+  const person = PER_PERSON.has(key) && !capabilities().nativeWindow ? capabilities().webAccounts?.current.user_id : null;
   return person ? `danil.web.${person}.preferences.${key}` : NS + key;
 }
 
@@ -74,7 +77,7 @@ export function createPref<T>(
   clave: string,
   porOmision: T,
 ): [Accessor<T>, (valor: T) => void] {
-  if (clave === "machines.run_on" || clave === "workspaces.hidden") {
+  if (REREAD.has(clave)) {
     const [revision, changed] = createSignal(0);
     return [() => { revision(); return leerPref(clave, porOmision); }, value => {
       escribirPref(clave, value);
