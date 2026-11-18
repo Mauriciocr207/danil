@@ -2967,7 +2967,7 @@ export default function Chat(props: ChatProps) {
                       respuestas={(msg) => msg.turno ? respondido().get(msg.turno) ?? null : null}
                       vivo={fromWork(b(), (t) => esElVivo(t.msg), false)}
                       corriendo={registroCorre(b())}
-                      animando={!props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
+                      animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
                       abiertoElTrabajo={Boolean(trabajos()[claveFila(b())])}
                       onAlternarTrabajo={() => {
                         const k = claveFila(trabajo());
@@ -3008,7 +3008,7 @@ export default function Chat(props: ChatProps) {
                       pasos={pasosDe(b())?.pasos ?? []}
                       avance={pasosDe(b())?.avance}
                       corriendo={esLaTiraViva(b())}
-                      animando={!props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
+                      animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
                       abierto={trabajos()[claveFila(b())]}
                       onAlternar={(abierto) => {
                         setTrabajos({ ...trabajos(), [claveFila(bp())]: abierto });
@@ -3514,7 +3514,7 @@ export default function Chat(props: ChatProps) {
               />
             )}
           </Show>
-          <Show when={(props.busy || props.machineWait) && !props.terminal && (props.machineWait || props.esperando || props.reintento || props.enFondo || !hasLiveActivity())}>
+          <Show when={(props.busy || props.machineWait) && !props.terminal && !props.permission && (props.machineWait || props.esperando || props.reintento || props.enFondo || !hasLiveActivity())}>
             <div class="col-start-1 min-w-0">
               <EstadoDelTurno
                 machineWait={props.machineWait ?? null}
@@ -3663,7 +3663,7 @@ export default function Chat(props: ChatProps) {
 
 /** La cabecera de un tramo, entera o partida (ver `RegistroDeTrabajo`). */
 const FILA_DEL_TRAMO =
-  "flex w-full min-w-0 items-center gap-2 rounded-sm py-1.5 text-left text-sm hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary";
+  "inline-flex min-w-0 max-w-full items-center gap-2 rounded-sm py-1.5 text-left text-ui font-normal text-neutral-500 hover:text-neutral-950 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary";
 
 /**
  * Un tramo de trabajo: las herramientas seguidas entre dos textos del agente,
@@ -3691,27 +3691,25 @@ function RegistroDeTrabajo(props: {
   const todos = createMemo(() => [...avance().flatMap((a) => a.pasos), ...props.pasos]);
   const rotulo = () =>
     cuentaDelTramo(todos(), props.corriendo) ??
-    t("chat.activity.title");
-  const partes = createMemo(() => (props.onVerCambios ? partesDelTramo(todos(), props.corriendo) : []));
+    (props.corriendo ? t("chat.reasoning.thinking") : t("chat.activity.title"));
+  const hasContent = () => todos().length > 0 || avance().length > 0 || Boolean(props.razonamiento?.length);
+  const hasChanges = () => props.onVerCambios && partesDelTramo(todos(), props.corriendo).some(part => part.clase === "editar");
   const duracion = () =>
     !props.corriendo && props.duracion ? t("chat.work.duration", { duration: props.duracion }) : null;
   // El chevron y el cuerpo leen esto; si divergen, el primer clic abre lo que ya se veía abierto.
   const desplegado = () => Boolean(props.abierto);
   const chevron = () => (
     <ChevronRight
-      size={14}
-      class={cn("shrink-0 text-neutral-500 transition-transform", desplegado() && "rotate-90")}
+      size={13}
+      strokeWidth={1.5}
+      class={cn("shrink-0 transition-transform motion-reduce:transition-none", desplegado() && "rotate-90")}
       aria-hidden="true"
     />
   );
-  const girando = () => (
-    <Show when={props.corriendo}>
-      <ActivityDots paused={props.animando === false} />
-    </Show>
-  );
+  const girando = () => <ActivityDots paused={!props.corriendo || props.animando === false} />;
   const tiempo = () => (
     <Show when={duracion()}>
-      <span class="pointer-events-none ml-auto shrink-0 text-xs whitespace-nowrap text-neutral-500">{duracion()}</span>
+      <span class="pointer-events-none shrink-0 text-xs whitespace-nowrap text-neutral-500">{duracion()}</span>
     </Show>
   );
 
@@ -3724,62 +3722,16 @@ function RegistroDeTrabajo(props: {
         when={todos().length > 0 || avance().length > 0 || props.razonamiento?.length || props.corriendo}
         fallback={<p class="m-0 mb-2 px-1 py-1.5 text-xs text-neutral-500">{duracion()}</p>}
       >
-        {/* Con cambios que abrir, la fila se parte: el plegado la cubre por
-            debajo del texto y encima solo «Editó N archivos» recibe el clic
-            (dos botones hermanos: uno dentro de otro no es HTML válido). Sin
-            ellos queda el botón de siempre: cada nodo de más se multiplica por
-            los tramos del hilo (`open-task-cost`). */}
-        <Show
-          when={props.onVerCambios && partes().some((p) => p.clase === "editar")}
-          fallback={
-            <button
-              type="button"
-              aria-expanded={desplegado()}
-              aria-controls={panelId}
-              onClick={() => props.onAlternar(!desplegado())}
-              class={cn(FILA_DEL_TRAMO, "px-1", !desplegado() && "mb-2")}
-            >
-              {chevron()}
-              {girando()}
-              <span class="min-w-0 truncate font-medium text-neutral-700">{rotulo()}</span>
-              {tiempo()}
+        <div class={cn("flex flex-wrap items-center gap-2", !desplegado() && "mb-2")}>
+          <Show when={hasContent()} fallback={<span class={FILA_DEL_TRAMO}>{girando()}<span>{rotulo()}</span>{tiempo()}</span>}>
+            <button type="button" aria-expanded={desplegado()} aria-controls={panelId} onClick={() => props.onAlternar(!desplegado())} class={FILA_DEL_TRAMO}>
+              {girando()}<span class="min-w-0 truncate">{rotulo()}</span>{tiempo()}{chevron()}
             </button>
-          }
-        >
-          <div class={cn(FILA_DEL_TRAMO, "relative pr-1 pl-[1.625rem]", !desplegado() && "mb-2")}>
-            <button
-              type="button"
-              aria-expanded={desplegado()}
-              aria-controls={panelId}
-              aria-label={[rotulo(), duracion()].filter(Boolean).join(" · ")}
-              onClick={() => props.onAlternar(!desplegado())}
-              class="absolute inset-0 flex items-center rounded-sm px-1 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
-            >
-              {chevron()}
-            </button>
-            {girando()}
-            <span class="pointer-events-none min-w-0 truncate font-medium text-neutral-700">
-              <Index each={partes()}>
-                {(parte, i) => (
-                  <>
-                    {i > 0 ? t("common.steps.summary.separator") : ""}
-                    <Show when={parte().clase === "editar"} fallback={parte().texto}>
-                      <button
-                        type="button"
-                        title={t("chat.work.open_changes")}
-                        onClick={() => props.onVerCambios?.()}
-                        class="pointer-events-auto relative rounded-sm underline decoration-neutral-300 underline-offset-2 hover:text-neutral-950 hover:decoration-current focus-visible:outline-2 focus-visible:outline-primary"
-                      >
-                        {parte().texto}
-                      </button>
-                    </Show>
-                  </>
-                )}
-              </Index>
-            </span>
-            {tiempo()}
-          </div>
-        </Show>
+          </Show>
+          <Show when={hasChanges()}>
+            <button type="button" onClick={() => props.onVerCambios?.()} class={FILA_DEL_TRAMO}>{t("chat.work.open_changes")}</button>
+          </Show>
+        </div>
 
         <Show when={desplegado()}>
           <div id={panelId} class={cn(SUPERFICIE_DE_EJECUCION, "mb-2")} data-turn-activity-content="">

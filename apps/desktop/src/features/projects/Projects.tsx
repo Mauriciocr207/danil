@@ -1,6 +1,5 @@
+export { EmptyContext } from "./EmptyContext";
 import { For, Show, createSignal, type JSX } from "solid-js";
-import FolderOpen from "lucide-solid/icons/folder-open";
-import { Button } from "../../ui/Button";
 import ChevronDown from "lucide-solid/icons/chevron-down";
 import Plus from "lucide-solid/icons/plus";
 import Search from "lucide-solid/icons/search";
@@ -19,39 +18,6 @@ import { lineaDeProcedencia, procedencia } from "../../lib/sourceOrigin";
 import { Badge } from "../../ui/Badge";
 import WorkdirIcon, { workdirKindLabel } from "../code/WorkdirIcon";
 import { byRecent, type PickedAt, recentProjects } from "./recent";
-
-
-/**
- * Un workspace sin fuente de contexto. **Nace inerte**: sabe qué alcanza y no
- * tiene nada en disco.
- *
- * **No es una puerta.** Ocupando la ventana entera mientras `context_root` sea
- * `null`, sin señalar una carpeta no hay riel lateral, ni proyectos, ni forma de
- * escribir nada — y un proyecto no es un repo, así que trabajar no puede
- * depender de que exista uno. Vive al lado del selector de proyecto, que es
- * donde se decide de qué es esta conversación, y no impide empezar sin
- * material.
- *
- * No lleva párrafo. El renglón dice qué falta —que es estado, no glosa— y los
- * botones dicen por dónde se sale.
- */
-export function EmptyContext(props: {
-  onPickFolder: () => void;
-  onConnect: () => void;
-}) {
-  return (
-    <div class="flex flex-wrap items-center justify-center gap-1 text-xs text-neutral-500">
-      <span class="px-1">{t("projects.context.empty")}</span>
-      <Button variant="ghost" size="sm" onClick={props.onConnect}>
-        {t("projects.context.connect")}
-      </Button>
-      <Button variant="ghost" size="sm" onClick={props.onPickFolder}>
-        <FolderOpen size={14} />
-        {t("projects.context.pick_folder")}
-      </Button>
-    </div>
-  );
-}
 
 /**
  * Con qué proyecto se trabaja, debajo de la caja y no en la cabecera: es una
