@@ -41,6 +41,8 @@ test("la marca sale del nombre del servidor, con sufijos y alias", () => {
   assert.equal(toolMarkId("pg"), "postgresql");
   assert.equal(toolMarkId("computer-use"), "cua");
   assert.equal(toolMarkId("github.com"), "github");
+  // El programa `git` es Git, no GitHub.
+  assert.equal(toolMarkId("git"), "git");
 });
 
 test("un servidor que no conocemos no lleva marca, y no se inventa una", () => {

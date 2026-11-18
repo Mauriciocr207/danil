@@ -21,6 +21,15 @@ The ZCode mark in `apps/desktop/src/ui/icons.tsx` reproduces the SVG in the head
 It identifies the provider; the mark belongs to its owner and does not imply
 endorsement. It is separate from the license of Danil and from Simple Icons.
 
+## Service marks in `packages/design`
+
+`packages/design/src/toolMarksData.ts` takes its service marks from
+[Simple Icons](https://simpleicons.org) (CC0). The Git mark is the exception:
+it is the [Git Logo](https://git-scm.com/community/logos) by Jason Long,
+licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/), and
+its attribution lives next to its entry. Each mark belongs to its owner; it
+identifies the service (nominative use) and does not imply endorsement.
+
 ## Fonts bundled in the app
 
 All three families are embedded and used offline.
