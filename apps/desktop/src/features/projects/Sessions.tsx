@@ -46,7 +46,7 @@ import { canFinishTask, effectiveTaskGit, type GitStatus, sharesTaskGit, watchSe
 import { authorKey, authorKeys, isSubtask } from "./taskAuthors";
 import { descendientes, type Rama as RamaDeTareas, taskTree } from "./taskTree";
 import { rolledOutcome, type TaskActivity, taskPriority } from "@terminus/design";
-import { taskCard, buildTaskTree, taskIdentity, withTaskAncestors } from "@terminus/tasks";
+import { taskCard, buildTaskTree, familySubtasks, taskIdentity, withTaskAncestors } from "@terminus/tasks";
 
 export function readableSessionTitle(title: string): string {
   if (!title.startsWith("/root/")) return title;
@@ -327,7 +327,6 @@ export default function Sessions(props: {
   onPick: (id: string) => void;
   draggedTask?: string | null;
   onDrag?: (row: SessionRow, event: PointerEvent) => void;
-  /** `members` is the task plus the subtasks the confirmation announced. */
   onDelete: (id: string, members?: number) => void;
   onMove: (id: string, to: string) => void;
   /**
@@ -555,20 +554,6 @@ export default function Sessions(props: {
   // commiteados en ningún lado: no tienen de dónde volver. Por eso la
   // confirmación vive en la propia fila, con lo que se pierde escrito.
   const [confirmando, setConfirmando] = createSignal<string | null>(null);
-  // Deleting a native child takes only that task, and the engine leaves pinned descendants out with their subtree.
-  const subtasksOf = (row: SessionRow) => {
-    if (row.parent) return 0;
-    const count = (branch: RamaDeTareas<SessionRow>): number => branch.hijas.filter(h => !fijada(h.tarea)).reduce((n, h) => n + 1 + count(h), 0);
-    const find = (branches: RamaDeTareas<SessionRow>[]): RamaDeTareas<SessionRow> | undefined => {
-      for (const branch of branches) {
-        if (taskIdentity(branch.tarea) === taskIdentity(row)) return branch;
-        const inner = find(branch.hijas);
-        if (inner) return inner;
-      }
-    };
-    const branch = find(taskTree(props.relatedSessions ?? props.sessions, false));
-    return branch ? count(branch) : 0;
-  };
   // El menú va por portal: escapa del recorte deliberado del sidebar, y con
   // veinte proyectos la lista de destinos no desplaza lo que hay debajo.
   const [menu, setMenu] = createSignal<string | null>(null);
@@ -1115,7 +1100,7 @@ export default function Sessions(props: {
               }}
             >
               <p class="m-0 mb-1.5 text-xs leading-[1.4] text-neutral-500">
-                {subtasksOf(f.s) > 0 ? t("projects.sessions.delete_confirm_family", { count: subtasksOf(f.s) }) : t("projects.sessions.delete_confirm")}
+                <Show when={familySubtasks(taskTree(props.relatedSessions ?? props.sessions, false), f.s, fijada)} fallback={t("projects.sessions.delete_confirm")}>{count => t("projects.sessions.delete_confirm_family", { count: count() })}</Show>
               </p>
               <div class="flex gap-1.5">
                 <Button
@@ -1127,7 +1112,7 @@ export default function Sessions(props: {
                   onClick={() => {
                     setConfirmando(null);
                     setMenu(null);
-                    props.onDelete(f.s.id, 1 + subtasksOf(f.s));
+                    props.onDelete(f.s.id, 1 + familySubtasks(taskTree(props.relatedSessions ?? props.sessions, false), f.s, fijada));
                   }}
                 >
                   {t("projects.sessions.delete")}

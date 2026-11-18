@@ -1,39 +1,14 @@
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
-import type { InvokeOptions } from "@tauri-apps/api/core";
 import { errorCode } from "../../lib/errorCode";
 import { invoke } from "../../lib/invoke";
 import { t } from "../../lib/i18n";
 import { Button } from "../../ui/Button";
 import { Dialog, DialogContent, DialogTitle } from "../../ui/Dialog";
-import { detalleDe, prosaDe } from "../../ui/Failure";
 import { Toast, ToastPortal } from "../../ui/Toast";
+import DeleteTaskMember from "./DeleteTaskMember";
+import { type DeleteMember, type DeletePreview, type DeleteResult, type DeleteTarget, failureText, type Integration, integrationChecks, memberKey as key } from "./deleteTask";
 
-export type DeleteMember = {
-  workspace: string;
-  project: string;
-  id: string;
-  title: string;
-  working: boolean;
-  files: { path: string; hash: string }[];
-  inspection: { status: "complete" | "failed"; error?: unknown };
-  /** Engines with per-member integration in the preview; older ones omit it. */
-  integration?: "none" | "merged" | "unmerged" | "unchecked";
-};
-type DeletePreview = { members: DeleteMember[]; consent?: string | null; expires_at?: number };
-type Integration = "merged" | "unmerged" | "unconfirmed";
-type DeleteResult = {
-  status: "complete" | "partial";
-  applied: { project: string; id: string }[];
-  failures: { project: string; id: string; error: unknown }[];
-};
-export type DeleteTarget = { project: string; id: string; workspace: string | null; members?: number; supported: boolean; machineName: string; folderName: (project: string) => string; options: InvokeOptions; panelId: (id: string) => string };
-
-function failureText(failure: unknown): string {
-  if (errorCode(failure) === "task_family_busy") return t("projects.sessions.delete_busy");
-  const message = prosaDe(failure);
-  const detail = detalleDe(failure);
-  return detail && detail !== message ? `${message}\n${detail}` : message;
-}
+export type { DeleteTarget };
 
 export default function DeleteTaskDialog(props: {
   target: DeleteTarget;
@@ -52,7 +27,6 @@ export default function DeleteTaskDialog(props: {
   // The dialog only opens when the family has losses, the inspection failed or the engine refused.
   const [shown, setShown] = createSignal(false);
   const members = () => preview()?.members ?? [];
-  const key = (member: DeleteMember) => JSON.stringify([member.project, member.id]);
   const dirty = (member: DeleteMember) => props.dirty(props.target.panelId(member.id));
   // Whether each member's branch is integrated: the preview's `integration`, or the fallback check below.
   const [integration, setIntegration] = createSignal<ReadonlyMap<string, Integration>>(new Map());
@@ -82,29 +56,10 @@ export default function DeleteTaskDialog(props: {
     setBusy(true);
     try {
       const seen = await invoke<DeletePreview>("task_lifecycle_preview", args(), props.target.options);
-      setIntegration(await integrationChecks(seen.members));
+      setIntegration(await integrationChecks(seen.members, props.target.options));
       setPreview(seen);
     } catch (failure) { setError([message, failureText(failure)].filter(Boolean).join("\n")); setShown(true); }
     finally { setBusy(false); }
-  }
-  // The preview's `integration` decides. Older engines fall back to the finish check, whose `not_finished` also
-  // flags a worktree without commits of its own and does not tell unmerged from unchecked: those stay unconfirmed.
-  async function integrationChecks(list: DeleteMember[]): Promise<ReadonlyMap<string, Integration>> {
-    const result = new Map<string, Integration>();
-    for (const member of list) {
-      if (member.integration === "none" || member.integration === "merged") result.set(key(member), "merged");
-      else if (member.integration === "unmerged") result.set(key(member), "unmerged");
-    }
-    const deadline = Date.now() + 20_000;
-    const queue = list.filter(member => member.inspection.status === "complete" && member.integration === undefined);
-    const worker = async () => {
-      for (let member = queue.shift(); member && Date.now() < deadline; member = queue.shift()) {
-        const blockers = await invoke<{ not_finished: boolean }>("task_blockers", { project: member.project, id: member.id, finish: true }, props.target.options).catch(() => null);
-        if (blockers && !blockers.not_finished) result.set(key(member), "merged");
-      }
-    };
-    await Promise.race([Promise.all(Array.from({ length: 4 }, worker)), new Promise(resolve => setTimeout(resolve, Math.max(0, deadline - Date.now())))]);
-    return new Map(result);
   }
   async function apply() {
     if (!ready()) return;
@@ -158,29 +113,13 @@ export default function DeleteTaskDialog(props: {
         </label>
       </Show>
       <ul class="m-0 flex max-h-[40vh] list-none flex-col gap-3 overflow-y-auto p-0">
-        <For each={members()}>{member => <li class="min-w-0">
-          <p class="m-0 text-ui font-medium text-neutral-950">{member.title || member.id}</p>
-          <p class="m-0 text-caption text-neutral-500">{props.target.folderName(member.project)} · {props.target.machineName}</p>
-          <p class="m-0 text-caption text-neutral-700">{member.inspection.status === "complete" ? t("projects.sessions.delete_inspected") : t("projects.sessions.delete_inspection_failed")}</p>
-          <Show when={member.inspection.error}><p class="m-0 break-all text-caption text-error-strong">{failureText(member.inspection.error)}</p></Show>
-          <Show when={member.working}><p class="m-0 text-caption text-warning-strong">{t("projects.sessions.delete_working")}</p></Show>
-          <ul class="m-0 list-none p-0"><For each={member.files}>{file => <li class="break-all font-mono text-caption text-neutral-500">{file.path}</li>}</For></ul>
-          <Show when={member.inspection.status === "complete" && integrationOf(member) !== "merged"}><p class="m-0 text-caption text-warning-strong">{t(integrationOf(member) === "unmerged" ? "projects.sessions.delete_unmerged" : "projects.sessions.delete_unconfirmed")}</p></Show>
-          <Show when={member.inspection.status === "complete" && member.files.length === 0}><p class="m-0 text-caption text-neutral-500">{t("projects.sessions.delete_no_files")}</p></Show>
-          <Show when={dirty(member).length > 0}>
-            <p class="m-0 text-caption text-warning-strong">{t("projects.sessions.delete_buffers")}</p>
-            <ul class="m-0 list-none p-0"><For each={dirty(member)}>{path => <li class="break-all font-mono text-caption text-warning-strong">{path}</li>}</For></ul>
-          </Show>
-          <Show when={needsReview(member)}><label class="flex items-center gap-2 text-ui text-neutral-700">
-            <input type="checkbox" class="accent-primary" disabled={busy() || invalid() || member.inspection.status !== "complete" || dirty(member).length > 0}
-              checked={reviewed().has(key(member))} onChange={event => setReviewed(current => {
-                const next = new Set(current);
-                if (event.currentTarget.checked) next.add(key(member)); else next.delete(key(member));
-                return next;
-              })} />
-            {t("projects.sessions.delete_reviewed")}
-          </label></Show>
-        </li>}</For>
+        <For each={members()}>{member => <DeleteTaskMember member={member} place={`${props.target.folderName(member.project)} · ${props.target.machineName}`}
+          integration={integrationOf(member)} needsReview={needsReview(member)} dirty={dirty(member)} disabled={busy() || invalid()} reviewed={reviewed().has(key(member))}
+          onReviewed={checked => setReviewed(current => {
+            const next = new Set(current);
+            if (checked) next.add(key(member)); else next.delete(key(member));
+            return next;
+          })} />}</For>
       </ul>
       <Show when={error()}><p role="alert" class="m-0 whitespace-pre-wrap break-all text-ui text-error-strong">{error()}</p></Show>
       <div class="flex flex-wrap justify-end gap-2">
