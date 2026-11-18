@@ -12,17 +12,13 @@ import type { CodeRange } from "../../lib/model.ts";
 import type { Recipient, ReplyTo, SenderTask } from "../../lib/recipients.ts";
 import { type Detalle, pasoDe } from "../../lib/steps.ts";
 import type {
-  Author,
   CambioPorCupo,
-  FalloDelTurno,
-  Msg,
-  PermissionDecision,
-  PermissionOrigin,
-  Razonamiento,
-} from "./Chat.tsx";
+  FalloDelTurno
+} from "./failures";
 import type { Producido } from "./Delivery.tsx";
 import type { HistoryPage } from "./history.ts";
 import type { Pregunta, Respuesta } from "./Questions.tsx";
+import type { Author, Msg, PermissionDecision, PermissionOrigin, Razonamiento } from "./messageTypes";
 
 /** Modelo de eventos propio: Rust normaliza claude y codex a estas formas. */
 export type ChatEvent = {

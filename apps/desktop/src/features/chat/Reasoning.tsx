@@ -1,5 +1,5 @@
 import { t } from "../../lib/i18n";
-import type { Razonamiento } from "./Chat";
+import type { Razonamiento } from "./messageTypes";
 
 /** Reasoning belongs to the turn's single activity disclosure. */
 export default function Reasoning(props: { bloques: Razonamiento[] }) {
