@@ -13,9 +13,9 @@ import { ADDED_KEY, edgeAddedTransport, prefsAddedStore } from "./workspace-adde
 export type SessionRailGroup = ContextGroup & { available: readonly { id: string; name: string }[] | null; added: ReadonlySet<string> | null; person: string | null; free?: { id: string; name: string } };
 let instance: ReturnType<typeof wire> | undefined;
 export const hasSessionGroups = () => !!instance?.groups();
-export const sessionRail = (hidden: () => ReadonlySet<string>, seeded: (ids: readonly string[]) => void) => instance ??= createRoot(() => wire(hidden, seeded));
+export const sessionRail = (hidden: () => ReadonlySet<string>, seeded: (ids: readonly string[]) => void, shown: () => readonly string[] = () => []) => instance ??= createRoot(() => wire(hidden, seeded, shown));
 
-function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string[]) => void) {
+function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string[]) => void, shown: () => readonly string[]) {
   const [revision, bump] = createSignal(0);
   const changed = () => bump((n) => n + 1);
   const sessions = createSessionContexts(invoke, changed);
@@ -31,11 +31,12 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
     if (!existing && g.workspaces === "later") setLaterContext(g.context_id);
     const record = existing ?? { person: null as string | null, asking: false, sync: null as unknown as ReturnType<typeof createAddedSync> };
     if (!existing) record.sync = createAddedSync({
+      seed: g.workspaces === "later" ? "explicit" : "rail",
       transport: edgeAddedTransport((method, path, body) => sessions.send(g.context_id, method, path, body)),
       store,
       scope: () => record.person && active(g.context_id) ? { person: record.person, organization: g.org } : null,
       available: () => active(g.context_id) ? danilAvailable(g.org) : null,
-      shown: () => sessionSeedInputs(active(g.context_id), danilAvailable(g.org), new Set([...leerPref<string[]>("workspaces.order", []), ...(capabilities().railWorkspaces?.() ?? []).map((w) => w.id)]), hidden()).shown,
+      shown: () => sessionSeedInputs(active(g.context_id), danilAvailable(g.org), new Set([...leerPref<string[]>("workspaces.order", []), ...(capabilities().railWorkspaces?.() ?? []).map((w) => w.id), ...shown()]), hidden()).shown,
       hidden: () => sessionSeedInputs(active(g.context_id), danilAvailable(g.org), new Set(), hidden()).hidden,
       onSeeded, onChange: changed,
     });

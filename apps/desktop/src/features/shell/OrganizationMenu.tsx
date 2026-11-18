@@ -4,6 +4,7 @@ import { createEffect, createResource, createSignal, For, onCleanup, Show } from
 import { t } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { ITEM_DE_MENU } from "../../ui/Popover";
+import { organizationMenuReady } from "./organization-menu-state";
 import { hasSessionGroups } from "./session-groups";
 
 /** Lo mismo que un `createSignal` sobre el store, sin que el store dependa de Solid. */
@@ -39,14 +40,13 @@ export function OrganizationSection(props: { load: () => Promise<OrganizationSel
   return <Show when={selection()}>{(s) => <OrganizationMenu selection={s()} onClose={props.onClose} />}</Show>;
 }
 
-/** El selector anterior solo se muestra sin un conjunto de contextos. */
+/**
+ * La sección «Organización» del menú de la cuenta, encima de los workspaces. Con una sola,
+ * su nombre; con varias, la lista con la activa marcada. Oculta si el servidor aún no la tiene.
+ */
 export default function OrganizationMenu(props: { selection: OrganizationSelection; onClose: () => void }) {
   const { state } = useOrganizations(props.selection);
-  const ready = () => {
-    if (hasSessionGroups()) return null;
-    const s = state();
-    return s.kind === "ready" && s.items.length > 0 ? s : null;
-  };
+  const ready = () => organizationMenuReady(state(), hasSessionGroups());
   return (
     <Show when={ready()}>
       {(s) => (

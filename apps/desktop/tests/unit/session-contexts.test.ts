@@ -166,7 +166,7 @@ test("A8: all seeds only a settled nonempty machine source; later and old replie
   assert.deepEqual(seedOf(source, all.shown, all.hidden), ["machine-one", "machine-two"]);
   assert.deepEqual([...hidden], ["machine-two"]);
   const missing = sessionSeedInputs({ workspaces: "all" }, null, previous, hidden);
-  assert.deepEqual(seedOf([], missing.shown, missing.hidden), []);
+  assert.equal(seedOf([], missing.shown, missing.hidden), null);
   for (const hint of [undefined, "later"] as const) {
     const old = sessionSeedInputs({ workspaces: hint }, source, previous, hidden);
     assert.deepEqual(seedOf(source, old.shown, old.hidden), ["machine-one"]);
@@ -220,4 +220,44 @@ test("all retries when an empty machine listing gains rows, without rereading fo
   const populated = sessionSyncKey([{ ...group, available: [{ id: "new-workspace" }] }]);
   assert.notEqual(populated, empty, "a newly available source row must trigger added synchronization");
   assert.equal(sessionSyncKey([{ ...group, added: new Set(["chosen"]) }]), empty, "an added update alone cannot cause another GET");
+});
+
+test("A8 later neither seeds prior rail evidence nor adds unchosen workspaces on the first choice", async () => {
+  const { createAddedSync } = await import("../../src/features/shell/workspace-added-sync.ts");
+  const { prefsAddedStore } = await import("../../src/features/shell/workspace-added-transport.ts");
+  const { sessionSeedInputs } = await import("../../src/features/shell/session-seeding.ts");
+  for (const initialVersion of [0, 1]) {
+    const available = [{ id: "chosen" }, { id: "unchosen" }];
+    let preferences: unknown = {};
+    let version = initialVersion;
+    let added: string[] = [];
+    const seeds: string[][] = [];
+    const inputs = () => sessionSeedInputs({ workspaces: "later" }, available, new Set(["unchosen"]), new Set());
+    const sync = createAddedSync({
+      seed: "explicit",
+      transport: {
+        get: async () => ({ status: 200, body: { version, added } }),
+        seed: async (ids) => { seeds.push([...ids]); added = [...ids]; version++; return { status: 204 }; },
+        put: async (id) => { added = [...new Set([...added, id])]; version++; return { status: 204 }; },
+        remove: async () => ({ status: 204 }),
+      },
+      store: prefsAddedStore(() => preferences, (next) => { preferences = next; }),
+      scope: () => ({ person: "person", organization: "org" }), available: () => available,
+      shown: () => inputs().shown, hidden: () => inputs().hidden, onChange: () => {},
+    });
+    await sync.sync();
+    assert.deepEqual(seeds, [], "later cannot adopt old rail evidence as a selection");
+    sync.add("chosen");
+    await sync.sync();
+    assert.deepEqual(added, ["chosen"]);
+    assert.deepEqual([...sync.added()!], ["chosen"]);
+  }
+});
+
+test("organization selection stays in the legacy menu only without a session set", async () => {
+  const { organizationMenuReady } = await import("../../src/features/shell/organization-menu-state.ts");
+  const state = { kind: "ready" as const, active: "org", busy: false, error: null, items: [{ id: "org", name: "Organization" }] };
+  assert.equal(organizationMenuReady(state, true), null);
+  assert.equal(organizationMenuReady(state, false), state);
+  assert.equal(organizationMenuReady({ kind: "hidden" }, false), null);
 });

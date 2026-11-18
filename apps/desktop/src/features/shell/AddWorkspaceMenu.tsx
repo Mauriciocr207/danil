@@ -17,6 +17,7 @@ import WorkspaceSearch, { SEARCH_FROM } from "./WorkspaceSearch";
 export { menuArrows };
 
 type Hidden = { id: string; name: string };
+/** El «+» del riel: agregar uno de Danil, crear uno local y, debajo, los ocultos para abrirlos o devolverlos a la barra. */
 export default function AddWorkspaceMenu(props: {
   danil: DanilMenu;
   sessions: ReturnType<typeof sessionRail>;
@@ -24,6 +25,7 @@ export default function AddWorkspaceMenu(props: {
   open: string | null;
   tasksOf: (id: string) => TaskAttention[];
   badge: Component<{ state: AttentionState; class?: string }>;
+  /** Cómo se dice un estado junto al nombre, para quien no ve el distintivo. */
   labelOf: (state: AttentionState) => string;
   onCreate: () => void;
   onOpen: (id: string) => void;
@@ -43,6 +45,7 @@ export default function AddWorkspaceMenu(props: {
     setQuery("");
   };
   const rows = () => props.hidden.filter((w) => matchesName(w.name, query()));
+  // El abierto ya enseña su distintivo en su cuadro; los de Danil sin agregar también avisan.
   const waiting = () => topState([...props.hidden, ...(props.danil.toAdd ?? [])].filter((w) => w.id !== props.open).flatMap((w) => props.tasksOf(w.id)));
   const label = () => {
     const state = waiting();

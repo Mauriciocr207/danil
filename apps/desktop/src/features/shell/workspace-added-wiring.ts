@@ -46,7 +46,7 @@ export function danilRail(hidden: () => ReadonlySet<string>, onSeeded: (ids: rea
 
 function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string[]) => void) {
   const native = capabilities().nativeWindow;
-  const sessions = sessionRail(hidden, onSeeded);
+  const sessions = sessionRail(hidden, onSeeded, () => railIds());
   const [revision, bump] = createSignal(0);
   const [person, setPerson] = createSignal<string | null>(native ? null : (capabilities().webAccounts?.current.user_id ?? null));
   const [organizationRead, organizationChanged] = createSignal(0, { equals: false });

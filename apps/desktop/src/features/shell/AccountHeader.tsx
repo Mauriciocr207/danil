@@ -5,6 +5,7 @@ import { ITEM_DE_MENU, Popover, PopoverAnchor, PopoverContent } from "../../ui/P
 import { RETARDO_TOOLTIP, TooltipContent, TooltipRoot, TooltipTrigger } from "../../ui/Tooltip";
 
 const monogram = (name: string) => name.trim().slice(0, 1).toUpperCase() || "?";
+/** La cuenta de un grupo: la inicial de su correo; su menú la quita o vuelve a entrar. */
 export const AccountHeader = (p: { id: string; email: string | null; extra: boolean; signedIn: boolean; stale?: boolean; name?: string; children?: JSX.Element; accounts?: ReturnType<typeof capabilities>["webAccounts"] }) => {
     const accounts = () => p.accounts;
     const [accountMenu, setAccountMenu] = createSignal<string | null>(null);
