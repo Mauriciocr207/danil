@@ -177,14 +177,16 @@ export function createAddedSync(deps: {
       // Cuenta nueva o siembra vacía: nada en la cuenta todavía; lo que se agregue la crea.
       deps.store.write(key, { ...record(key), local: null });
     }
+    // La lectura es de antes de subir lo pendiente: se le aplica lo que estaba pendiente al leer.
+    const uploaded = record(key).pending;
     if (!(await flush(key))) {
-      server = { key, added: apply(read.added, record(key).pending) };
+      server = { key, added: apply(apply(read.added, uploaded), record(key).pending) };
       deps.onChange();
       return retry();
     }
     const current = record(key);
     if (current.local) deps.store.write(key, { ...current, local: null });
-    server = { key, added: apply(read.added, record(key).pending) };
+    server = { key, added: apply(apply(read.added, uploaded), record(key).pending) };
     deps.onChange();
   }
 
