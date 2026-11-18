@@ -5084,10 +5084,7 @@ export default function App() {
       // Las rutas absolutas preparadas al adjuntar también sirven al releer del disco.
       attachments: m.attachments.length ? m.attachments : undefined,
     };
-    // A `base` y no a `vivo`: `send_message` lo persiste antes de volver, así
-    // que releer el disco lo trae — y si estuviera en `vivo` se pintaría dos
-    // veces al volver a esta tarea mientras contesta.
-    threads.appendPersisted(clave, [...entrando, turnoPropio]);
+    threads.appendOptimistic(clave, [...entrando, turnoPropio]);
     // Mandar a una tarea de una máquina apagada la enciende: el proxy espera a que
     // conteste y entrega una sola vez.
     const dormida = abierta ? apagadas()[abierta] ?? null : null;
@@ -5174,6 +5171,7 @@ export default function App() {
         send: mandarTurno,
       });
       const id = traspaso.answer;
+      threads.acknowledgeOptimistic(clave, [...entrando, turnoPropio]);
       // El gesto quedó consumido: se escribió el consentimiento o el mensaje ya
       // salió con el CLI que pedía. Un `!` no lo consume.
       if (traspaso.settled) {
@@ -5201,6 +5199,9 @@ export default function App() {
       // Antes de adoptarla: su encabezado lee de dónde vino al pintarse.
       if (llevado) carryModule()?.adoptOrigin(claveBorrador, id);
       if (!abierta) adoptarNacida(id, { provisional, proyecto, titulo: tituloProvisional(m.text), claveBorrador });
+      void leerTarea(proyecto, id)
+        .then((s) => loadResult(id, s, false, generation))
+        .catch((error) => { if (generation === workspaceContext.generation()) setError(String(error)); });
       if (!finishedTurns.has(id)) marcarViva(id);
       void signatureReady.then((signature) => {
         if (generation !== workspaceContext.generation()) return;
@@ -5246,27 +5247,24 @@ export default function App() {
         pestanas.close(provisional);
         olvidarPestana(provisional);
       }
+      threads.rejectOptimistic(clave, [turnoPropio, ...entrando]);
       if (generation !== workspaceContext.generation()) return false;
       if (e === CARRY_STOPPED) {
         // El texto vuelve a la caja: el globo se iría duplicado.
-        threads.rejectOptimistic(clave, [turnoPropio, ...entrando]);
         setArrancando(false);
         return false;
       }
       if (destination && claveDe(e) === "history.error.busy") {
-        threads.rejectOptimistic(clave, [turnoPropio, ...entrando]);
         marcarQuieta(destination.session);
         throw e;
       }
       if (!respuestas && claveDe(e) === "history.error.busy" && abierta === sessionId()) {
-        threads.rejectOptimistic(clave, [turnoPropio, ...entrando]);
         retainBusySession(m, { title: filaDe(abierta ?? "")?.title ?? "" }, abierta);
         return true;
       }
       if (abierta === sessionId()) taskQueues.retain("fallo");
       if (!abierta) setArrancando(false);
       if (abierta) marcarQuieta(abierta);
-      respuestas && threads.rejectOptimistic(clave, [turnoPropio]);
       threads.appendLive(clave, [{
                   role: "system",
                   // Una negativa de comando llega como clave: la frase nombra lo escrito.

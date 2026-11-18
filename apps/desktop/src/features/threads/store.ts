@@ -20,7 +20,10 @@ export function createThreadsStore(deps: {
     const options = deps.route(id), workspace = deps.scope.workspace();
     return { ...options, headers: { ...options?.headers, ...(workspace ? { "x-terminus-workspace": workspace } : {}) } };
   };
-  type Hilo = { base: Msg[]; vivo: Msg[]; guardados?: ReadonlySet<string> };
+  type Optimistic = { original: Msg; row: Msg; acknowledged?: number };
+  type Hilo = { base: Msg[]; vivo: Msg[]; guardados?: ReadonlySet<string>; optimistic?: Optimistic[]; readRevision?: number };
+  let revision = 0;
+  const reads = new WeakMap<Session, { id: string; generation: number; revision: number }>();
   const SIN_HILO: Hilo = { base: [], vivo: [] };
   const workspaceThreads = new Map<string, Record<string, Hilo>>();
   const [hilos, setHilos] = createSignal<Record<string, Hilo>>({});
@@ -60,7 +63,7 @@ export function createThreadsStore(deps: {
     });
   };
   type IdsDeTurnos = ReadonlySet<string>;
-  const releer = (session: string, leida: Msg[], vaciarVivo: boolean, antepuesta = false, guardados?: IdsDeTurnos, cola?: IdsDeTurnos) => {
+  const releer = (session: string, leida: Msg[], vaciarVivo: boolean, antepuesta = false, guardados?: IdsDeTurnos, cola?: IdsDeTurnos, readRevision?: number) => {
     if (disposed) return;
     deltasPorCuadro.vaciar();
     setHilos((hs) => {
@@ -83,14 +86,22 @@ export function createThreadsStore(deps: {
                 ? { ...m, questionRequestId: ataduras.get(m.turno) }
                 : m,
             );
-      const base = (antepuesta ? conservarPorClave : conservarEnOrden)(previo?.base ?? [], atada);
+      // Una lectura anterior al ack no puede saber que el envío ya quedó en disco.
+      // La identidad durable confirma una fila; el texto nunca identifica un envío.
+      const optimistic = (previo?.optimistic ?? []).filter(entry =>
+        !(entry.row.turno && persistidos.has(entry.row.turno)) &&
+        !(entry.acknowledged !== undefined && readRevision !== undefined && readRevision > entry.acknowledged));
+      const previousBase = previo?.optimistic?.length
+        ? (previo.base).filter(row => !previo.optimistic?.some(entry => entry.row === row)) : previo?.base ?? [];
+      const persisted = (antepuesta ? conservarPorClave : conservarEnOrden)(previousBase, atada);
+      const base = optimistic.length ? [...persisted, ...optimistic.map(entry => entry.row)] : persisted;
       const vivo = vaciarVivo
         ? []
         : vivoPrevio.filter((m) => !m.turno || !persistidos.has(m.turno));
       const mismoVivo = vivo.length === vivoPrevio.length;
       const tramos = guardados ?? previo?.guardados;
-      if (previo && base === previo.base && mismoVivo && tramos === previo.guardados) return hs;
-      return { ...hs, [session]: { base, vivo: mismoVivo ? vivoPrevio : vivo, guardados: tramos } };
+      if (previo && base === previo.base && mismoVivo && tramos === previo.guardados && optimistic.length === (previo.optimistic?.length ?? 0) && readRevision === undefined) return hs;
+      return { ...hs, [session]: { base, vivo: mismoVivo ? vivoPrevio : vivo, guardados: tramos, optimistic, readRevision: readRevision ?? previo?.readRevision } };
     });
   };
   const idsDeTurnos = (turns: readonly Turn[]) => new Set(turns.flatMap((t) => (t.id ? [t.id] : [])));
@@ -133,10 +144,12 @@ export function createThreadsStore(deps: {
   const leerTarea = async (project: string, id: string, before: number | null = null) => {
     if (disposed) throw new DOMException("Conversation disposed", "AbortError");
     proyectosDeHistoria.set(id, project);
+    const provenance = { id, generation: deps.scope.generation(), revision: ++revision };
     const options = route(id);
     const result = deps.scope.paged()
       ? await invoke<Session>("load_history", { project, id, before }, options)
       : await invoke<Session>("load_session", { project, id, history_request: { version: 1, before } }, options);
+    reads.set(result, provenance);
     if (result.history?.version === 1) {
       result.turns = result.turns.map(turn => ({ ...turn,
         history_refs: turn.history_refs?.map(ref => ({ ...ref, project, session: id })),
@@ -159,15 +172,21 @@ export function createThreadsStore(deps: {
       pintarHistoria(id, pager, true);
     };
   }
-  function pintarHistoria(id: string, pager: HistoryPager<Session["turns"][number]>, antepuesta: boolean, clear = false, leidos?: ReadonlySet<string>) {
+  function pintarHistoria(id: string, pager: HistoryPager<Session["turns"][number]>, antepuesta: boolean, clear = false, leidos?: ReadonlySet<string>, readRevision?: number) {
     const loaded = pager.loaded;
     if (!loaded) return;
     const leida = transcripcion(loaded.turns, loaded.start);
     if (hasRecentGap(loaded)) leida.push({ role: "system", text: "", meta: "history_gap", clave: "history_gap" });
-    releer(id, leida, clear, antepuesta, idsDeTurnos(loaded.turns), leidos);
+    releer(id, leida, clear, antepuesta, idsDeTurnos(loaded.turns), leidos, hasRecentGap(loaded) ? undefined : readRevision);
   }
-  function loadResult(id: string, session: Session, clear: boolean, generation: number) {
+  function loadResult(id: string, session: Session, clear: boolean, generation: number, latest = false) {
     if (disposed || generation !== deps.scope.generation()) return false;
+    const read = reads.get(session);
+    if (read && (read.id !== id || read.generation !== deps.scope.generation() || read.revision < (untrack(hilos)[id]?.readRevision ?? 0))) return false;
+    // Without durable IDs in the send ACK, only a read begun after every pending
+    // send settled can safely replace optimistic rows with persisted history.
+    const pending = untrack(hilos)[id]?.optimistic ?? [];
+    if (pending.some(entry => entry.acknowledged === undefined || !read || read.revision <= entry.acknowledged)) return false;
     anotar(setApagadas, id, session.offline?.machine ?? null);
     setTraspasos((all) => {
       const previo = all[id];
@@ -189,6 +208,7 @@ export function createThreadsStore(deps: {
       return { ...all, [id]: ahora };
     });
     const pager = historiaDe(id);
+    if (latest) { pager.close(); pager.loaded = undefined; }
     const loaded = pager.accept(session.turns, session.history, { reading: leyendoLejos.has(id) });
     setColaSuelta((all) => {
       if (hasRecentGap(loaded)) return { ...all, [id]: transcripcion(session.turns, session.history?.start ?? 0) };
@@ -196,7 +216,8 @@ export function createThreadsStore(deps: {
       const { [id]: _, ...resto } = all;
       return resto;
     });
-    pintarHistoria(id, pager, false, clear, idsDeTurnos(session.turns));
+    pintarHistoria(id, pager, false, clear, idsDeTurnos(session.turns), read?.revision);
+    if (read) setHilos(all => ({ ...all, [id]: { ...all[id], readRevision: read.revision } }));
     const origen = session.transcript ?? null;
     setOrigenes((o) =>
       id in o && o[id]?.file === origen?.file && o[id]?.from_cli === origen?.from_cli ? o : { ...o, [id]: origen },
@@ -220,6 +241,26 @@ export function createThreadsStore(deps: {
   function appendPersisted(session: string, messages: Msg[]) {
     if (!disposed && messages.length) asentar(session, before => [...before, ...messages]);
   }
+  function appendOptimistic(session: string, messages: Msg[]) {
+    if (disposed || !messages.length) return;
+    appendPersisted(session, messages);
+    setHilos(all => ({ ...all, [session]: { ...all[session], optimistic: [
+      ...(all[session].optimistic ?? []), ...messages.map(row => ({ original: row, row })),
+    ] } }));
+  }
+  function acknowledgeOptimistic(session: string, messages: Msg[]) {
+    if (disposed) return;
+    const acknowledged = ++revision;
+    const acknowledge = (all: Record<string, Hilo>) => {
+      const thread = all[session];
+      if (!thread?.optimistic?.some(entry => messages.includes(entry.original))) return all;
+      return { ...all, [session]: { ...thread, optimistic: thread.optimistic.map(entry =>
+        messages.includes(entry.original) ? { ...entry, acknowledged } : entry) } };
+    };
+    setHilos(acknowledge);
+    for (const [workspace, threads] of workspaceThreads) workspaceThreads.set(workspace, acknowledge(threads));
+  }
+
   function commitUniqueTurn(session: string, message: Msg) {
     if (!disposed) asentar(session, before => before.some(row => row.turno === message.turno) ? before : [...before, message]);
   }
@@ -227,11 +268,26 @@ export function createThreadsStore(deps: {
     if (!disposed) asentar(session, before => [...before.filter(row => !message.turno || row.turno !== message.turno), message]);
   }
   function reviseOptimistic(session: string, target: Msg, patch: Pick<Msg, "respuestas" | "author">) {
-    if (!disposed) asentar(session, before => before.map(row => row === target ? { ...row, ...patch } : row));
+    if (disposed) return;
+    const entry = untrack(hilos)[session]?.optimistic?.find(row => row.original === target);
+    const previous = entry?.row ?? target, next = { ...previous, ...patch };
+    if (entry) entry.row = next;
+    if (!disposed) asentar(session, before => before.map(row => row === previous ? next : row));
   }
   function rejectOptimistic(session: string, messages: Msg[]) {
-    if (!disposed) asentar(session, before => before.filter(row => !messages.includes(row)));
+    if (disposed) return;
+    const reject = (all: Record<string, Hilo>) => {
+      const thread = all[session];
+      if (!thread) return all;
+      const rejected = thread.optimistic?.filter(entry => messages.includes(entry.original)) ?? [];
+      const base = thread.base.filter(row => !messages.includes(row) && !rejected.some(entry => entry.row === row));
+      if (base.length === thread.base.length && !rejected.length) return all;
+      return { ...all, [session]: { ...thread, base, optimistic: thread.optimistic?.filter(entry => !rejected.includes(entry)) } };
+    };
+    setHilos(reject);
+    for (const [workspace, threads] of workspaceThreads) workspaceThreads.set(workspace, reject(threads));
   }
+
   function question(session: string, fields: Pick<Msg, "turno" | "preguntas" | "questionRequestId" | "agent">, workspace = deps.scope.workspace()) {
     if (disposed) return;
     anexar(session, before => {
@@ -276,14 +332,14 @@ export function createThreadsStore(deps: {
     deltasPorCuadro.vaciar();
     setHilos(before => {
       const { [""]: draft, ...rest } = before, previous = before[id] ?? SIN_HILO;
-      return { ...rest, [id]: { base: [...(draft?.base ?? []), ...previous.base], vivo: [...(draft?.vivo ?? []), ...previous.vivo], guardados: previous.guardados } };
+      return { ...rest, [id]: { base: [...(draft?.base ?? []), ...previous.base], vivo: [...(draft?.vivo ?? []), ...previous.vivo], guardados: previous.guardados, optimistic: [...(draft?.optimistic ?? []), ...(previous.optimistic ?? [])], readRevision: previous.readRevision } };
     });
   }
   async function latest(id: string) {
     const pager = historias.get(id), generation = deps.scope.generation();
     if (!pager || disposed) return;
-    await pager.latest();
-    if (!disposed && generation === deps.scope.generation()) pintarHistoria(id, pager, false);
+    const result = await leerTarea(proyectosDeHistoria.get(id) ?? deps.project(), id);
+    loadResult(id, result, false, generation, true);
   }
   function dropSaved(workspace: string, id: string) {
     const saved = workspaceThreads.get(workspace);
@@ -293,7 +349,7 @@ export function createThreadsStore(deps: {
   return {
     rows: hilos, current: hiloAbierto, messages: msgs, loading: cargandoHilo, origins: origenes, offline: apagadas, waking: encendiendo, handovers: traspasos,
     olderAvailable: conAntiguos, recentAvailable: conRecientes, olderStatus: estadoAntiguos, recentTail: colaSuelta,
-    appendLive, appendPersisted, commitUniqueTurn, replaceTurn, reviseOptimistic, rejectOptimistic, question, replay, finishSteps, event,
+    appendLive, appendPersisted, appendOptimistic, acknowledgeOptimistic, commitUniqueTurn, replaceTurn, reviseOptimistic, rejectOptimistic, question, replay, finishSteps, event,
     read: leerTarea, acceptSession: loadResult, older: cargarAntiguos, latest,
     replaceHistory: releer, saveWorkspace, activateWorkspace, resetService, adoptDraft, dropSaved,
     flush: deltasPorCuadro.vaciar,
