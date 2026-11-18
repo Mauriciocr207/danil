@@ -1,9 +1,10 @@
-import { createMemo, untrack } from "solid-js";
+import { createMemo, createSignal, untrack } from "solid-js";
 import { createResource } from "../../lib/resource.ts";
 import { conservar, READ_TIMEOUT } from "../../lib/sessionRefresh.ts";
 import type { Project } from "../../lib/model.ts";
 
 export type ProjectsScope = { workspace: string | null; machine: string | null };
+type ReadyScope = ProjectsScope & { revision: number };
 type Invoke = <T>(command: string, args?: Record<string, unknown>, options?: { headers: Record<string, string> }) => Promise<T>;
 const scopeKey = (scope: ProjectsScope) => JSON.stringify([scope.workspace, scope.machine]);
 const route = (scope: ProjectsScope) => ({ headers: {
@@ -15,6 +16,7 @@ const route = (scope: ProjectsScope) => ({ headers: {
 export function createProjectsStore(deps: { scope: () => ProjectsScope; invoke: Invoke; timeoutMs?: number }) {
   let disposed = false;
   let generation = 0;
+  const [readyScope, setReadyScope] = createSignal<ReadyScope | null>(null);
   const currentScope = () => untrack(deps.scope);
   const resource = createResource<string, Project[]>({
     read: (key, signal) => {
@@ -34,7 +36,17 @@ export function createProjectsStore(deps: { scope: () => ProjectsScope; invoke: 
     return found.length === 0 ? empty : found;
   });
   const routed = new Map<string, ReturnType<typeof createResource<string, Project[]>>>();
-  const refresh = () => resource.read(scopeKey(currentScope()));
+  const refresh = () => {
+    const scope = currentScope(), key = scopeKey(scope), revision = generation;
+    const reading = resource.read(key);
+    void reading.then(() => {
+      if (disposed || revision !== generation || key !== scopeKey(currentScope())) return;
+      const previous = untrack(readyScope);
+      // Row identity is independent of confirmation: an empty catalog still completes startup.
+      if (!previous || previous.revision !== revision || scopeKey(previous) !== key) setReadyScope({ ...scope, revision });
+    }, () => { /* The resource and caller retain the read error; it never confirms this scope. */ });
+    return reading;
+  };
   const invalidate = () => { resource.invalidate(); for (const reader of routed.values()) reader.invalidate(); };
   const changed = () => { invalidate(); return refresh(); };
   async function mutate(write: (scope: ProjectsScope) => Promise<unknown>, reread = true) {
@@ -52,12 +64,14 @@ export function createProjectsStore(deps: { scope: () => ProjectsScope; invoke: 
   }
   return {
     rows,
+    readyScope,
     state: resource.state,
     refresh,
     changed,
     fromCache(projects: Project[]) { resource.seed(scopeKey(currentScope()), projects); },
     workspaceChanged(preserveCached = false) {
       generation++;
+      setReadyScope(null);
       const previous = untrack(resource.state);
       const key = scopeKey(currentScope());
       const kept = preserveCached || (previous.status !== "idle" && previous.key === key) ? untrack(snapshotRows) : [];
@@ -85,6 +99,6 @@ export function createProjectsStore(deps: { scope: () => ProjectsScope; invoke: 
     detach: (id: string, source: string) => mutate(scope => deps.invoke("detach_source", { project: id, source }, route(scope))),
     workTree: (id: string, dir: string | null) => mutate(scope => deps.invoke("set_project_work_tree", { id, dir }, route(scope))),
     remove: (id: string) => mutate(scope => deps.invoke("delete_project", { id }, route(scope)), false),
-    dispose() { disposed = true; resource.dispose(); for (const reader of routed.values()) reader.dispose(); routed.clear(); },
+    dispose() { disposed = true; setReadyScope(null); resource.dispose(); for (const reader of routed.values()) reader.dispose(); routed.clear(); },
   };
 }

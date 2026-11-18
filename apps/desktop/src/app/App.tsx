@@ -3334,7 +3334,17 @@ export default function App() {
 
   // El historial se recarga cuando cambia la lista de proyectos, no el activo.
   // Antes del motor no: el arranque reinicia las lecturas y las relee en `aplicar`.
-  createEffect(on(grupos, (g) => { if (connected()) void refreshSessions(g); }));
+  const confirmedSessionGroups = createMemo((previous: {
+    scope: NonNullable<ReturnType<typeof projectCatalog.readyScope>>; groups: string[];
+  } | null) => {
+    const scope = projectCatalog.readyScope(), groups = grupos();
+    if (!scope || !scope.workspace || scope.workspace !== workspaceActivo()) return null;
+    return previous?.scope === scope && previous.groups === groups ? previous : { scope, groups };
+  }, null);
+  createEffect(on(confirmedSessionGroups, (current) => {
+    // Cached startup already reads its known folders in parallel; only new folders need another read.
+    if (current && connected() && !(enCache() && current.groups.every(group => group in sesiones()))) void refreshSessions(current.groups);
+  }));
 
   const composerMachine = createMemo(() => {
     const id = sessionId();

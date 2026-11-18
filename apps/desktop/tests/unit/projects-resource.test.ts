@@ -158,3 +158,32 @@ test("empty project snapshots do not restart row consumers", async () => {
   assert.equal(updates, 1);
   release();
 });
+
+test("confirmed scope announces an empty project catalog once per workspace transition", async () => {
+  let scope: ProjectsScope = { workspace: "A", machine: null };
+  const confirmed: (string | null)[] = [];
+  let release!: () => void;
+  const store = createRoot(dispose => {
+    const current = projectsStore({ scope: () => scope, invoke: async <T>() => [] as T });
+    createEffect(() => { const ready = current.readyScope(); if (ready) confirmed.push(ready.workspace); });
+    release = () => { current.dispose(); dispose(); }; return current;
+  });
+  const empty = store.rows();
+  assert.equal(store.readyScope(), null);
+  await store.refresh(); const first = store.readyScope();
+  assert.equal(store.rows(), empty); assert.deepEqual(confirmed, ["A"]);
+  await store.refresh(); assert.equal(store.readyScope(), first); assert.deepEqual(confirmed, ["A"]);
+  scope = { workspace: "B", machine: null }; store.workspaceChanged(); assert.equal(store.readyScope(), null);
+  await store.refresh(); assert.equal(store.rows(), empty); assert.deepEqual(confirmed, ["A", "B"]);
+  store.workspaceChanged(); await store.refresh(); assert.deepEqual(confirmed, ["A", "B", "B"]);
+  release();
+});
+
+test("cached projects and a stale reply cannot confirm another workspace", async () => {
+  let scope: ProjectsScope = { workspace: "A", machine: null }; const reply = pending<Project[]>();
+  const store = createProjectsStore({ scope: () => scope, invoke: async <T>() => reply.promise as Promise<T> });
+  store.fromCache([]); assert.equal(store.readyScope(), null);
+  const old = store.refresh(); const aborted = assert.rejects(old, { name: "AbortError" });
+  scope = { workspace: "B", machine: null }; store.workspaceChanged();
+  reply.resolve([]); await aborted; assert.equal(store.readyScope(), null); store.dispose();
+});
