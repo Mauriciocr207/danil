@@ -50,9 +50,9 @@ export function createActivityProjection() {
     activity.active = false;
     return true;
   }
-  function reconcile(workspace: string | null, session: string, _before: readonly Msg[], after: readonly Msg[], closed: boolean) {
+  function reconcile(workspace: string | null, session: string, _before: readonly Msg[], after: readonly Msg[], closed: boolean, prepend = false) {
     const latest = current(workspace, session);
-    if (latest?.active) latest.anchor.reconcile(after);
+    if (latest?.active) latest.anchor.reconcile(after, prepend);
     if (closed && latest && !latest.active && latest.baseline !== null) {
       const frontier = latest.baseline.at(-1);
       let boundary = -1;

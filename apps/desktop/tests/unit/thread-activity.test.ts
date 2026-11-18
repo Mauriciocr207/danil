@@ -243,3 +243,30 @@ test("adoption preserves the accepted draft input anchor ahead of recovered resp
   assert.equal(active.anchor, answer); assert.equal(active.anchorIndex, 2);
   assert.deepEqual(active.messages, [user]);
 });
+
+test("external start refreshes its cached input boundary from recent history but never an older page", () => {
+  const model = createActivityProjection();
+  const oldUser = message("old input", { role: "user", turno: "old-u", clave: "old-u:0" });
+  const oldAnswer = message("old answer", { turno: "old-a", clave: "old-a:0" });
+  const user = message("external input", { role: "user", turno: "new-u", clave: "new-u:0" });
+  const answer = message("external answer", { turno: "new-a", clave: "new-a:0" });
+  model.begin("A", "s", 1_000, [oldUser, oldAnswer]);
+  model.reconcile("A", "s", [oldUser, oldAnswer], [oldUser, oldAnswer, user, answer], false);
+  assert.equal(model.project("A", "s", [oldUser, oldAnswer, user, answer])[0].anchorIndex, 3);
+  model.reconcile("A", "s", [user, answer], [oldUser, oldAnswer], false, true);
+  const activity = model.project("A", "s", [oldUser, oldAnswer, user, answer])[0];
+  assert.equal(activity.anchor, answer); assert.equal(activity.anchorIndex, 3);
+  assert.deepEqual(activity.messages, []);
+});
+
+test("permission and question answers are not accepted input anchors", () => {
+  const model = createActivityProjection();
+  const user = message("accepted input", { role: "user", turno: "user", clave: "user:0" });
+  const answer = message("answer", { turno: "answer", clave: "answer:0" });
+  const permission = message("allow", { role: "user", permission: {} as NonNullable<Msg["permission"]> });
+  const decision = message("decision", { role: "user", respuestas: [{} as NonNullable<Msg["respuestas"]>[number]] });
+  const unanswered = message("", { role: "user", respuestas: [] });
+  model.begin("A", "s", null, [user, answer, permission, decision, unanswered]);
+  const activity = model.project("A", "s", [user, answer, permission, decision, unanswered])[0];
+  assert.equal(activity.anchor, answer); assert.equal(activity.anchorIndex, 1);
+});
