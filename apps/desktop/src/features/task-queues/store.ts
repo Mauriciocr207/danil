@@ -20,15 +20,27 @@ export function createTaskQueues(deps: Dependencies) {
   const saved = new Map<string, Saved>();
   const retentions = new Map<string, Map<string, RazonDeRetencion | null>>();
   const draining = new Set<string>();
+  const writes = new Map<string, Promise<unknown>>();
   let diskDraft: string | null = null, epoch = 0, readRevision = 0, disposed = false;
   const currentScope = () => untrack(deps.scope);
   const current = (scope: QueueScope) => {
     const now = currentScope();
     return !disposed && now.workspace === scope.workspace && now.generation === scope.generation;
   };
+  function persist(scope: QueueScope & { session: string }, queued: Encolado[]) {
+    if (disposed) return Promise.resolve();
+    const key = JSON.stringify([scope.workspace, scope.project, scope.session]);
+    const snapshot = queued.slice();
+    const run = () => deps.writeQueue(scope, snapshot);
+    const previous = writes.get(key);
+    const promise = previous ? previous.then(run, run) : run();
+    writes.set(key, promise);
+    void promise.finally(() => { if (writes.get(key) === promise) writes.delete(key); }).catch(() => {});
+    return promise;
+  }
   function write(scope: QueueScope & { session: string }, queued: Encolado[]) {
     if (disposed) return Promise.resolve();
-    return deps.writeQueue(scope, queued).catch(error => { if (current(scope)) deps.onSaveFailure(error, scope); });
+    return persist(scope, queued).catch(error => { if (current(scope)) deps.onSaveFailure(error, scope); });
   }
   createEffect(on([items, owner, retained], ([queued, id, reason]) => {
     const scope = currentScope();
@@ -108,7 +120,7 @@ export function createTaskQueues(deps: Dependencies) {
     draining: (session: string) => draining.has(session),
     openSession, detach, retain, remove, next, beginHidden, restoreHidden,
     endHidden: (session: string) => draining.delete(session),
-    persist: (session: string, project: string, queued: Encolado[]) => disposed ? Promise.resolve() : deps.writeQueue({ ...currentScope(), session, project }, queued),
+    persist: (session: string, project: string, queued: Encolado[]) => persist({ ...currentScope(), session, project }, queued),
     persistRestored: (session: string, project: string, queued: Encolado[]) => write({ ...currentScope(), session, project }, queued),
     adopt: (session: string) => setOwner(session),
     editMode: (value: boolean) => setEditing(value),
