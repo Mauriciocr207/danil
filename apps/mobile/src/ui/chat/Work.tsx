@@ -1,7 +1,7 @@
 import { STATUS_LABELS, TEXT } from "@terminus/design";
 import { stepCounts } from "@terminus/chat/steps";
 import { commandSummary } from "@terminus/chat/command";
-import { readableToolName, toolSource, type ToolSource } from "@terminus/chat/tools";
+import { commandSource, readableToolName, toolSource, type CommandSource, type ToolSource } from "@terminus/chat/tools";
 import { type ComponentRef, type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { OPENED, type Follow, type Metrics, measuredFollow, shouldStick } from "../../lib/follow";
@@ -76,7 +76,7 @@ function runningLabel(step: Step): { verb: string; subject: string | null; origi
 }
 
 /** La cabecera de una fila, como `resumen` del escritorio: el verbo se lee, el sujeto va en mono y el dueño va antes. */
-function rowLabel(row: StepRow): { verb: string; subject: string | null; origin?: ToolSource } {
+function rowLabel(row: StepRow): { verb: string; subject: string | null; origin?: ToolSource; command?: CommandSource } {
   const n = row.steps.length;
   const first = row.steps[0];
   const target = first.target;
@@ -96,8 +96,11 @@ function rowLabel(row: StepRow): { verb: string; subject: string | null; origin?
       const files = new Set(row.steps.map((s, i) => s.target ?? `#${i}`)).size;
       return n === 1 ? { verb: pastEdit(first.name), subject: target && fileName(target) } : { verb: w("common.steps.edit.many", { count: files }), subject: null };
     }
-    case "run":
-      return { verb: w("common.steps.run"), subject: target && commandSummary(target) };
+    case "run": {
+      // Un comando de un CLI conocido lleva la marca de su servicio, sin rótulo: el programa ya lo nombra.
+      const command = n === 1 ? commandSource(target) : null;
+      return { verb: w("common.steps.run"), subject: target && commandSummary(target), ...(command ? { command } : {}) };
+    }
     case "web":
       return n === 1 ? { verb: w("common.steps.web.one"), subject: target } : { verb: w("common.steps.web.many", { count: n }), subject: null };
     case "plan":
@@ -221,7 +224,7 @@ const opensBody = (row: StepRow) => row.steps.length > 1 || (row.steps[0].target
 const isLongBody = (text: string) => text.split("\n").length > 6 || text.length > 260;
 
 const WorkRow = memo(function WorkRow({ row, id, open, full, needle, onToggle, onLayout, theme }: { row: StepRow; id: string; open: boolean; full: boolean; needle: string; onToggle: (id: string) => void; onLayout: (id: string, y: number) => void; theme: Theme }) {
-  const { verb, subject, origin } = rowLabel(row);
+  const { verb, subject, origin, command } = rowLabel(row);
   const failed = row.steps.some((step) => step.ok === false);
   const running = row.steps.some((step) => step.running);
   const canOpen = opensBody(row);
@@ -234,6 +237,8 @@ const WorkRow = memo(function WorkRow({ row, id, open, full, needle, onToggle, o
         <ActivityIndicator size="small" color={theme.primary} style={styles.spinner} />
       ) : origin ? (
         <View style={styles.icon}><ToolBrandMark server={origin.server} size={14} color={theme.textMuted} /></View>
+      ) : command ? (
+        <View style={styles.icon} accessible accessibilityRole="image" accessibilityLabel={command.label}><ToolBrandMark server={command.mark} size={14} color={theme.textMuted} /></View>
       ) : (
         <View style={styles.icon}><Icon name={STEP_ICON[row.kind]} size={14} color={theme.textMuted} /></View>
       )}

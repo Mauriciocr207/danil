@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mcpCallFromName, readableToolName, toolSource } from "../src/tools.ts";
+import { commandSource, mcpCallFromName, readableToolName, toolSource } from "../src/tools.ts";
 
 test("el nombre de un MCP se parte en servidor y herramienta, con las dos formas", () => {
   assert.deepEqual(mcpCallFromName("mcp__github__create_issue"), { server: "github", tool: "create_issue" });
@@ -35,4 +35,26 @@ test("el evento puede traer el servidor ya separado y no se vuelve a partir", ()
 
 test("una herramienta local no tiene origen", () => {
   assert.equal(toolSource("Bash"), null);
+});
+
+test("un comando de un CLI conocido trae la marca de su servicio", () => {
+  const mark = (cmd: string) => commandSource(cmd)?.mark ?? null;
+  assert.deepEqual(commandSource('"$DANIL_CLI" task show qx1q8d3m --json'), { program: "$DANIL_CLI", mark: "danil", label: "Danil" });
+  assert.equal(mark("gh pr list"), "github");
+  assert.equal(mark("glab mr list"), "gitlab");
+  assert.equal(mark("wrangler deploy"), "cloudflare");
+  assert.equal(mark("gcloud run deploy"), "googlecloud");
+  assert.equal(mark("gsutil ls"), "googlecloud");
+  assert.equal(mark("cd /repo && git status"), "git");
+  assert.equal(mark("psql -c 'select 1'"), "postgresql");
+  assert.equal(mark("npx playwright test"), "playwright");
+  assert.equal(mark("pnpm exec wrangler deploy"), "cloudflare");
+  assert.equal(mark("cd /x && gh pr view 12"), "github");
+  assert.equal(mark("bash -lc 'gh pr view 12'"), "github");
+  assert.equal(mark("/usr/local/bin/gh api x"), "github");
+  assert.equal(mark("env FOO=1 supabase db push"), "supabase");
+});
+
+test("un programa sin marca sigue con el icono de terminal", () => {
+  for (const cmd of ["aws-vault exec x", "ls -la", "npm test", "cargo build", "pnpm install", "", null]) assert.equal(commandSource(cmd), null, String(cmd));
 });

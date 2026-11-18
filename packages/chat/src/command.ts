@@ -16,6 +16,7 @@
  * Si las comillas no cierran, no se adivina: se devuelve el texto tal cual. Pasa
  * cuando el agente censura credenciales y se lleva la barra de una comilla.
  */
+import { commandName } from "../../design/src/toolMarks.ts";
 
 /** Los intérpretes cuyo `-c`/`-lc` lleva el guion de verdad. */
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ash", "ksh", "fish", "pwsh", "powershell", "cmd"]);
@@ -203,7 +204,7 @@ function read(tokens: readonly string[]): Found {
 }
 
 /** El primer tramo que sí es un acto, ya sin envoltorios ni preparativos. */
-function meaningful(command: string, depth = 0): { text: string; program: string | null } | null {
+function meaningful(command: string, depth = 0): { text: string; program: string | null; words?: readonly string[] } | null {
   if (depth > 6) return null;
   const { first, rest } = splitFirst(command.trim());
   const tokens = tokenize(first);
@@ -218,11 +219,11 @@ function meaningful(command: string, depth = 0): { text: string; program: string
       // Las redirecciones no se leen —`2>&1` es fontanería— y una palabra con
       // espacios vuelve entre comillas: al quitar las de shell se perdería
       // dónde empieza y acaba.
-      const words = tokens
-        .slice(found.at)
-        .filter((word) => !/^\d*[<>]/.test(word))
-        .map((word) => (/\s/.test(word) ? JSON.stringify(word) : word));
-      return { text: words.join(" "), program: found.name };
+      const words = tokens.slice(found.at).filter((word) => !/^\d*[<>]/.test(word));
+      // `"$DANIL_CLI" task show` se lee `danil task show`: el CLI está en el
+      // PATH con ese nombre. El cuerpo desplegado conserva el comando real.
+      const shown = [commandName(words[0]!), ...words.slice(1)].map((word) => (/\s/.test(word) ? JSON.stringify(word) : word));
+      return { text: shown.join(" "), program: found.name, words };
     }
     case "skip":
       return rest ? meaningful(rest, depth + 1) : null;
@@ -263,4 +264,51 @@ export function commandSummary(cmd: string, max = 64) {
 /** El programa del acto, sin ruta ni argumentos: `git`, `pnpm`, `rg`. */
 export function commandProgram(cmd: string) {
   return meaningful(cmd)?.program ?? null;
+}
+
+/**
+ * Los lanzadores que corren otro programa: la marca sale de la palabra que
+ * sigue. El valor es el subcomando que hace falta (`pnpm dlx`), o `null` si el
+ * lanzador va solo (`npx`).
+ */
+const LAUNCHERS: Record<string, ReadonlySet<string> | null> = {
+  npx: null,
+  bunx: null,
+  uvx: null,
+  pnpm: new Set(["dlx", "exec"]),
+  yarn: new Set(["dlx"]),
+};
+
+/** Opciones de un lanzador que se comen el argumento siguiente. */
+const LAUNCHER_VALUE_FLAGS = new Set(["-p", "--package", "--from", "--with", "--python", "-C", "--dir", "--filter", "-F"]);
+
+/**
+ * El programa que decide la marca: el del acto, o el que lanza `npx`, `bunx`,
+ * `uvx`, `pnpm dlx`/`exec` o `yarn dlx`. `npx playwright test` es Playwright;
+ * `pnpm install` sigue siendo `pnpm`. El texto de la fila no cambia.
+ */
+export function commandMarkProgram(cmd: string) {
+  const found = meaningful(cmd);
+  if (!found?.program || !found.words) return found?.program ?? null;
+  const name = found.program;
+  if (!(name in LAUNCHERS)) return name;
+  const sub = LAUNCHERS[name];
+  let i = 1;
+  if (sub) {
+    if (!sub.has(found.words[1] ?? "")) return name;
+    i = 2;
+  }
+  for (; i < found.words.length; i++) {
+    const word = found.words[i]!;
+    if (word === "--") continue;
+    if (LAUNCHER_VALUE_FLAGS.has(word)) {
+      i++;
+      continue;
+    }
+    if (word.startsWith("-")) continue;
+    // `wrangler@3` es `wrangler`; un paquete con ámbito (`@scope/x`) no dice el programa.
+    const at = word.lastIndexOf("@");
+    return program(at > 0 ? word.slice(0, at) : word);
+  }
+  return name;
 }

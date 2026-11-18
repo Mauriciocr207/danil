@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { TOOL_LABELS, toolLabel, toolMarkId, toolMonogram } from "../src/toolMarks.ts";
+import { TOOL_LABELS, commandMarkId, commandName, toolLabel, toolMarkId, toolMonogram } from "../src/toolMarks.ts";
 import { TOOL_MARKS } from "../src/toolMarksData.ts";
 
 test("cada marca tiene nombre, caja y al menos un trazo con relleno o color del texto", () => {
@@ -65,4 +65,26 @@ test("la baldosa de un servidor sin marca lleva su inicial", () => {
   assert.equal(toolMonogram("acme-analytics"), "A");
   assert.equal(toolMonogram("  _zulú"), "Z");
   assert.equal(toolMonogram(""), "");
+});
+
+test("un programa de shell lleva marca solo por coincidencia exacta", () => {
+  for (const cli of ["$DANIL_CLI", "${DANIL_CLI}", "$TERMINUS_CLI", "${TERMINUS_CLI}", "danil", "dn"]) assert.equal(commandMarkId(cli), "danil", cli);
+  assert.equal(commandMarkId("gh"), "github");
+  assert.equal(commandMarkId("glab"), "gitlab");
+  assert.equal(commandMarkId("wrangler"), "cloudflare");
+  assert.equal(commandMarkId("gcloud"), "googlecloud");
+  assert.equal(commandMarkId("gsutil"), "googlecloud");
+  assert.equal(commandMarkId("psql"), "postgresql");
+  // `git` lleva la marca de Git, nunca la de GitHub.
+  assert.equal(commandMarkId("git"), "git");
+  for (const cli of ["supabase", "vercel", "docker", "stripe", "aws", "playwright"]) assert.equal(commandMarkId(cli), cli);
+  // Sin sufijo ni primera palabra: inventarían dueños.
+  for (const cli of ["aws-vault", "docker-compose-x", "ls", "npm", "pnpm", "cargo", "$OTHER_CLI", "", null]) assert.equal(commandMarkId(cli), null, String(cli));
+});
+
+test("la variable del CLI se lee danil y lo demás queda igual", () => {
+  assert.equal(commandName("$DANIL_CLI"), "danil");
+  assert.equal(commandName("${TERMINUS_CLI}"), "danil");
+  assert.equal(commandName("gh"), "gh");
+  assert.equal(commandName("$DANIL_CLIX"), "$DANIL_CLIX");
 });
