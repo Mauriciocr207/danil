@@ -390,6 +390,8 @@
   },
   "projects.picker.no_tasks": "sin tareas",
   "projects.picker.more": "Más proyectos… ({n})",
+  "projects.picker.show": "Mostrar",
+  "projects.picker.show_label": "Mostrar «{name}» en el selector",
   "projects.hover_card.machine": "Máquina",
   "projects.add.clone_lost": "La máquina ya no recuerda este clon (quizá se reinició). Revisa si la carpeta quedó en la lista y, si no, vuelve a clonarlo.",
   "projects.add.remote_directory": "Se clona en la carpeta de proyectos de {name}.",

@@ -3,8 +3,11 @@ import { t } from "../../lib/i18n";
 import { formatearDuracion, type Paso } from "../../lib/steps";
 import { activityElapsed } from "../../lib/turnActivity";
 import { createNow } from "../../lib/sharedClock";
-import { ActivityDots } from "./ActivityDots";
 import { MachineIcon } from "../machines/MachineIcon";
+import { ActivityDots } from "./ActivityDots";
+
+export type MachineWaitStatus = { phase: "waking" | "connecting"; name: string; wakes: boolean };
+
 const MUESTRA_EL_RELOJ_DESDE_MS = 3000;
 
 // La actividad normal usa puntos; los bloqueos conservan su estado explícito.
@@ -28,19 +31,18 @@ export default function EstadoDelTurno(props: {
    * que esta ventana no vio arrancar—; sin fecha no se muestra su edad.
    */
   desde: number | null;
-  /**
-   * La máquina de la tarea se está encendiendo para recibir este mensaje: el
-   * turno ya salió y espera a que conteste. Hasta entonces no hay agente que
-   * piense, y decir «Pensando» sería inventarlo.
-   */
-  encendiendo?: { name: string; wakes: boolean } | null;
+  /** El envío espera a que la máquina encienda o abra su canal. */
+  machineWait?: MachineWaitStatus | null;
 }) {
   const ahora = createNow();
 
-  const blocked = () => Boolean(props.encendiendo || props.esperando || props.reintento || props.enFondo);
+  const blocked = () => Boolean(props.machineWait || props.esperando || props.reintento || props.enFondo);
   const dice = createMemo(() => {
-    if (props.encendiendo)
-      return { verbo: t("chat.turn.waking", { name: props.encendiendo.name }), sujeto: null };
+    if (props.machineWait) {
+      const { phase, name } = props.machineWait;
+      const verbo = phase === "connecting" ? t("chat.turn.connecting", { name }) : t("chat.turn.waking", { name });
+      return { verbo, sujeto: null };
+    }
     if (props.esperando)
       return { verbo: t("chat.turn.waiting_answer"), sujeto: null };
     if (props.enFondo)
@@ -74,7 +76,8 @@ export default function EstadoDelTurno(props: {
       role={props.inline && !blocked() ? undefined : "status"}
       aria-live={props.inline && !blocked() ? undefined : "polite"}
       aria-label={
-        props.inline && !blocked() ? undefined : props.encendiendo
+        props.inline && !blocked() ? undefined : props.machineWait
+
           ? dice().verbo
           : props.esperando
           ? t("chat.turn.waiting_answer")
@@ -83,9 +86,10 @@ export default function EstadoDelTurno(props: {
             : t("chat.turn.working_aria")
       }
     >
-      <Show when={!props.inline || props.encendiendo || props.esperando || props.reintento || props.enFondo}>
-      <Show when={props.encendiendo || props.esperando || props.reintento || props.enFondo} fallback={<><ActivityDots /><span class="text-neutral-700 not-italic">{t("chat.reasoning.thinking")}</span></>}>
-        <Show when={props.encendiendo}>{(machine) => <MachineIcon wakes={machine().wakes} size={14} />}</Show>
+      <Show when={!props.inline || props.machineWait || props.esperando || props.reintento || props.enFondo}>
+      <Show when={props.machineWait || props.esperando || props.reintento || props.enFondo} fallback={<><ActivityDots /><span class="text-neutral-700 not-italic">{t("chat.reasoning.thinking")}</span></>}>
+        <Show when={props.machineWait}>{(machine) => <MachineIcon wakes={machine().wakes} size={14} />}</Show>
+
         <span>{dice().verbo}</span>
       </Show>
       </Show>

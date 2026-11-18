@@ -164,7 +164,7 @@ import Preguntas, {
 import Alcance from "./Scope";
 import Suggestions, { type Suggestion } from "./Suggestions";
 import LineaDeTiempo, { SUPERFICIE_DE_EJECUCION } from "./Timeline";
-import EstadoDelTurno from "./TurnStatus";
+import EstadoDelTurno, { type MachineWaitStatus } from "./TurnStatus";
 import { ActivityDots } from "./ActivityDots";
 import { coalesceLiveActivity, visibleActivityMessages, placeActivities, type PresentedActivityBlock, type ActivityChunk } from "./activityBlocks";
 import { WithMentions } from "./WithMentions";
@@ -561,7 +561,7 @@ export type ChatProps = {
   /** El agente contestó y solo queda una hija en segundo plano. */
   enFondo?: boolean;
   /** La máquina de la tarea se enciende para recibir el mensaje que ya salió. */
-  encendiendo?: { name: string; wakes: boolean } | null;
+  machineWait?: MachineWaitStatus | null;
   /**
    * Desde cuándo contesta el turno que se está mirando, en epoch ms.
    * `null` sin turno vivo o cuando la ventana no sabe desde cuándo.
@@ -2947,12 +2947,12 @@ export default function Chat(props: ChatProps) {
                       pasos={activitySteps(b().activity)}
                       razonamiento={b().activity?.messages.flatMap(message => message.razonamiento ?? []) ?? []}
                       corriendo={b().activity?.active ?? false}
-                      animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.encendiendo}
+                      animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
                       duracion={b().activity?.durationMs == null ? null : formatearDuracion(b().activity!.durationMs!)}
                       abierto={Boolean(trabajos()[`activity:${b().activity?.key ?? ""}`])}
                       onAlternar={(open) => setTrabajos({ ...trabajos(), [`activity:${b().activity?.key ?? ""}`]: open })}
                       onVerCambios={props.onVerCambios}
-                      status={<Show when={b().activity?.active || (b().activity?.key === props.activities?.at(-1)?.key && (props.esperando || props.reintento || props.enFondo || props.encendiendo))}><EstadoDelTurno inline desde={b().activity?.startedAt ?? null} paso={null} esperando={props.esperando} reintento={props.reintento} enFondo={props.enFondo ?? false} encendiendo={props.encendiendo} /></Show>}
+                      status={<Show when={b().activity?.active || (b().activity?.key === props.activities?.at(-1)?.key && (props.esperando || props.reintento || props.enFondo || props.machineWait))}><EstadoDelTurno inline desde={b().activity?.startedAt ?? null} paso={null} esperando={props.esperando} reintento={props.reintento} enFondo={props.enFondo ?? false} machineWait={props.machineWait} /></Show>}
                     />
                   </div>
                 </Match>
@@ -2977,7 +2977,7 @@ export default function Chat(props: ChatProps) {
                       respuestas={(msg) => msg.turno ? respondido().get(msg.turno) ?? null : null}
                       vivo={fromWork(b(), (t) => esElVivo(t.msg), false)}
                       corriendo={registroCorre(b())}
-                      animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.encendiendo}
+                      animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
                       abiertoElTrabajo={Boolean(trabajos()[claveFila(b())])}
                       onAlternarTrabajo={() => {
                         const k = claveFila(trabajo());
@@ -3018,7 +3018,7 @@ export default function Chat(props: ChatProps) {
                       pasos={pasosDe(b())?.pasos ?? []}
                       avance={pasosDe(b())?.avance}
                       corriendo={esLaTiraViva(b())}
-                      animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.encendiendo}
+                      animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
                       abierto={trabajos()[claveFila(b())]}
                       onAlternar={(abierto) => {
                         setTrabajos({ ...trabajos(), [claveFila(bp())]: abierto });
@@ -3524,6 +3524,7 @@ export default function Chat(props: ChatProps) {
               />
             )}
           </Show>
+
           <div
             class="col-span-full"
             aria-hidden="true"

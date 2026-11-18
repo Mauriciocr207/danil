@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activityByProject, byRecent, recentProjects, rememberPick } from "../../src/features/projects/recent.ts";
+import { activeTaskCounts, activityByProject, byRecent, hiddenIn, pickerSections, recentProjects, rememberPick, setHidden } from "../../src/features/projects/recent.ts";
 import { lastActivity } from "../../../../packages/tasks/src/view.ts";
 
 const DAY = 86_400_000;
@@ -76,4 +76,54 @@ test("31 projects with live tasks only in «Danil App»: it is among the 8 and 2
   assert.equal(visible.length, 8);
   assert.equal(visible[0].id, "danil-app");
   assert.equal(rest.length, 23);
+});
+
+test("a hidden project leaves the 8 recent, the next one takes its place, and it goes after the rest", () => {
+  const rows = Array.from({ length: 10 }, (_, i) => project(`p${i}`, `P${i}`, NOW - i * DAY));
+  const { visible, rest, hidden } = pickerSections(rows, { p0: NOW }, {}, new Set(["p0", "p9"]), "");
+  assert.deepEqual(ids(visible), ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"]);
+  assert.deepEqual(ids(rest), []);
+  assert.deepEqual(ids(hidden), ["p0", "p9"], "hidden, in recent order, at the end");
+});
+
+test("the current project is seen even if hidden, and it is not listed twice", () => {
+  const rows = Array.from({ length: 12 }, (_, i) => project(`p${i}`, `P${i}`, NOW - i * DAY));
+  const { visible, rest, hidden } = pickerSections(rows, {}, {}, new Set(["p11", "p0"]), "p11");
+  assert.ok(ids(visible).includes("p11"));
+  assert.ok(!ids(visible).includes("p0"));
+  assert.deepEqual(ids(hidden), ["p0"]);
+  assert.equal(visible.length + rest.length + hidden.length, 12);
+});
+
+test("a hidden id that no longer exists changes nothing, and saving drops it", () => {
+  const rows = [project("a", "A", NOW - DAY), project("b", "B", NOW)];
+  const { visible, hidden } = pickerSections(rows, {}, {}, new Set(["gone"]), "");
+  assert.deepEqual(ids(visible), ["b", "a"]);
+  assert.deepEqual(hidden, []);
+  assert.deepEqual(setHidden({ w: ["gone", "a"] }, "w", "b", true, ["a", "b"]), { w: ["a", "b"] });
+});
+
+test("hiding in one workspace does not touch another with the same project id", () => {
+  const saved = { other: ["p1"] };
+  const next = setHidden(saved, "w", "p1", true, ["p1"]);
+  assert.deepEqual(next, { other: ["p1"], w: ["p1"] });
+  assert.deepEqual([...hiddenIn(next, "other")], ["p1"]);
+  const shown = setHidden(next, "w", "p1", false, ["p1"]);
+  assert.deepEqual(shown, { other: ["p1"] }, "showing removes the empty workspace entry and keeps the other");
+  assert.deepEqual([...hiddenIn(shown, "w")], []);
+  assert.deepEqual(saved, { other: ["p1"] }, "the saved value is not mutated");
+});
+
+test("a malformed or missing pref hides nothing", () => {
+  assert.equal(hiddenIn(null, "w").size, 0);
+  assert.equal(hiddenIn({ w: "p1" } as never, "w").size, 0);
+  assert.deepEqual([...hiddenIn({ w: ["p1", 3, ""] } as never, "w")], ["p1"]);
+  assert.equal(hiddenIn({ w: ["p1"] }, null).size, 0);
+});
+
+test("the task count is of active tasks only; a project without a read list has no number", () => {
+  const row = (archived?: boolean | null) => ({ archived });
+  const counts = activeTaskCounts({ "": [row()], a: [row(), row(false), row(null), row(true)], b: [row(true)], c: [] });
+  assert.deepEqual(counts, { a: 3, b: 0, c: 0 });
+  assert.equal("d" in counts, false, "unknown, not zero");
 });
