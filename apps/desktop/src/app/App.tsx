@@ -6541,6 +6541,7 @@ export default function App() {
         ventana={pp.sesion === sessionId() ? ventana() : null}
         busy={pp.sesion === sessionId() ? busy() : esProvisional(pp.sesion) ? arrancando() : vivas().includes(pp.sesion ?? "")}
         stopping={handoffAt(pp.sesion, proyectoDeLaCelda()?.id)?.stopping ?? false}
+        handoff={pp.sesion ? handoff.presentation(conversationScope(pp.sesion, proyectoDeLaCelda()?.id)) : null}
         agents={agents()}
         proyecto={
           <SelectorDeProyecto nueva={!pp.sesion} locked={!!encargadoDeLaCelda()} branch={
