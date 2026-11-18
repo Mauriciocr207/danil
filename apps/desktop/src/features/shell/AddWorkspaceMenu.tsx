@@ -5,6 +5,7 @@ import { Dynamic } from "solid-js/web";
 import { t } from "../../lib/i18n";
 import { capabilities } from "../../lib/platform";
 import { cn } from "../../lib/utils";
+import { SEPARADOR_DE_MENU, TITULO_DE_GRUPO } from "../../ui/ContextMenu";
 import { ITEM_DE_MENU, Popover, PopoverContent, PopoverTrigger } from "../../ui/Popover";
 import { type AttentionState, type TaskAttention, topState } from "./attention";
 import { matchesName } from "./hidden-workspaces";
@@ -22,6 +23,15 @@ export function menuArrows(e: KeyboardEvent) {
   const at = items.indexOf(document.activeElement as HTMLElement);
   const step = e.key === "ArrowDown" ? 1 : -1;
   items[at < 0 ? (step > 0 ? 0 : items.length - 1) : (at + step + items.length) % items.length]?.focus();
+}
+
+/** Devuelve una fila a la barra sin perder el foco: pasa a la vecina o, si no queda, a la primera del menú. */
+export function showKeepingFocus(row: HTMLElement, show: () => void) {
+  const neighbor = row.nextElementSibling ?? row.previousElementSibling;
+  const menu = row.closest<HTMLElement>('[role="menu"]');
+  show();
+  const target = neighbor?.isConnected ? neighbor.querySelector<HTMLElement>("[data-show-workspace]") : menu?.querySelector<HTMLElement>('[role="menuitem"]');
+  target?.focus();
 }
 
 type Hidden = { id: string; name: string };
@@ -49,6 +59,10 @@ export default function AddWorkspaceMenu(props: {
   const rows = () => props.hidden.filter((w) => matchesName(w.name, query()));
   // El abierto ya enseña su distintivo en su cuadro.
   const waiting = () => topState(props.hidden.filter((w) => w.id !== props.open).flatMap((w) => props.tasksOf(w.id)));
+  const label = () => {
+    const state = waiting();
+    return state ? t("shell.workspaces.add_hidden_state", { state: props.labelOf(state) }) : t("shell.workspaces.add");
+  };
   return (
     <Popover
       open={open()}
@@ -61,8 +75,8 @@ export default function AddWorkspaceMenu(props: {
         data-add-workspace=""
         data-attention={waiting() ?? undefined}
         class="relative mt-1 grid size-8 shrink-0 place-items-center rounded-md border border-dashed border-neutral-500 text-neutral-500 outline-none hover:bg-neutral-200 hover:text-neutral-950 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-        aria-label={waiting() ? t("shell.workspaces.tile_with_state", { name: t("shell.workspaces.add"), state: props.labelOf(waiting() as AttentionState) }) : t("shell.workspaces.add")}
-        title={t("shell.workspaces.add")}
+        aria-label={label()}
+        title={label()}
       >
         <Plus size={16} aria-hidden="true" />
         <Show when={waiting()}>{(s) => <Dynamic component={props.badge} state={s()} class="absolute -top-1 -right-1" />}</Show>
@@ -93,8 +107,8 @@ export default function AddWorkspaceMenu(props: {
             </button>
           </Show>
           <Show when={props.hidden.length > 0}>
-            <span aria-hidden="true" class="mx-2 my-1 block h-px bg-border" />
-            <p class="m-0 px-2 pt-1 pb-1 text-caption font-medium text-neutral-500">{t("shell.workspaces.hidden_title")}</p>
+            <span aria-hidden="true" class={cn(SEPARADOR_DE_MENU, "block")} />
+            <p class={cn("m-0", TITULO_DE_GRUPO)}>{t("shell.workspaces.hidden_title")}</p>
             <Show when={props.hidden.length >= SEARCH_FROM}>
               <WorkspaceSearch value={query()} onInput={setQuery} />
             </Show>
@@ -125,7 +139,7 @@ export default function AddWorkspaceMenu(props: {
                         aria-label={t("shell.workspaces.show", { name: name() })}
                         title={t("shell.workspaces.show", { name: name() })}
                         data-show-workspace={w.id}
-                        onClick={() => props.onShow(w.id)}
+                        onClick={(e) => showKeepingFocus(e.currentTarget.closest<HTMLElement>("[data-hidden-workspace]") as HTMLElement, () => props.onShow(w.id))}
                       >
                         <Eye size={13} aria-hidden="true" />
                       </button>
