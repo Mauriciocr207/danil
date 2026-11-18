@@ -6,7 +6,6 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import ArrowDown from "lucide-solid/icons/arrow-down";
-import ArrowUp from "lucide-solid/icons/arrow-up";
 import CornerDownLeft from "lucide-solid/icons/corner-down-left";
 import FileText from "lucide-solid/icons/file-text";
 import Maximize2 from "lucide-solid/icons/maximize-2";
@@ -14,7 +13,6 @@ import MessageCircleQuestion from "lucide-solid/icons/message-circle-question-ma
 import Paperclip from "lucide-solid/icons/paperclip";
 import Split from "lucide-solid/icons/split";
 import SquareTerminal from "lucide-solid/icons/square-terminal";
-import Square from "lucide-solid/icons/square";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import X from "lucide-solid/icons/x";
 import {
@@ -163,6 +161,9 @@ import { HoraDelTurno, LineaDeProveedor, BotonCopiar, CambioDeContexto } from ".
 import { TextoConSiguientes, ImagenesEntregadas, type RespuestaRapida } from "./components/thread/AgentAnswer";
 import type { Msg, PermissionOrigin } from "./messageTypes";
 import { observedActivityAction } from "./activityPresentation";
+import { ComposerAction } from "./components/composer/ComposerAction";
+import { PendingHandoff, handoffStatus } from "./components/thread/PendingHandoff";
+import type { HandoffPresentation } from "../conversation-handoff";
 import { RegistroDeTrabajo } from "./components/activity/TurnActivity";
 
 // Chunk aparte: el bloque de razonamiento solo lo carga un turno que lo trae.
@@ -234,6 +235,7 @@ export type ChatProps = {
    */
   conversacion: string;
   activities?: readonly TurnActivity<Msg>[];
+  handoff?: HandoffPresentation;
   /** Una tarea que ya existe pero no tiene mensajes: se ve como «Nueva tarea». */
   sinEmpezar?: boolean;
   /** Dónde se dejó de leer la última vez que este hilo estuvo montado. */
@@ -1383,7 +1385,8 @@ export default function Chat(props: ChatProps) {
    * El turno que no cerró se queda fuera: un fallo es lo único de esa
    * tira que cambia lo que hay que hacer después, no entra en nada plegable.
    */
-  const activityBlocked = () => Boolean(props.permission || props.esperando || props.reintento || props.enFondo || props.machineWait);
+  const handoffStarting = () => Boolean(props.handoff && props.handoff.phase !== "waiting-close");
+  const activityBlocked = () => Boolean(handoffStarting() || props.permission || props.esperando || props.reintento || props.enFondo || props.machineWait);
   const isCurrentActivity = (activity: TurnActivity<Msg> | undefined) => !!activity && (activity.active || activity.key === props.activities?.at(-1)?.key);
   const activityOwners = createMemo(() => new Map((props.activities ?? []).flatMap(activity => activity.messages.map(message => [message, activity] as const))));
   const bloques = createMemo<Bloque[]>(() => {
@@ -2540,7 +2543,7 @@ export default function Chat(props: ChatProps) {
               // Con la caja vacía, el Enter de más mete lo que espera en el
               // turno que corre. Es el gesto de la flecha de la cola, sin
               // soltar el teclado para alcanzarla.
-              if (!props.input.trim() && steerables().length > 0) {
+              if (!props.stopping && !props.input.trim() && steerables().length > 0) {
                 void steerCola();
                 return;
               }
@@ -2681,39 +2684,7 @@ export default function Chat(props: ChatProps) {
               </Button>
             </Show>
             <Show when={!modoTerminal() || props.busy}>
-            <Button
-              type={props.busy ? "button" : "submit"}
-              size="iconCompact"
-              class={cn(
-                "shrink-0 rounded-full",
-                props.busy && "bg-neutral-950 text-neutral-50 hover:bg-neutral-900",
-              )}
-              disabled={
-                props.busy ? props.stopping : !listo() || (!props.input.trim() && props.adjuntos.length === 0)
-              }
-              aria-label={
-                props.busy
-                  ? props.stopping
-                    ? t("chat.turn.stopping_aria")
-                    : t("chat.turn.stop")
-                  : t("chat.composer.send")
-              }
-              title={
-                props.busy
-                  ? props.stopping
-                    ? t("chat.turn.stopping")
-                    : t("chat.turn.stop")
-                  : t("chat.composer.send")
-              }
-              onClick={props.busy ? () => void props.onStop() : undefined}
-            >
-              <Show
-                when={props.busy}
-                fallback={<ArrowUp size={16} stroke-width={2.5} />}
-              >
-                <Square size={10} fill="currentColor" stroke-width={2} />
-              </Show>
-            </Button>
+            <ComposerAction busy={props.busy} stopping={props.stopping} hasMessage={Boolean(props.input.trim() || props.adjuntos.length)} canSend={listo()} onStop={props.onStop} />
             </Show>
           </div>
         </div>
@@ -2749,7 +2720,7 @@ export default function Chat(props: ChatProps) {
                       abierto={Boolean(trabajos()[`activity:${b().activity?.key ?? ""}`])}
                       onAlternar={(open) => setTrabajos({ ...trabajos(), [`activity:${b().activity?.key ?? ""}`]: open })}
                       onVerCambios={props.onVerCambios}
-                      status={() => <Show when={b().activity?.active || (b().activity?.key === props.activities?.at(-1)?.key && (props.esperando || props.reintento || props.enFondo || props.machineWait))}><Show when={props.permission} fallback={<EstadoDelTurno inline desde={b().activity?.startedAt ?? null} paso={null} esperando={props.esperando} reintento={props.reintento} enFondo={props.enFondo ?? false} machineWait={props.machineWait} />}><span class="text-neutral-500">{t("chat.permission.title")}</span></Show></Show>}
+                      status={() => <Show when={isCurrentActivity(b().activity) && handoffStarting() && props.handoff} fallback={<Show when={b().activity?.active || (b().activity?.key === props.activities?.at(-1)?.key && (props.esperando || props.reintento || props.enFondo || props.machineWait))}><Show when={props.permission} fallback={<EstadoDelTurno inline desde={b().activity?.startedAt ?? null} paso={null} esperando={props.esperando} reintento={props.reintento} enFondo={props.enFondo ?? false} machineWait={props.machineWait} />}><span class="text-neutral-500">{t("chat.permission.title")}</span></Show></Show>}><span class="text-neutral-500">{props.handoff ? handoffStatus(props.handoff) : ""}</span></Show>}
                     />
                   </div>
                 </Match>
@@ -3323,6 +3294,8 @@ export default function Chat(props: ChatProps) {
               />
             )}
           </Show>
+
+          <PendingHandoff handoff={props.handoff ?? null} bubble={presentation().UserBubble} userClass={presentation().userMessage} miniatura={props.onMiniatura} preview={props.onPreview} />
 
           <div
             class="col-span-full"
