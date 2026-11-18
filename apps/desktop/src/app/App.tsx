@@ -1131,7 +1131,7 @@ export default function App() {
   });
   onCleanup(threads.dispose);
   const hilos = threads.rows, hiloAbierto = threads.current, msgs = threads.messages, cargandoHilo = threads.loading;
-  const origenes = threads.origins, apagadas = threads.offline, encendiendo = threads.waking, traspasos = threads.handovers;
+  const origenes = threads.origins, apagadas = threads.offline, machineWaits = threads.machineWaits, traspasos = threads.handovers;
   const conAntiguos = threads.olderAvailable, conRecientes = threads.recentAvailable, estadoAntiguos = threads.olderStatus, colaSuelta = threads.recentTail;
   const leerTarea = threads.read, cargarAntiguos = threads.older, soltarHilo = threads.drop;
   function avisar(sesion: string) {
@@ -1143,14 +1143,13 @@ export default function App() {
     if (id === sessionId() && (session.subagent || session.parent)) composer.useProfile({ model: modeloDeSubtarea(session), effort: session.effort });
   }
   /**
-   * La máquina que se enciende para el mensaje que la tarea de esta celda acaba
-   * de mandar. Una tarea que nace aún no tiene id: su pestaña provisional, o el
-   * borrador, es la que se mira.
+   * El destino que demora el envío. Si la tarea aún no tiene id,
+   * la espera se muestra en su pestaña provisional o en el borrador.
    */
-  const encendiendoEn = (sesion: string | null | undefined) => {
+  const esperaMaquinaEn = (sesion: string | null | undefined) => {
     const id = sesion ?? (sessionId() ? null : pestanas.active());
-    const machine = (id ? encendiendo()[id] : undefined) ?? (sesion || sessionId() ? undefined : encendiendo()[claveAbierta()]);
-    return machine ? { name: machineName(machine), wakes: machineWakes(machine) } : null;
+    const wait = (id ? machineWaits()[id] : undefined) ?? (sesion || sessionId() ? undefined : machineWaits()[claveAbierta()]);
+    return wait ? { phase: wait.phase, name: machineName(wait.machine), wakes: machineWakes(wait.machine) } : null;
   };
   // Encendida por otra vía (otra ventana, otra acción), la tarea se vuelve a leer de su motor.
   createEffect(on(() => {
@@ -5091,11 +5090,11 @@ export default function App() {
     // Mandar a una tarea de una máquina apagada la enciende: el proxy espera a que
     // conteste y entrega una sola vez.
     const dormida = abierta ? apagadas()[abierta] ?? null : null;
-    if (abierta && dormida) threads.markWaking(abierta, dormida);
+    if (abierta && dormida) threads.markMachineWait(abierta, { machine: dormida, phase: "waking" });
     // Y crear en la elegida en «Ejecutar en» si está apagada: el aviso cuelga de la pestaña que nace.
     const destino = creationOptions?.headers["x-terminus-machine"] ?? null;
     const naceDormida = destino && machines().find((x) => x.id === destino)?.on === false ? destino : null;
-    if (provisional && naceDormida) threads.markWaking(provisional, naceDormida);
+    if (provisional && naceDormida) threads.markMachineWait(provisional, { machine: naceDormida, phase: "waking" });
     try {
       const llevado = llevar ? await llevar(claveBorrador) : null;
       if (llevar && !llevado) throw CARRY_STOPPED;
@@ -5171,7 +5170,14 @@ export default function App() {
         command: m.text.trimStart().startsWith("!"),
         setProvider: (provider) =>
           invoke("set_session_provider", { project: proyecto, session: abierta ?? "", provider }, opcionesDeLaTarea(abierta, workspaceActivo())),
-        send: mandarTurno,
+        send: () => {
+          const target = opciones?.headers?.["x-terminus-machine"];
+          const machine = target ? machines().find((row) => row.id === target) : undefined;
+          if (dormida || naceDormida || !machine || machine.local || !machine.on || machine.connection !== "unknown") return mandarTurno();
+          const waitingId = abierta ?? provisional ?? claveBorrador;
+          threads.markMachineWait(waitingId, { machine: machine.id, phase: "connecting" });
+          return mandarTurno().finally(() => threads.markMachineWait(waitingId, null));
+        },
       });
       const id = traspaso.answer;
       // El gesto quedó consumido: se escribió el consentimiento o el mensaje ya
@@ -5180,11 +5186,11 @@ export default function App() {
         drafts.handover(null, claveBorrador);
       }
       if (provisional && naceDormida) {
-        threads.markWaking(provisional, null);
+        threads.markMachineWait(provisional, null);
         void refetchMachines();
       }
       if (abierta && dormida) {
-        threads.markWaking(abierta, null);
+        threads.markMachineWait(abierta, null);
         threads.markAwake(abierta);
         void refreshSessions(grupos());
         void leerTarea(proyecto, abierta)
@@ -5237,8 +5243,8 @@ export default function App() {
       if (finishedTurns.has(id)) void settleTurn(id, finishedTurns.get(id));
       return true;
     } catch (e) {
-      if (abierta && dormida) threads.markWaking(abierta, null);
-      if (provisional && naceDormida) threads.markWaking(provisional, null);
+      if (abierta && dormida) threads.markMachineWait(abierta, null);
+      if (provisional && naceDormida) threads.markMachineWait(provisional, null);
       // Sin esto queda una tarea que nadie creó: la fila y la pestaña se
       // pintaron contando con que Rust aceptara el turno.
       if (provisional) {
@@ -6595,7 +6601,7 @@ export default function App() {
           reintento()?.session === pp.sesion ? reintento() : null
         }
         enFondo={enFondo().includes(pp.sesion ?? "")}
-        encendiendo={encendiendoEn(pp.sesion)}
+        machineWait={esperaMaquinaEn(pp.sesion)}
         inicioDelTurno={desdeDeTurno()[pp.sesion ?? ""] ?? null}
         terminal={terminales()[pp.sesion ?? ""] ?? null}
         carpetaDeTerminal={carpetasDeTerminal()[pp.sesion ?? ""] ?? null}

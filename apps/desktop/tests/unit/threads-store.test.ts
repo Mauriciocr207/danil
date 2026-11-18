@@ -82,7 +82,7 @@ test("metadata, loading and waking belong to the accepted task; finishing anothe
   const f = fixture(); f.store.startLoading("s"); f.store.startLoading("next"); f.store.finishLoading("s"); assert.equal(f.store.loading(), "next");
   assert.equal(f.store.acceptSession("s", session([], { offline: { machine: "m1" }, can_hand_over: true }), false, f.generation()), true);
   assert.equal(f.store.offline().s, "m1"); assert.equal(f.store.handovers().s.can, true);
-  f.store.markWaking("s", "m1"); assert.equal(f.store.waking().s, "m1"); f.store.markAwake("s"); assert.equal(f.store.offline().s, undefined); f.dispose();
+  f.store.markMachineWait("s", { machine: "m1", phase: "waking" }); assert.deepEqual(f.store.machineWaits().s, { machine: "m1", phase: "waking" }); f.store.markAwake("s"); assert.equal(f.store.offline().s, undefined); f.dispose();
 });
 
 test("service reset clears live output and retained streams while keeping persisted messages", () => {

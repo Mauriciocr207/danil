@@ -1,7 +1,9 @@
-import { createMemo, createSignal, untrack } from "solid-js";
+import { createMemo, createSignal, type Setter, untrack } from "solid-js";
 import { anexarDeltas, hasOlder, hasRecentGap, HistoryPager, lotesDeDeltas, mensajesDelHilo, transcripcion, type ChatEvent, type HandoverState, type Msg, type OlderState, type Session, type TranscriptOrigin, type Turn } from "../chat/index.ts";
 import { conservarEnOrden, conservarPorClave } from "../../lib/sessionRefresh.ts";
 import { transcriptEvent, type TranscriptMetadata } from "./transcript-events.ts";
+
+export type MachineWait = { machine: string; phase: "waking" | "connecting" };
 
 type Options = { headers: Record<string, string> };
 type Invoke = <T>(command: string, args?: Record<string, unknown>, options?: Options) => Promise<T>;
@@ -96,13 +98,13 @@ export function createThreadsStore(deps: {
   const idsDeTurnos = (turns: readonly Turn[]) => new Set(turns.flatMap((t) => (t.id ? [t.id] : [])));
   const [origenes, setOrigenes] = createSignal<Readonly<Record<string, TranscriptOrigin | null>>>({});
   const [apagadas, setApagadas] = createSignal<Readonly<Record<string, string>>>({});
-  const [encendiendo, setEncendiendo] = createSignal<Readonly<Record<string, string>>>({});
+  const [machineWaits, setMachineWaits] = createSignal<Readonly<Record<string, MachineWait>>>({});
   const [traspasos, setTraspasos] = createSignal<Readonly<Record<string, HandoverState>>>({});
-  const anotar = (set: typeof setApagadas, id: string, machine: string | null) =>
+  const anotar = <T,>(set: Setter<Readonly<Record<string, T>>>, id: string, value: T | null) =>
     set((all) => {
-      if ((all[id] ?? null) === machine) return all;
+      if ((all[id] ?? null) === value) return all;
       const { [id]: _, ...resto } = all;
-      return machine ? { ...resto, [id]: machine } : resto;
+      return value === null ? resto : { ...resto, [id]: value };
     });
   const historias = new Map<string, HistoryPager<Session["turns"][number]>>();
   const proyectosDeHistoria = new Map<string, string>();
@@ -291,13 +293,13 @@ export function createThreadsStore(deps: {
     const { [id]: _, ...rest } = saved; workspaceThreads.set(workspace, rest);
   }
   return {
-    rows: hilos, current: hiloAbierto, messages: msgs, loading: cargandoHilo, origins: origenes, offline: apagadas, waking: encendiendo, handovers: traspasos,
+    rows: hilos, current: hiloAbierto, messages: msgs, loading: cargandoHilo, origins: origenes, offline: apagadas, machineWaits, handovers: traspasos,
     olderAvailable: conAntiguos, recentAvailable: conRecientes, olderStatus: estadoAntiguos, recentTail: colaSuelta,
     appendLive, appendPersisted, commitUniqueTurn, replaceTurn, reviseOptimistic, rejectOptimistic, question, replay, finishSteps, event,
     read: leerTarea, acceptSession: loadResult, older: cargarAntiguos, latest,
     replaceHistory: releer, saveWorkspace, activateWorkspace, resetService, adoptDraft, dropSaved,
     flush: deltasPorCuadro.vaciar,
-    markWaking: (id: string, machine: string | null) => { if (!disposed) anotar(setEncendiendo, id, machine); },
+    markMachineWait: (id: string, wait: MachineWait | null) => { if (!disposed) anotar(setMachineWaits, id, wait); },
     markAwake: (id: string) => { if (!disposed) anotar(setApagadas, id, null); },
     startLoading: (id: string) => { if (!disposed) setCargandoHilo(id); },
     finishLoading: (id: string) => { if (!disposed) setCargandoHilo(before => before === id ? null : before); },
