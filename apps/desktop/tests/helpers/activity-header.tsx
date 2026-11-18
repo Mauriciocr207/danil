@@ -12,6 +12,7 @@ const rehydrated = new URLSearchParams(location.search).get("mode") === "rehydra
 
 function Fixture() {
   const [stopping, setStopping] = createSignal(false);
+  const [paused, setPaused] = createSignal(false);
   const [active, setActive] = createSignal(true);
   const [open, setOpen] = createSignal(false);
   const [steps, setSteps] = createSignal<Paso[]>(rehydrated ? [] : [{ ...pasoDe("command_execution", "pnpm test:unit"), corriendo: true }]);
@@ -19,12 +20,13 @@ function Fixture() {
   return <main class="max-w-3xl bg-surface p-6 text-neutral-950">
     <nav class="mb-4 flex flex-wrap gap-3 text-sm">
       <button data-stop onClick={() => setStopping(true)}>Stop</button>
+      <button data-pause onClick={() => setPaused(true)}>Pause</button>
       <button data-done onClick={() => setActive(false)}>Done</button>
       <button data-read onClick={() => setSteps([...steps(), { ...pasoDe("Read", "src/features/chat/Chat.tsx"), corriendo: true }])}>Read</button>
       <button data-reset onClick={() => { setStopping(false); setActive(true); }}>Resume</button>
     </nav>
     <p data-existing-response class="mb-3">Previously loaded response remains visible.</p>
-    <RegistroDeTrabajo {...presentation} animando={!rehydrated} observed pasos={steps()} corriendo={active()} abierto={open()} onAlternar={setOpen} />
+    <RegistroDeTrabajo {...presentation} animando={!rehydrated && !paused()} observed pasos={steps()} corriendo={active()} abierto={open()} onAlternar={setOpen} />
   </main>;
 }
 

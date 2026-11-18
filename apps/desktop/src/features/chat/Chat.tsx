@@ -2742,7 +2742,7 @@ export default function Chat(props: ChatProps) {
                       latestAction={observedActivityAction(b().activity?.observation?.message, b().activity?.observation?.kind)}
                       pasos={activitySteps(b().activity)}
                       razonamiento={b().activity?.messages.flatMap(message => message.razonamiento ?? []) ?? []}
-                      corriendo={Boolean(b().activity?.active) && !activityBlocked()}
+                      corriendo={Boolean(b().activity?.active)}
                       blocked={isCurrentActivity(b().activity) && activityBlocked()}
                       animando={!(b().activity?.startedAt === null && b().activity?.messages.length === 0) && !props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
                       duracion={b().activity?.durationMs == null ? null : formatearDuracion(b().activity!.durationMs!)}

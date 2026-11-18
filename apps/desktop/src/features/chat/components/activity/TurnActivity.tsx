@@ -58,7 +58,7 @@ export function RegistroDeTrabajo(props: {
       aria-hidden="true"
     />
   );
-  const girando = () => <ActivityIndicator active={props.corriendo && !props.stopping} paused={props.animando === false || props.blocked || props.stopping} />;
+  const girando = () => <ActivityIndicator mode={!props.corriendo ? "finished" : presentation().animate ? "running" : "paused"} />;
   const caption = () => <><Show when={props.stopping || !props.blocked}><ActivityCaption active={presentation().animate} text={rotulo()} /></Show><Show when={!props.stopping && props.blocked}>{props.status?.()}</Show></>;
   const tiempo = () => (
     <Show when={duracion()}>

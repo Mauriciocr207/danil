@@ -5,16 +5,17 @@ import "./activity-indicator.css";
 const PARTICLES = Array.from({ length: 13 }, (_, index) => index);
 
 /** Lifecycle is supplied by the caller; this component only owns motion and its resources. */
-export function ActivityIndicator(props: { paused?: boolean; active?: boolean }) {
+export function ActivityIndicator(props: { paused?: boolean; active?: boolean; mode?: "running" | "paused" | "finished" }) {
   const cycle = createActivityMotionCycle();
   const [motion, setMotion] = createSignal(cycle.initial);
   const [mounted, setMounted] = createSignal(false);
   const jellyId = `activity-jelly-${createUniqueId()}`;
   const preference = createActivityMotionPreference(mounted);
-  const paused = () => props.paused || props.active === false || !preference();
+  const mode = () => props.mode ?? (props.active === false ? "finished" : props.paused ? "paused" : "running");
+  const paused = () => mode() !== "running" || !preference();
   createEffect(() => {
-    if (props.active !== false) { setMounted(true); return; }
-    if (!mounted() || props.paused) return;
+    if (mode() !== "finished") { setMounted(true); return; }
+    if (!mounted()) return;
     const exit = setTimeout(() => setMounted(false), 250);
     onCleanup(() => clearTimeout(exit));
   });
@@ -24,7 +25,7 @@ export function ActivityIndicator(props: { paused?: boolean; active?: boolean })
     const change = setTimeout(() => setMotion(cycle.next()), 6_000 + Math.random() * 2_000);
     onCleanup(() => clearTimeout(change));
   });
-  return <span class="activity-dots-slot" classList={{ "activity-dots-exited": props.active === false }} aria-hidden="true" data-activity-slot="">
+  return <span class="activity-dots-slot" classList={{ "activity-dots-exited": mode() !== "running" }} aria-hidden="true" data-activity-slot="">
     <Show when={mounted()}>
       <span class="activity-motion" classList={{ "activity-motion-paused": paused() }} data-activity-dots="">
         <For each={ACTIVITY_MOTIONS}>{name => <span class="activity-motion-layer" classList={{ "activity-motion-selected": motion() === name }} data-activity-variant={name}>
