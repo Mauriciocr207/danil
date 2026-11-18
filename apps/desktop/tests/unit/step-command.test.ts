@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import "../helpers/catalog.ts";
 import { segmentosAnsi } from "../../src/lib/ansi.ts";
-import { clasificar, comando } from "../../src/lib/steps.ts";
+import { agrupar, clasificar, comando, pasoDe, resumen } from "../../src/lib/steps.ts";
+import { comandoDeFila } from "../../src/lib/stepMarks.ts";
 
 /**
  * **La fila enseña lo que el agente decidió hacer, no cómo se lanzó.**
@@ -64,4 +66,23 @@ test("un color extendido se lee como un grupo y no como instrucciones sueltas", 
 test("MultiEdit es una edición en todos los clientes", () => {
   assert.equal(clasificar("MultiEdit"), "editar");
   assert.equal(clasificar("algo_nuevo"), "otro");
+});
+
+test("la fila de un comando terminado de un CLI conocido lleva su marca; la agrupada y la que corre no", () => {
+  const hecho = (objetivo: string) => pasoDe("Bash", objetivo, { ok: true });
+  const [danil] = agrupar([hecho('"$DANIL_CLI" task list --json')]);
+  assert.equal(comandoDeFila(danil!)?.mark, "danil");
+  // El renglón lee `danil …`; el cuerpo desplegado es el comando real.
+  assert.equal(resumen(danil!).sujeto, "danil task list --json");
+  assert.equal(comando(danil!.pasos[0]!.objetivo!), '"$DANIL_CLI" task list --json');
+  assert.equal(resumen(danil!).origen, undefined);
+
+  assert.equal(comandoDeFila(agrupar([hecho("gh pr list")])[0]!)?.mark, "github");
+  assert.equal(comandoDeFila(agrupar([hecho("ls -la")])[0]!), null);
+
+  // Hoy dos comandos no se juntan; si una fila llegara a llevar varios, no lleva marca.
+  assert.equal(comandoDeFila({ clase: "ejecutar", pasos: [hecho("gh pr list"), hecho("gh pr view 1")] }), null);
+
+  const corriendo = agrupar([pasoDe("Bash", "gh pr list", { corriendo: true })]);
+  assert.equal(comandoDeFila(corriendo[0]!), null);
 });

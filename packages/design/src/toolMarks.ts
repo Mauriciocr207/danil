@@ -71,7 +71,7 @@ const ALIASES: Record<ToolMarkId, readonly string[]> = {
   github: ["github", "gh", "github-enterprise", "github.com"],
   // `git` es el programa, no el anfitrión: lleva la marca de Git, nunca la de GitHub.
   git: ["git"],
-  gitlab: ["gitlab", "gitlab.com"],
+  gitlab: ["gitlab", "gitlab.com", "glab"],
   bitbucket: ["bitbucket", "bitbucket.org"],
   atlassian: ["atlassian", "jira", "confluence", "jira-cloud", "atlassian-jira"],
   notion: ["notion"],
@@ -84,18 +84,18 @@ const ALIASES: Record<ToolMarkId, readonly string[]> = {
   typst: ["typst"],
   libreoffice: ["libreoffice", "soffice"],
   cua: ["cua", "computer-use", "cua-driver"],
-  danil: ["danil", "terminus", "seldon", "computers"],
+  danil: ["danil", "dn", "terminus", "seldon", "computers"],
   supabase: ["supabase"],
   slack: ["slack"],
   linear: ["linear"],
   sentry: ["sentry"],
   vercel: ["vercel"],
   docker: ["docker"],
-  postgresql: ["postgresql", "postgres", "pg"],
+  postgresql: ["postgresql", "postgres", "pg", "psql"],
   playwright: ["playwright"],
   stripe: ["stripe"],
-  cloudflare: ["cloudflare", "workers"],
-  googlecloud: ["googlecloud", "google-cloud", "gcp"],
+  cloudflare: ["cloudflare", "workers", "wrangler"],
+  googlecloud: ["googlecloud", "google-cloud", "gcp", "gcloud", "gsutil"],
   aws: ["aws", "amazon", "amazonwebservices", "s3"],
 };
 
@@ -127,6 +127,29 @@ export function toolMarkId(server: string | null | undefined): ToolMarkId | null
     if (id) return id;
   }
   return null;
+}
+
+/**
+ * Las formas en que las instrucciones de Danil nombran su CLI: `"$DANIL_CLI"`,
+ * y el `$TERMINUS_CLI` que el CLI instalado todavía emite.
+ */
+const CLI_VARIABLE = /^\$(\{(DANIL|TERMINUS)_CLI\}|(DANIL|TERMINUS)_CLI)$/;
+
+/** El programa tal como se lee en la fila: `$DANIL_CLI` es `danil`, que está en el PATH. */
+export function commandName(program: string): string {
+  return CLI_VARIABLE.test(program) ? "danil" : program;
+}
+
+/**
+ * La marca de un programa de shell, o `null`. **La coincidencia es exacta**: sin
+ * el sufijo ni la primera palabra de `toolMarkId`, que sirven para nombres de
+ * servidor escritos a mano pero en un programa inventan dueños (`aws-vault` no
+ * es AWS). La tabla es la misma `ALIASES`: un alias en dos tablas acaba dando
+ * dos respuestas.
+ */
+export function commandMarkId(program: string | null | undefined): ToolMarkId | null {
+  if (!program) return null;
+  return BY_ALIAS.get(commandName(program.trim()).toLowerCase()) ?? null;
 }
 
 /** El nombre con el que se lee un servidor: el del servicio si lo conocemos, o su clave. */

@@ -1,27 +1,13 @@
-import Check from "lucide-solid/icons/check";
 import ChevronRight from "lucide-solid/icons/chevron-right";
-import Coins from "lucide-solid/icons/coins";
-import FilePenLine from "lucide-solid/icons/file-pen-line";
-import FileText from "lucide-solid/icons/file-text";
-import Globe from "lucide-solid/icons/globe";
-import ListChecks from "lucide-solid/icons/list-checks";
-import Search from "lucide-solid/icons/search";
-import ShieldCheck from "lucide-solid/icons/shield-check";
-import SquareTerminal from "lucide-solid/icons/square-terminal";
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import Wrench from "lucide-solid/icons/wrench";
-import { type Component, createSignal, For, Match, Show, Switch } from "solid-js";
+import { createSignal, For, Match, Show, Switch } from "solid-js";
 import { createRowSignal } from "./threadRow";
-import { Dynamic } from "solid-js/web";
 import { t } from "../../lib/i18n";
 import { flechaDeLista } from "../../lib/shortcuts";
 import {
   agrupar,
-  type Clase,
   comando,
   type Detalle,
   type Fila,
-  origenDeFila,
   type Paso,
   rotuloDeFila,
 } from "../../lib/steps";
@@ -30,7 +16,7 @@ import { AnsiText } from "../../ui/AnsiText";
 import BloqueDeDiff from "./DiffBlock";
 import { balance, comparado } from "./diff";
 import { Spinner } from "../../ui/Spinner";
-import { MarcaHerramienta } from "../../ui/toolMarks";
+import { Glifo } from "./StepGlyph";
 
 /**
  * El carril de un tramo: una raya bajo el chevron de su cabecera y ningún
@@ -40,66 +26,6 @@ import { MarcaHerramienta } from "../../ui/toolMarks";
  */
 export const SUPERFICIE_DE_EJECUCION = "min-w-0 ml-2.5 border-l border-border pl-1.5";
 
-type Icono = Component<{ size?: number; class?: string; "aria-hidden"?: boolean }>;
-
-const ICONO: Record<Clase, Icono> = {
-  leer: FileText,
-  buscar: Search,
-  editar: FilePenLine,
-  ejecutar: SquareTerminal,
-  web: Globe,
-  plan: ListChecks,
-  otro: Wrench,
-  aviso: TriangleAlert,
-  gasto: Coins,
-  fin: Check,
-  permiso: ShieldCheck,
-};
-
-/**
- * El glifo de la fila: el de su clase, o la marca del servicio cuando la
- * herramienta tiene dueño.
- *
- * **Una sola marca por renglón, en el hueco del glifo.** Dos iconos de 12 px en
- * la misma línea se estorban, y el verbo ya dice qué se hizo: la marca dice
- * quién lo prestó. Un servidor que no conocemos cae en una baldosa con su
- * inicial, y su nombre va escrito al lado.
- */
-function Glifo(props: { fila: Fila; abierta: boolean }) {
-  return (
-    <Show
-      when={origenDeFila(props.fila)}
-      fallback={
-        <Dynamic
-          component={ICONO[props.fila.clase]}
-          size={12}
-          class={cn(
-            "shrink-0",
-            // Centrado en el primer renglón, no en el bloque: con
-            // `items-start` el icono queda pegado arriba y el texto de 12px
-            // vive en una línea de 16, así que sobran 2px por lado.
-            !props.abierta && "mt-0.5",
-            // Un paso fallido no se pinta entero de rojo: fallar y reintentar
-            // es parte normal del trabajo, y la marca de la derecha ya dice
-            // con qué código salió.
-            "text-neutral-500",
-          )}
-          aria-hidden={true}
-        />
-      }
-    >
-      {(origen) => (
-        <span class={cn("flex shrink-0 text-neutral-500", !props.abierta && "mt-px")}>
-          <MarcaHerramienta
-            source={origen()}
-            size={14}
-            fallback={<Dynamic component={ICONO[props.fila.clase]} size={14} class="text-neutral-500" aria-hidden={true} />}
-          />
-        </span>
-      )}
-    </Show>
-  );
-}
 
 /** Una fila con algo que enseñar debajo. Las demás son solo la línea. */
 function desplegable(fila: Fila) {
