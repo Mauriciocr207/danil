@@ -380,3 +380,13 @@ test("catchup markers bind replayed output already represented in durable histor
   f.store.event(event("segment_saved", "", { id: durable.id! }), metadata);
   assert.equal(f.store.messages().filter(row => row.text === text).length, 1); f.dispose();
 });
+
+test("a snapshot before the first delta can still bind its segment to the current observed run", async () => {
+  const f = fixture(async <T>() => session([{ id: "current-segment", role: "agent", text: "valid output" }]) as T);
+  f.store.beginActivity("s", 1000);
+  f.store.acceptSession("s", await f.store.read("p", "s"), false, f.generation());
+  f.store.event(event("delta", "valid output", { message_id: "native-current", starts_message: true }), metadata); f.store.flush();
+  f.store.event(event("segment_saved", "", { id: "current-segment" }), metadata);
+  assert.equal(f.store.messages().filter(row => row.text === "valid output").length, 1);
+  assert.equal(f.store.rows().s.vivo[0].tramo, "current-segment"); f.dispose();
+});
