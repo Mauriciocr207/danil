@@ -2,7 +2,7 @@
 /** La columna de workspaces, la barra de título, terminar una tarea, enlaces locales y el alta. */
 import assert from "node:assert/strict";
 import { sleep } from "../../tests/helpers/jsdom-app.mjs";
-import { TASK_AFTER_QUEUE, RESPONSES, boot, bootByFolder, gitRow, keepActiveView, mount, task } from "../../tests/helpers/mount-guard.mjs";
+import { boot, bootByFolder, gitRow, keepActiveView, mount, RESPONSES, TASK_AFTER_QUEUE, task } from "../../tests/helpers/mount-guard.mjs";
 
 /**
  * La columna de workspaces cambia con un clic y cada cuadro dice lo más
@@ -75,8 +75,8 @@ add().click();
 await sleep(100);
 const hiddenRow = (id) => doc.querySelector(`[data-hidden-workspace="${id}"]`);
 assert.ok(hiddenRow("w3")?.querySelector('[data-attention-badge="asked"]'), "la fila del oculto lleva su distintivo");
-assert.equal(items()[0], "Crear workspace local", "crear sigue arriba");
-assert.equal(doc.querySelector("[data-add-danil-step]"), null, "sin sesión no se ofrece «Agregar workspace»");
+assert.deepEqual(items().slice(0, 2), ["Agregar workspace", "Crear workspace local"], "sin sesiones se puede entrar o crear un local");
+assert.ok(doc.querySelector("[data-add-danil-step]"), "sin sesión, «Agregar workspace» ofrece el login");
 const eye = (id) => hiddenRow(id).querySelector("[data-show-workspace]");
 eye("w3").focus();
 eye("w3").click();
@@ -87,7 +87,7 @@ assert.equal(doc.activeElement?.getAttribute("role"), "menuitem", "y las flechas
 eye("w4").focus();
 eye("w4").click();
 await sleep(80);
-assert.equal(doc.activeElement?.textContent.trim(), "Crear workspace local", "sin ocultos, el foco queda en la primera fila");
+assert.equal(doc.activeElement?.textContent.trim(), "Agregar workspace", "sin ocultos, el foco queda en la primera fila");
 await escape();
 assert.deepEqual([...doc.querySelectorAll("[data-workspace-column] [data-workspace-tile]")].map((b) => b.textContent.trim()),
   ["AC", "B", "GL", "D"], "mostrarlos los devuelve a su lugar");

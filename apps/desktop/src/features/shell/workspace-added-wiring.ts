@@ -1,3 +1,11 @@
+/**
+ * El cableado de los workspaces de Danil agregados (`workspace-added-sync.ts`): una sola
+ * sincronización por ventana con el transporte de Desk o el de la web, la persona, la
+ * organización activa y la fuente (`danilAvailable`, las máquinas `kind=organization`).
+ *
+ * - Sin persona u organización no se llama al borde y nada es de Danil.
+ * - Desk: `edgeFetch` y la persona de `GET /v1/identity/me`. La web: la cookie y CSRF.
+ */
 import type { OrganizationSelection } from "@terminus/computers";
 import type { Listed } from "@terminus/fleet";
 import { createEffect, createMemo, createRoot, createSignal, on } from "solid-js";

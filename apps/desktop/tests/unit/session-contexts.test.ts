@@ -197,3 +197,18 @@ test("identity without mode=add falls back to the previous login only for 404/50
   assert.deepEqual(calls, [{ mode: "add" }, undefined]);
   assert.equal(sessions.groups(), null);
 });
+
+test("returning focus and visibility together shares one status read", async () => {
+  const { coalesceSessionReturn } = await import("../../src/features/shell/session-return.ts");
+  const queued: (() => void)[] = [];
+  let reads = 0;
+  const returned = coalesceSessionReturn(async () => { reads++; }, (run) => queued.push(run));
+  returned();
+  returned();
+  assert.equal(queued.length, 1);
+  queued.shift()!();
+  assert.equal(reads, 1);
+  returned();
+  queued.shift()!();
+  assert.equal(reads, 2);
+});

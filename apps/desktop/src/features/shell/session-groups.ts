@@ -5,6 +5,7 @@ import { escribirPref, leerPref } from "../../lib/prefs.ts";
 import { listen } from "../../lib/serviceEvents.ts";
 import { danilAvailable, readDanil } from "../machines/index.ts";
 import { type ContextGroup, createSessionContexts } from "./session-contexts.ts";
+import { coalesceSessionReturn } from "./session-return.ts";
 import { sessionSeedInputs } from "./session-seeding.ts";
 import { createAddedSync } from "./workspace-added-sync.ts";
 import { ADDED_KEY, edgeAddedTransport, prefsAddedStore } from "./workspace-added-transport.ts";
@@ -64,7 +65,11 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
   if (capabilities().nativeWindow) {
     void sessions.refresh();
     void listen("danil-connect", () => void sessions.refresh()).catch(() => {});
-    setInterval(() => void sessions.refresh(), 30_000);
+    const returned = coalesceSessionReturn(sessions.refresh);
+    window.addEventListener("focus", returned);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") returned();
+    });
   }
   return {
     sessions, groups: rows, known, laterContext, acknowledgeLater: () => setLaterContext(null), ready: () => (revision(), sessions.ready()), connected: () => (revision(), sessions.connected()),

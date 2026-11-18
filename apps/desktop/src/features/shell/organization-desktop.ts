@@ -1,9 +1,14 @@
-import { createOrganizationSelection, isOrganizationSelectionRequired, type OrganizationSelection } from "@terminus/computers";
-import { listenDanilConnectionChange } from "../../lib/danilConnectionEvents";
-import { cancelEdgeWrites, edgeFetch, onEdgeProblem, ORGANIZATION_CHANGED } from "../../lib/edge";
-import { invoke } from "../../lib/invoke";
+/**
+ * El selector de organización de Desk: `edgeFetch` de `lib/edge.ts` (Bearer en Rust,
+ * lista cerrada de rutas, status del borde tal cual). El backoff, con el selector oculto,
+ * y la `Idempotency-Key` los lleva `@terminus/computers` (`organizations.ts`).
+ * Al iniciar o cerrar sesión (`danil-connect`) se vuelve a leer.
+ */
+
+import { createOrganizationSelection, type OrganizationSelection } from "@terminus/computers";
+import { cancelEdgeWrites, edgeFetch, ORGANIZATION_CHANGED } from "../../lib/edge";
 import { edgeOrganizationSource } from "./organization-edge";
-import { hasSessionGroups } from "./session-groups";
+import { legacyOrganizationGate } from "./organization-session-gate";
 
 export function desktopOrganizations(): OrganizationSelection {
   const selection = createOrganizationSelection(
@@ -17,16 +22,8 @@ export function desktopOrganizations(): OrganizationSelection {
       },
     },
   );
-  let legacy = false;
-  const load = async () => {
-    const status = await invoke<{ state: string; sessions?: unknown[] }>("danil_session_status").catch(() => null);
-    legacy = !status?.sessions;
-    if (legacy && status?.state === "connected") await selection.load();
-  };
-  onEdgeProblem((e) => {
-    if (!hasSessionGroups() && isOrganizationSelectionRequired(e)) selection.report(e);
-  });
-  void listenDanilConnectionChange(() => void load()).catch(() => {});
-  void load();
+  // Un `403 organization_selection_required` de cualquier ruta del borde abre el selector.
+  // Cualquier otro rechazo (`license_required`, `workspace_forbidden`…) no es asunto del selector.
+  legacyOrganizationGate(selection);
   return selection;
 }
