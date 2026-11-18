@@ -283,6 +283,7 @@
   "chat.activity.title": "Actividad",
   "chat.activity.running": "En curso",
   "chat.activity.continuing": "Continuando…",
+  "chat.activity.preparing": "Preparando…",
   "chat.activity.finished": "Actividad finalizada",
   "chat.activity.responding": "Respondiendo…",
   "chat.activity.delegated": "Creó la tarea {title}",
