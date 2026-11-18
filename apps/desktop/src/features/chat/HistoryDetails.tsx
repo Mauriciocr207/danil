@@ -14,7 +14,7 @@ const REREAD_MS = 150;
 const readTurns = (ref: HistoryRef) => (before: number) =>
   invoke<Session>("load_session", { project: ref.project, id: ref.session, history_request: { version: 1, before, revision: null } }, machineOf(ref.session));
 
-/** El texto del mensaje es la respuesta misma: se trae al montar la fila y se lee como cualquier otra. */
+/** El texto del mensaje es la respuesta misma: se trae al montar la fila y `render` lo pinta como cualquier otra. */
 function HistoryText(props: { reference: HistoryRef; turnId?: string; onUnavailable: () => void; render?: (text: string) => JSX.Element }) {
   const [text] = createResource(() => props.reference, (ref) => readDetailText<Session["turns"][number]>({
     part: (current, offset) => invoke<HistoryChunk>("load_session", { project: ref.project, id: ref.session, history_request: { ...current, kind: "detail", offset } }, machineOf(ref.session)),
@@ -26,7 +26,6 @@ function HistoryText(props: { reference: HistoryRef; turnId?: string; onUnavaila
     props.onUnavailable();
     return null;
   }));
-  // Con `render` se pinta como la respuesta misma: sin él, `<NEXT_STEPS>` y las visuales salían crudos.
   return <Show when={text()}>{(value) => props.render ? props.render(value()) : <Markdown>{value()}</Markdown>}</Show>;
 }
 

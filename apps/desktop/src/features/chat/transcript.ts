@@ -665,10 +665,8 @@ export function transcripcion(turns: Turn[], start = 0): Msg[] {
     const propio: Msg = {
       role: t.role as Msg["role"],
       text: relevo ? relevo.texto : t.text,
-      // Del turno recortado solo vuelve el texto, que se pinta como la respuesta.
-      // Los demás campos grandes (herramientas, piezas, razonamiento…) solo se
-      // podían abrir como JSON crudo bajo la respuesta: nadie lo lee y es ruido.
-      // El dato sigue entero en la tarea.
+      // Del turno recortado solo vuelve el texto: los demás campos solo se abrían
+      // como JSON crudo bajo la respuesta. El dato sigue entero en la tarea.
       historyRefs: t.history_refs?.filter((ref) => ref.pointer === "/text"),
       ...(relevo ? { relevo: { titulo: relevo.titulo } } : {}),
       task_mentions: t.task_mentions,
