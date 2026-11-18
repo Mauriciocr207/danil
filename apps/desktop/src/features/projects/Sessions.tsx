@@ -46,7 +46,7 @@ import { canFinishTask, effectiveTaskGit, type GitStatus, sharesTaskGit, watchSe
 import { authorKey, authorKeys, isSubtask } from "./taskAuthors";
 import { descendientes, type Rama as RamaDeTareas, taskTree } from "./taskTree";
 import { rolledOutcome, type TaskActivity, taskPriority } from "@terminus/design";
-import { taskCard, buildTaskTree, taskIdentity, withTaskAncestors } from "@terminus/tasks";
+import { taskCard, buildTaskTree, familySubtasks, taskIdentity, withTaskAncestors } from "@terminus/tasks";
 
 export function readableSessionTitle(title: string): string {
   if (!title.startsWith("/root/")) return title;
@@ -327,7 +327,7 @@ export default function Sessions(props: {
   onPick: (id: string) => void;
   draggedTask?: string | null;
   onDrag?: (row: SessionRow, event: PointerEvent) => void;
-  onDelete: (id: string) => void;
+  onDelete: (id: string, members?: number) => void;
   onMove: (id: string, to: string) => void;
   /**
    * Marcar la etapa de una tarea, o quitársela con `null`.
@@ -1100,7 +1100,7 @@ export default function Sessions(props: {
               }}
             >
               <p class="m-0 mb-1.5 text-xs leading-[1.4] text-neutral-500">
-                {t("projects.sessions.delete_confirm")}
+                <Show when={familySubtasks(taskTree(props.relatedSessions ?? props.sessions, false), f.s, fijada)} fallback={t("projects.sessions.delete_confirm")}>{count => t("projects.sessions.delete_confirm_family", { count: count() })}</Show>
               </p>
               <div class="flex gap-1.5">
                 <Button
@@ -1112,7 +1112,7 @@ export default function Sessions(props: {
                   onClick={() => {
                     setConfirmando(null);
                     setMenu(null);
-                    props.onDelete(f.s.id);
+                    props.onDelete(f.s.id, 1 + familySubtasks(taskTree(props.relatedSessions ?? props.sessions, false), f.s, fijada));
                   }}
                 >
                   {t("projects.sessions.delete")}

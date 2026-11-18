@@ -62,7 +62,7 @@ export function ProjectPicker(props: {
   /** Sin acentos ni mayúsculas: buscar «administracion» encuentra la con tilde. */
   const plano = (s: string) =>
     s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
-  const ocultos = () => props.hidden ?? new Set<string>();
+  const ocultos = (): ReadonlySet<string> => props.hidden ?? new Set();
   const recientes = () => pickerSections(props.projects, props.activity ?? {}, props.picked ?? {}, ocultos(), props.project);
   // Con texto se busca en todo, ocultos incluidos, y sin corte.
   const filtradas = () => {

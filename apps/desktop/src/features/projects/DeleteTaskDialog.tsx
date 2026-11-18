@@ -1,35 +1,14 @@
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
-import type { InvokeOptions } from "@tauri-apps/api/core";
 import { errorCode } from "../../lib/errorCode";
 import { invoke } from "../../lib/invoke";
 import { t } from "../../lib/i18n";
 import { Button } from "../../ui/Button";
 import { Dialog, DialogContent, DialogTitle } from "../../ui/Dialog";
-import { detalleDe, prosaDe } from "../../ui/Failure";
+import { Toast, ToastPortal } from "../../ui/Toast";
+import DeleteTaskMember from "./DeleteTaskMember";
+import { type DeleteMember, type DeletePreview, type DeleteResult, type DeleteTarget, failureText, type Integration, integrationChecks, memberKey as key } from "./deleteTask";
 
-export type DeleteMember = {
-  workspace: string;
-  project: string;
-  id: string;
-  title: string;
-  working: boolean;
-  files: { path: string; hash: string }[];
-  inspection: { status: "complete" | "failed"; error?: unknown };
-};
-type DeletePreview = { members: DeleteMember[]; consent?: string | null; expires_at?: number };
-type DeleteResult = {
-  status: "complete" | "partial";
-  applied: { project: string; id: string }[];
-  failures: { project: string; id: string; error: unknown }[];
-};
-export type DeleteTarget = { project: string; id: string; workspace: string | null; supported: boolean; machineName: string; folderName: (project: string) => string; options: InvokeOptions; panelId: (id: string) => string };
-
-function failureText(failure: unknown): string {
-  if (errorCode(failure) === "task_family_busy") return t("projects.sessions.delete_busy");
-  const message = prosaDe(failure);
-  const detail = detalleDe(failure);
-  return detail && detail !== message ? `${message}\n${detail}` : message;
-}
+export type { DeleteTarget };
 
 export default function DeleteTaskDialog(props: {
   target: DeleteTarget;
@@ -45,11 +24,21 @@ export default function DeleteTaskDialog(props: {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
   const [invalid, setInvalid] = createSignal(false);
+  // The dialog only opens when the family has losses, the inspection failed or the engine refused.
+  const [shown, setShown] = createSignal(false);
   const members = () => preview()?.members ?? [];
-  const key = (member: DeleteMember) => JSON.stringify([member.project, member.id]);
   const dirty = (member: DeleteMember) => props.dirty(props.target.panelId(member.id));
+  // Whether each member's branch is integrated: the preview's `integration`, or the fallback check below.
+  const [integration, setIntegration] = createSignal<ReadonlyMap<string, Integration>>(new Map());
+  const integrationOf = (member: DeleteMember) => integration().get(key(member)) ?? "unconfirmed";
+  // Only a completed inspection with nothing listed and an integrated branch counts as losing nothing.
+  const needsReview = (member: DeleteMember) => member.inspection.status !== "complete" || !!member.inspection.error || member.files.length > 0
+    || integrationOf(member) !== "merged";
+  const accepted = (member: DeleteMember) => !needsReview(member) || reviewed().has(key(member));
+  const reviewable = () => members().filter(member => needsReview(member) && member.inspection.status === "complete" && dirty(member).length === 0);
+  const allReviewed = () => reviewable().length > 0 && reviewable().every(member => reviewed().has(key(member)));
   const ready = createMemo(() => !busy() && props.isCurrent() && !invalid() && !!preview()?.consent && members().length > 0
-    && members().every(member => member.inspection.status === "complete" && reviewed().has(key(member)) && dirty(member).length === 0));
+    && members().every(member => member.inspection.status === "complete" && accepted(member) && dirty(member).length === 0));
   createEffect(() => {
     if (members().some(member => dirty(member).length > 0)) {
       setInvalid(true);
@@ -59,14 +48,17 @@ export default function DeleteTaskDialog(props: {
   const args = () => ({ project: props.target.project, id: props.target.id, action: "delete" });
   async function inspect(message = "") {
     setPreview(null);
+    setIntegration(new Map());
     setReviewed(new Set<string>());
     setInvalid(false);
     setError(message);
-    if (!props.target.supported) { setError(t("projects.sessions.delete_unsupported")); return; }
+    if (!props.target.supported) { setError(t("projects.sessions.delete_unsupported")); setShown(true); return; }
     setBusy(true);
     try {
-      setPreview(await invoke<DeletePreview>("task_lifecycle_preview", args(), props.target.options));
-    } catch (failure) { setError([message, failureText(failure)].filter(Boolean).join("\n")); }
+      const seen = await invoke<DeletePreview>("task_lifecycle_preview", args(), props.target.options);
+      setIntegration(await integrationChecks(seen.members, props.target.options));
+      setPreview(seen);
+    } catch (failure) { setError([message, failureText(failure)].filter(Boolean).join("\n")); setShown(true); }
     finally { setBusy(false); }
   }
   async function apply() {
@@ -78,49 +70,56 @@ export default function DeleteTaskDialog(props: {
     try {
       await props.prepare(seen.members.map(member => props.target.panelId(member.id)));
       // Preparing native viewers yields; editors may have changed in the meantime.
-      if (preview() !== seen || invalid() || !props.isCurrent() || seen.members.some(member => !reviewed().has(key(member)) || dirty(member).length > 0)) {
+      if (preview() !== seen || invalid() || !props.isCurrent() || seen.members.some(member => !accepted(member) || dirty(member).length > 0)) {
         setError(t("projects.sessions.delete_buffers"));
+        setShown(true);
         return;
       }
-      const result = await invoke<DeleteResult>("task_lifecycle_apply", { ...args(), consent: seen.consent, discard: true }, props.target.options);
+      const discard = seen.members.some(member => member.files.length > 0);
+      const result = await invoke<DeleteResult>("task_lifecycle_apply", { ...args(), consent: seen.consent, discard }, props.target.options);
       props.onDeleted(result.applied.map(member => ({ ...member, id: props.target.panelId(member.id) })));
       if (result.status === "complete" && result.failures.length === 0) props.onClose();
-      else { setInvalid(true); setError([t("projects.sessions.delete_partial"), ...result.failures.map(failure => `${props.target.folderName(failure.project)} / ${members().find(member => member.id === failure.id && member.project === failure.project)?.title || failure.id}: ${failureText(failure.error)}`)].join("\n")); }
+      else { setInvalid(true); setShown(true); setError([t("projects.sessions.delete_partial"), ...result.failures.map(failure => `${props.target.folderName(failure.project)} / ${members().find(member => member.id === failure.id && member.project === failure.project)?.title || failure.id}: ${failureText(failure.error)}`)].join("\n")); }
     } catch (failure) {
+      setShown(true);
       if (errorCode(failure) !== "task_family_busy") setInvalid(true);
       if (errorCode(failure) === "task_family_consent_changed") await inspect(t("projects.sessions.delete_changed"));
       else setError(failureText(failure));
     } finally { props.lock([]); setBusy(false); }
   }
-  onMount(() => void inspect());
-  return <Dialog open onOpenChange={open => { if (!open && !busy()) props.onClose(); }}>
+  onMount(async () => {
+    await inspect();
+    if (shown()) return;
+    if (ready() && members().length === (props.target.members ?? 1) && members().every(member => !needsReview(member))) await apply();
+    else setShown(true);
+  });
+  return <Show when={shown()} fallback={<ToastPortal><Toast tone="status"><p class="m-0 text-ui text-neutral-700">{t("projects.sessions.deleting")}</p></Toast></ToastPortal>}><Dialog open onOpenChange={open => { if (!open && !busy()) props.onClose(); }}>
     <DialogContent class="flex flex-col gap-3">
       <DialogTitle class="text-body font-semibold">{t("projects.sessions.delete_work_title")}</DialogTitle>
       <p class="m-0 text-ui text-neutral-700">{t("projects.sessions.delete_work")}</p>
       <Show when={busy()}><p role="status" class="m-0 text-ui text-neutral-500">{t("projects.sessions.delete_inspecting")}</p></Show>
-      <ul class="m-0 flex max-h-[40vh] list-none flex-col gap-3 overflow-y-auto p-0">
-        <For each={members()}>{member => <li class="min-w-0">
-          <p class="m-0 text-ui font-medium text-neutral-950">{member.title || member.id}</p>
-          <p class="m-0 text-caption text-neutral-500">{props.target.folderName(member.project)} · {props.target.machineName}</p>
-          <p class="m-0 text-caption text-neutral-700">{member.inspection.status === "complete" ? t("projects.sessions.delete_inspected") : t("projects.sessions.delete_inspection_failed")}</p>
-          <Show when={member.inspection.error}><p class="m-0 break-all text-caption text-error-strong">{failureText(member.inspection.error)}</p></Show>
-          <Show when={member.working}><p class="m-0 text-caption text-warning-strong">{t("projects.sessions.delete_working")}</p></Show>
-          <ul class="m-0 list-none p-0"><For each={member.files}>{file => <li class="break-all font-mono text-caption text-neutral-500">{file.path}</li>}</For></ul>
-          <Show when={member.inspection.status === "complete" && member.files.length === 0}><p class="m-0 text-caption text-neutral-500">{t("projects.sessions.delete_no_files")}</p></Show>
-          <Show when={dirty(member).length > 0}>
-            <p class="m-0 text-caption text-warning-strong">{t("projects.sessions.delete_buffers")}</p>
-            <ul class="m-0 list-none p-0"><For each={dirty(member)}>{path => <li class="break-all font-mono text-caption text-warning-strong">{path}</li>}</For></ul>
-          </Show>
-          <label class="flex items-center gap-2 text-ui text-neutral-700">
-            <input type="checkbox" class="accent-primary" disabled={busy() || invalid() || member.inspection.status !== "complete" || dirty(member).length > 0}
-              checked={reviewed().has(key(member))} onChange={event => setReviewed(current => {
+      <Show when={members().filter(needsReview).length > 1}>
+        <label class="flex items-center gap-2 text-ui font-medium text-neutral-950">
+          <input type="checkbox" class="accent-primary" data-delete-review-all disabled={busy() || invalid() || reviewable().length === 0}
+            checked={allReviewed()} onChange={event => {
+              const checked = event.currentTarget.checked;
+              setReviewed(current => {
                 const next = new Set(current);
-                if (event.currentTarget.checked) next.add(key(member)); else next.delete(key(member));
+                for (const member of reviewable()) if (checked) next.add(key(member)); else next.delete(key(member));
                 return next;
-              })} />
-            {t("projects.sessions.delete_reviewed")}
-          </label>
-        </li>}</For>
+              });
+            }} />
+          {t("projects.sessions.delete_reviewed_all")}
+        </label>
+      </Show>
+      <ul class="m-0 flex max-h-[40vh] list-none flex-col gap-3 overflow-y-auto p-0">
+        <For each={members()}>{member => <DeleteTaskMember member={member} place={`${props.target.folderName(member.project)} · ${props.target.machineName}`}
+          integration={integrationOf(member)} needsReview={needsReview(member)} dirty={dirty(member)} disabled={busy() || invalid()} reviewed={reviewed().has(key(member))}
+          onReviewed={checked => setReviewed(current => {
+            const next = new Set(current);
+            if (checked) next.add(key(member)); else next.delete(key(member));
+            return next;
+          })} />}</For>
       </ul>
       <Show when={error()}><p role="alert" class="m-0 whitespace-pre-wrap break-all text-ui text-error-strong">{error()}</p></Show>
       <div class="flex flex-wrap justify-end gap-2">
@@ -129,5 +128,5 @@ export default function DeleteTaskDialog(props: {
         <Button variant="danger" size="sm" disabled={!ready()} onClick={() => void apply()}>{t("projects.sessions.delete")}</Button>
       </div>
     </DialogContent>
-  </Dialog>;
+  </Dialog></Show>;
 }
