@@ -102,3 +102,206 @@ test("presence and empty painting facts do not create conversation rows", () => 
   for (const kind of ["presence", "started", "task_launched", "segment_saved", "image"] as const) f.store.event(event(kind, ""), metadata);
   assert.deepEqual(f.store.rows(), {}); f.dispose();
 });
+
+test("history started before an own send cannot erase its optimistic message", async () => {
+  let resolve!: (value: Session) => void;
+  const f = fixture(async <T>() => new Promise<Session>(yes => { resolve = yes; }) as Promise<T>);
+  const generation = f.generation(), pending = f.store.read("p", "s");
+  const own = msg("already sent", "user");
+  f.store.appendOptimistic("s", [own]);
+  f.store.appendLive("s", [msg("live response")]);
+  resolve(session([{ id: "prior", role: "user", text: "older message" }]));
+  f.store.acceptSession("s", await pending, false, generation);
+  assert.ok(f.store.messages().includes(own));
+  assert.deepEqual(f.store.messages().map(row => row.text), ["already sent", "live response"]);
+  f.dispose();
+});
+
+test("acknowledged sends survive old reads and become durable once a fresh read confirms them", async () => {
+  const replies: ((value: Session) => void)[] = [];
+  const f = fixture(async <T>() => new Promise<Session>(yes => replies.push(yes)) as Promise<T>);
+  const own = msg("same text", "user"), generation = f.generation();
+  f.store.appendOptimistic("s", [own]);
+  const old = f.store.read("p", "s");
+  f.store.acknowledgeOptimistic("s", [own]);
+  replies[0](session()); f.store.acceptSession("s", await old, true, generation);
+  assert.deepEqual(f.store.messages(), [own]);
+  const fresh = f.store.read("p", "s");
+  replies[1](session([{ id: "durable-1", role: "user", text: "same text" }, { id: "durable-2", role: "user", text: "same text" }]));
+  f.store.acceptSession("s", await fresh, false, generation);
+  assert.deepEqual(f.store.messages().map(row => row.turno), ["durable-1", "durable-2"]);
+  assert.equal(f.store.messages().length, 2); f.dispose();
+});
+
+test("rejecting a revised optimistic send removes its original identity and prevents resurrection", () => {
+  const f = fixture(), own = msg("rejected", "user"), context = msg("context", "system");
+  f.store.appendOptimistic("s", [own, context]);
+  f.store.reviseOptimistic("s", own, { author: null });
+  f.store.rejectOptimistic("s", [own, context]);
+  f.store.replaceHistory("s", [], false);
+  assert.deepEqual(f.store.messages(), []); f.dispose();
+});
+
+test("a known durable id confirms an optimistic row without comparing message text", () => {
+  const f = fixture(), own = { ...msg("original", "user"), turno: "durable" };
+  f.store.appendOptimistic("s", [own]);
+  f.store.replaceHistory("s", [{ ...own, text: "canonical" }], false);
+  assert.deepEqual(f.store.messages().map(row => row.text), ["canonical"]); f.dispose();
+});
+
+test("a late older read cannot erase a newer confirmed snapshot", async () => {
+  const replies: ((value: Session) => void)[] = [];
+  const f = fixture(async <T>() => new Promise<Session>(yes => replies.push(yes)) as Promise<T>), generation = f.generation();
+  const old = f.store.read("p", "s"), own = msg("sent", "user");
+  f.store.appendOptimistic("s", [own]); f.store.acknowledgeOptimistic("s", [own]);
+  const fresh = f.store.read("p", "s");
+  replies[1](session([{ id: "durable", role: "user", text: "sent" }]));
+  f.store.acceptSession("s", await fresh, false, generation);
+  replies[0](session());
+  assert.equal(f.store.acceptSession("s", await old, true, generation), false);
+  assert.equal(f.store.messages()[0].turno, "durable"); f.dispose();
+});
+
+test("A to B to A rejects old scoped reads even when a caller supplies the current generation", async () => {
+  let resolve!: (value: Session) => void;
+  const f = fixture(async <T>() => new Promise<Session>(yes => { resolve = yes; }) as Promise<T>);
+  const pending = f.store.read("p", "s"), own = msg("A own", "user");
+  f.store.appendOptimistic("s", [own]); f.live.add("A/s");
+  f.move("B"); f.store.appendOptimistic("s", [msg("B own", "user")]);
+  f.move("A"); resolve(session());
+  assert.equal(f.store.acceptSession("s", await pending, false, f.generation()), false);
+  assert.deepEqual(f.store.messages(), [own]); f.dispose();
+});
+
+ test("started snapshot with persisted own input stays staged until a causal post-ACK read", async () => {
+  const f = fixture(async <T>() => session([{ id: "durable", role: "user", text: "own" }]) as T);
+  const own = msg("own", "user"); f.store.appendOptimistic("s", [own]);
+  const started = await f.store.read("p", "s");
+  f.store.acceptSession("s", started, false, f.generation());
+  assert.deepEqual(f.store.messages(), [own]);
+  f.store.acknowledgeOptimistic("s", [own]);
+  assert.deepEqual(f.store.messages(), [own]);
+  const fresh = await f.store.read("p", "s"); f.store.acceptSession("s", fresh, false, f.generation());
+  assert.deepEqual(f.store.messages().map(row => row.turno), ["durable"]); f.dispose();
+});
+
+test("inverse ACKs defer partial snapshots and replace equal-text sends only after the last ACK", async () => {
+  let answer = session();
+  const f = fixture(async <T>() => structuredClone(answer) as T), generation = f.generation();
+  const first = msg("same", "user"), second = msg("same", "user");
+  f.store.appendOptimistic("s", [first]); f.store.appendOptimistic("s", [second]);
+  f.store.acknowledgeOptimistic("s", [second]);
+  answer = session([{ id: "two", role: "user", text: "same" }]);
+  const partial = await f.store.read("p", "s");
+  assert.equal(f.store.acceptSession("s", partial, false, generation), false);
+  assert.deepEqual(f.store.messages(), [first, second]);
+  f.store.acknowledgeOptimistic("s", [first]);
+  assert.equal(f.store.acceptSession("s", partial, false, generation), false);
+  answer = session([{ id: "one", role: "user", text: "same" }, { id: "two", role: "user", text: "same" }]);
+  f.store.acceptSession("s", await f.store.read("p", "s"), false, generation);
+  assert.deepEqual(f.store.messages().map(row => row.turno), ["one", "two"]); f.dispose();
+});
+
+test("a causal tail kept outside the reading window retains own sends until latest applies it", async () => {
+  const page = (start: number, total: number) => ({ version: 1, start, end: start + 1, total, limit: 1, has_more: start > 0 });
+  const tail = session([{ id: "durable", role: "user", text: "own" }], { history: page(20, 21) });
+  const f = fixture(async <T>() => structuredClone(tail) as T), generation = f.generation();
+  f.store.acceptSession("s", session([{ id: "old", role: "user", text: "older" }], { history: page(0, 10) }), false, generation);
+  f.store.reading("s", true);
+  const own = msg("own", "user"); f.store.appendOptimistic("s", [own]); f.store.acknowledgeOptimistic("s", [own]);
+  f.store.acceptSession("s", await f.store.read("p", "s"), false, generation);
+  assert.ok(f.store.messages().includes(own)); assert.equal(f.store.messages().filter(row => row.text === "own").length, 1);
+  assert.equal(f.store.recentTail().s[0].turno, "durable");
+  await f.store.latest("s");
+  assert.deepEqual(f.store.messages().map(row => row.turno), ["durable"]);
+  assert.equal(f.store.recentTail().s, undefined); f.dispose();
+});
+
+ test("an ACK arriving in B settles only its retained A send before returning to A", async () => {
+  const f = fixture(async <T>() => session([{ id: "durable-A", role: "user", text: "A own" }]) as T);
+  const own = msg("A own", "user"), other = msg("B own", "user");
+  f.store.appendOptimistic("s", [own]); f.live.add("A/s"); f.move("B");
+  f.store.appendOptimistic("s", [other]);
+  f.store.acknowledgeOptimistic("s", [own]);
+  assert.deepEqual(f.store.messages(), [other]);
+  f.move("A");
+  f.store.acceptSession("s", await f.store.read("p", "s"), false, f.generation());
+  assert.deepEqual(f.store.messages().map(row => row.turno), ["durable-A"]); f.dispose();
+});
+
+ test("a rejection arriving in B removes only its retained A input", () => {
+  const f = fixture(), own = msg("A own", "user"), other = msg("B own", "user");
+  f.store.appendOptimistic("s", [own]); f.live.add("A/s"); f.move("B");
+  f.store.appendOptimistic("s", [other]); f.store.rejectOptimistic("s", [own]);
+  assert.deepEqual(f.store.messages(), [other]); f.move("A");
+  assert.deepEqual(f.store.messages(), []); f.dispose();
+});
+
+test("older-page rewrite recovery cannot paint a durable own row before ACK", async () => {
+  const page = (start: number, total: number) => ({ version: 1, start, end: start + 1, total, limit: 1, has_more: start > 0 });
+  const f = fixture(async <T>(_command: string, args?: Record<string, unknown>) => {
+    const before = (args?.history_request as { before: number | null }).before;
+    return session([{ id: before === null ? "durable-own" : "rewritten", role: "user", text: before === null ? "own" : "rewrite" }], { history: page(0, 1) }) as T;
+  });
+  f.store.acceptSession("s", session([{ id: "old", role: "user", text: "older" }], { history: page(1, 2) }), false, f.generation());
+  const own = msg("own", "user"); f.store.appendOptimistic("s", [own]);
+  await f.store.older("p", "s");
+  assert.deepEqual(f.store.messages().map(row => row.text), ["older", "own"]);
+  f.store.acknowledgeOptimistic("s", [own]);
+  await f.store.older("p", "s");
+  assert.deepEqual(f.store.messages().map(row => row.turno), ["durable-own"]); f.dispose();
+});
+
+test("rewrite recovery started before a newer ACK cannot replace the current history", async () => {
+  const page = (start: number, total: number) => ({ version: 1, start, end: start + 1, total, limit: 1, has_more: start > 0 });
+  let recover!: (value: Session) => void, started!: () => void;
+  const waiting = new Promise<void>(yes => { started = yes; });
+  const f = fixture(async <T>(_command: string, args?: Record<string, unknown>) => {
+    const before = (args?.history_request as { before: number | null }).before;
+    if (before !== null) return session([{ id: "rewritten", role: "user", text: "rewrite" }], { history: page(0, 1) }) as T;
+    started(); return new Promise<Session>(yes => { recover = yes; }) as Promise<T>;
+  });
+  f.store.acceptSession("s", session([{ id: "old", role: "user", text: "older" }], { history: page(1, 2) }), false, f.generation());
+  const own = msg("first", "user"); f.store.appendOptimistic("s", [own]); f.store.acknowledgeOptimistic("s", [own]);
+  const pending = f.store.older("p", "s"); await waiting;
+  const newer = msg("newer", "user"); f.store.appendOptimistic("s", [newer]); f.store.acknowledgeOptimistic("s", [newer]);
+  recover(session([{ id: "durable-first", role: "user", text: "first" }], { history: page(0, 1) }));
+  await pending;
+  assert.deepEqual(f.store.messages().map(row => row.text), ["older", "first", "newer"]); f.dispose();
+});
+
+test("ordinary older pagination still prepends its shared page", async () => {
+  const f = fixture(async <T>() => session([{ id: "older", role: "user", text: "older" }, { id: "tail", role: "user", text: "tail" }], {
+    history: { version: 1, start: 0, end: 2, total: 2, limit: 2, has_more: false },
+  }) as T);
+  f.store.acceptSession("s", session([{ id: "tail", role: "user", text: "tail" }], {
+    history: { version: 1, start: 1, end: 2, total: 2, limit: 1, has_more: true },
+  }), false, f.generation());
+  const apply = await f.store.older("p", "s"); assert.ok(apply); apply();
+  assert.deepEqual(f.store.messages().map(row => row.turno), ["older", "tail"]); f.dispose();
+});
+
+test("a superseded rewrite recovery cannot cancel a newer older-page request", async () => {
+  const page = (start: number, end: number, total: number) => ({ version: 1, start, end, total, limit: 2, has_more: start > 0 });
+  let recover!: (value: Session) => void, prepend!: (value: Session) => void;
+  let recoveryStarted!: () => void, prependStarted!: () => void;
+  const recoveryWaiting = new Promise<void>(yes => { recoveryStarted = yes; });
+  const prependWaiting = new Promise<void>(yes => { prependStarted = yes; });
+  let tails = 0, older = 0;
+  const f = fixture(async <T>(_command: string, args?: Record<string, unknown>) => {
+    const before = (args?.history_request as { before: number | null }).before;
+    if (before === null && ++tails === 1) { recoveryStarted(); return new Promise<Session>(yes => { recover = yes; }) as Promise<T>; }
+    if (before === null) return session([{ id: "latest", role: "user", text: "latest" }], { history: page(5, 6, 6) }) as T;
+    if (++older === 1) return session([{ id: "rewrite", role: "user", text: "rewrite" }], { history: page(0, 1, 1) }) as T;
+    prependStarted(); return new Promise<Session>(yes => { prepend = yes; }) as Promise<T>;
+  });
+  f.store.acceptSession("s", session([{ id: "old", role: "user", text: "old" }], { history: page(1, 2, 2) }), false, f.generation());
+  const stale = f.store.older("p", "s"); await recoveryWaiting;
+  await f.store.latest("s");
+  const current = f.store.older("p", "s"); await prependWaiting;
+  recover(session([{ id: "stale", role: "user", text: "stale" }], { history: page(0, 1, 1) }));
+  await stale;
+  prepend(session([{ id: "older-new", role: "user", text: "older-new" }, { id: "latest", role: "user", text: "latest" }], { history: page(4, 6, 6) }));
+  const apply = await current; assert.ok(apply); apply();
+  assert.deepEqual(f.store.messages().map(row => row.turno), ["older-new", "latest"]); f.dispose();
+});

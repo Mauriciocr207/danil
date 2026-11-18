@@ -1,6 +1,6 @@
 import { createMemo, createSignal, type Setter, untrack } from "solid-js";
 import { anexarDeltas, hasOlder, hasRecentGap, HistoryPager, lotesDeDeltas, mensajesDelHilo, transcripcion, type ChatEvent, type HandoverState, type Msg, type OlderState, type Session, type TranscriptOrigin, type Turn } from "../chat/index.ts";
-import { conservarEnOrden, conservarPorClave } from "../../lib/sessionRefresh.ts";
+import { createOptimisticHistory, type OptimisticHistoryState } from "./optimistic-history.ts";
 import { createActivityProjection } from "./activity.ts";
 import { transcriptEvent, type TranscriptMetadata } from "./transcript-events.ts";
 
@@ -26,7 +26,7 @@ export function createThreadsStore(deps: {
     const options = deps.route(id), workspace = deps.scope.workspace();
     return { ...options, headers: { ...options?.headers, ...(workspace ? { "x-terminus-workspace": workspace } : {}) } };
   };
-  type Hilo = { base: Msg[]; vivo: Msg[]; guardados?: ReadonlySet<string> };
+  type Hilo = OptimisticHistoryState & { base: Msg[]; vivo: Msg[]; guardados?: ReadonlySet<string> };
   const SIN_HILO: Hilo = { base: [], vivo: [] };
   const workspaceThreads = new Map<string, Record<string, Hilo>>();
   const [hilos, setHilos] = createSignal<Record<string, Hilo>>({});
@@ -71,8 +71,16 @@ export function createThreadsStore(deps: {
       return { ...hs, [session]: { ...h, base: next } };
     });
   };
+  const optimisticHistory = createOptimisticHistory<Hilo>({
+    current: () => untrack(hilos), disposed: () => disposed, generation: deps.scope.generation, writeBase: asentar,
+    update: setHilos, settle: (fn) => {
+      setHilos(fn);
+      for (const [workspace, threads] of workspaceThreads) workspaceThreads.set(workspace, fn(threads));
+    },
+  });
+  const { appendOptimistic, acknowledgeOptimistic, reviseOptimistic, rejectOptimistic } = optimisticHistory;
   type IdsDeTurnos = ReadonlySet<string>;
-  const releer = (session: string, leida: Msg[], vaciarVivo: boolean, antepuesta = false, guardados?: IdsDeTurnos, cola?: IdsDeTurnos) => {
+  const releer = (session: string, leida: Msg[], vaciarVivo: boolean, antepuesta = false, guardados?: IdsDeTurnos, cola?: IdsDeTurnos, readRevision?: number) => {
     if (disposed) return;
     deltasPorCuadro.vaciar();
     setHilos((hs) => {
@@ -95,15 +103,15 @@ export function createThreadsStore(deps: {
                 ? { ...m, questionRequestId: ataduras.get(m.turno) }
                 : m,
             );
-      const base = (antepuesta ? conservarPorClave : conservarEnOrden)(previo?.base ?? [], atada);
+      const { base, optimistic, readRevision: appliedRevision } = optimisticHistory.reconcile(previo, atada, persistidos, antepuesta, readRevision);
       activity.reconcile(deps.scope.workspace(), session, previo?.base ?? [], base, vaciarVivo);
       const vivo = vaciarVivo
         ? []
         : vivoPrevio.filter((m) => !m.turno || !persistidos.has(m.turno));
       const mismoVivo = vivo.length === vivoPrevio.length;
       const tramos = guardados ?? previo?.guardados;
-      if (previo && base === previo.base && mismoVivo && tramos === previo.guardados) return hs;
-      return { ...hs, [session]: { base, vivo: mismoVivo ? vivoPrevio : vivo, guardados: tramos } };
+      if (previo && base === previo.base && mismoVivo && tramos === previo.guardados && optimistic.length === (previo.optimistic?.length ?? 0) && readRevision === undefined) return hs;
+      return { ...hs, [session]: { base, vivo: mismoVivo ? vivoPrevio : vivo, guardados: tramos, optimistic, readRevision: appliedRevision } };
     });
   };
   const idsDeTurnos = (turns: readonly Turn[]) => new Set(turns.flatMap((t) => (t.id ? [t.id] : [])));
@@ -137,7 +145,8 @@ export function createThreadsStore(deps: {
     const hay = historias.get(id);
     if (hay) return hay;
     const pager: HistoryPager<Session["turns"][number]> = new HistoryPager({
-      read: (before) => leerTarea(proyectosDeHistoria.get(id) ?? deps.project(), id, before),
+      read: (before) => optimisticHistory.readPage(pager, before,
+        () => leerTarea(proyectosDeHistoria.get(id) ?? deps.project(), id, before)),
       onChange: () => marcarAntiguos(id, pager),
     });
     historias.set(id, pager);
@@ -147,9 +156,9 @@ export function createThreadsStore(deps: {
     if (disposed) throw new DOMException("Conversation disposed", "AbortError");
     proyectosDeHistoria.set(id, project);
     const options = route(id);
-    const result = deps.scope.paged()
-      ? await invoke<Session>("load_history", { project, id, before }, options)
-      : await invoke<Session>("load_session", { project, id, history_request: { version: 1, before } }, options);
+    const result = await optimisticHistory.read(id, () => deps.scope.paged()
+      ? invoke<Session>("load_history", { project, id, before }, options)
+      : invoke<Session>("load_session", { project, id, history_request: { version: 1, before } }, options));
     if (result.history?.version === 1) {
       result.turns = result.turns.map(turn => ({ ...turn,
         history_refs: turn.history_refs?.map(ref => ({ ...ref, project, session: id })),
@@ -161,26 +170,21 @@ export function createThreadsStore(deps: {
     const pager = historias.get(id);
     if (!pager) return null;
     proyectosDeHistoria.set(id, project);
-    const generation = deps.scope.generation();
-    const poner = await pager.fetchOlder();
-    if (disposed || generation !== deps.scope.generation()) return null;
-    pintarHistoria(id, pager, false);
-    if (!poner) return null;
-    return () => {
-      if (disposed || generation !== deps.scope.generation()) return;
-      poner();
-      pintarHistoria(id, pager, true);
-    };
+    return optimisticHistory.older(pager, prepend => pintarHistoria(id, pager, prepend),
+      (session, generation) => { loadResult(id, session, false, generation, true); });
   }
-  function pintarHistoria(id: string, pager: HistoryPager<Session["turns"][number]>, antepuesta: boolean, clear = false, leidos?: ReadonlySet<string>) {
+
+  function pintarHistoria(id: string, pager: HistoryPager<Session["turns"][number]>, antepuesta: boolean, clear = false, leidos?: ReadonlySet<string>, readRevision?: number) {
     const loaded = pager.loaded;
     if (!loaded) return;
     const leida = transcripcion(loaded.turns, loaded.start);
     if (hasRecentGap(loaded)) leida.push({ role: "system", text: "", meta: "history_gap", clave: "history_gap" });
-    releer(id, leida, clear, antepuesta, idsDeTurnos(loaded.turns), leidos);
+    releer(id, leida, clear, antepuesta, idsDeTurnos(loaded.turns), leidos, hasRecentGap(loaded) ? undefined : readRevision);
   }
-  function loadResult(id: string, session: Session, clear: boolean, generation: number) {
+  function loadResult(id: string, session: Session, clear: boolean, generation: number, latest = false) {
     if (disposed || generation !== deps.scope.generation()) return false;
+    if (!optimisticHistory.accepts(id, session, generation)) return false;
+    const read = optimisticHistory.provenance(session);
     anotar(setApagadas, id, session.offline?.machine ?? null);
     setTraspasos((all) => {
       const previo = all[id];
@@ -202,6 +206,7 @@ export function createThreadsStore(deps: {
       return { ...all, [id]: ahora };
     });
     const pager = historiaDe(id);
+    if (latest) { optimisticHistory.close(pager); pager.loaded = undefined; }
     const loaded = pager.accept(session.turns, session.history, { reading: leyendoLejos.has(id) });
     setColaSuelta((all) => {
       if (hasRecentGap(loaded)) return { ...all, [id]: transcripcion(session.turns, session.history?.start ?? 0) };
@@ -209,7 +214,8 @@ export function createThreadsStore(deps: {
       const { [id]: _, ...resto } = all;
       return resto;
     });
-    pintarHistoria(id, pager, false, clear, idsDeTurnos(session.turns));
+    pintarHistoria(id, pager, false, clear, idsDeTurnos(session.turns), read?.revision);
+    if (read) setHilos(all => ({ ...all, [id]: { ...all[id], readRevision: read.revision } }));
     const origen = session.transcript ?? null;
     setOrigenes((o) =>
       id in o && o[id]?.file === origen?.file && o[id]?.from_cli === origen?.from_cli ? o : { ...o, [id]: origen },
@@ -239,12 +245,6 @@ export function createThreadsStore(deps: {
   }
   function replaceTurn(session: string, message: Msg) {
     if (!disposed) asentar(session, before => [...before.filter(row => !message.turno || row.turno !== message.turno), message]);
-  }
-  function reviseOptimistic(session: string, target: Msg, patch: Pick<Msg, "respuestas" | "author">) {
-    if (!disposed) asentar(session, before => before.map(row => row === target ? { ...row, ...patch } : row));
-  }
-  function rejectOptimistic(session: string, messages: Msg[]) {
-    if (!disposed) asentar(session, before => before.filter(row => !messages.includes(row)));
   }
   function question(session: string, fields: Pick<Msg, "turno" | "preguntas" | "questionRequestId" | "agent">, workspace = deps.scope.workspace()) {
     if (disposed) return;
@@ -292,14 +292,14 @@ export function createThreadsStore(deps: {
     activity.adopt(deps.scope.workspace(), "", id);
     setHilos(before => {
       const { [""]: draft, ...rest } = before, previous = before[id] ?? SIN_HILO;
-      return { ...rest, [id]: { base: [...(draft?.base ?? []), ...previous.base], vivo: [...(draft?.vivo ?? []), ...previous.vivo], guardados: previous.guardados } };
+      return { ...rest, [id]: { base: [...(draft?.base ?? []), ...previous.base], vivo: [...(draft?.vivo ?? []), ...previous.vivo], guardados: previous.guardados, optimistic: [...(draft?.optimistic ?? []), ...(previous.optimistic ?? [])], readRevision: previous.readRevision } };
     });
   }
   async function latest(id: string) {
     const pager = historias.get(id), generation = deps.scope.generation();
     if (!pager || disposed) return;
-    await pager.latest();
-    if (!disposed && generation === deps.scope.generation()) pintarHistoria(id, pager, false);
+    const result = await leerTarea(proyectosDeHistoria.get(id) ?? deps.project(), id);
+    loadResult(id, result, false, generation, true);
   }
   function dropSaved(workspace: string, id: string) {
     const saved = workspaceThreads.get(workspace);
@@ -312,7 +312,7 @@ export function createThreadsStore(deps: {
     finishActivity: (id: string, workspace = deps.scope.workspace()) => { if (!disposed && activity.finish(workspace, id)) activityChanged(); },
     rows: hilos, current: hiloAbierto, messages: msgs, loading: cargandoHilo, origins: origenes, offline: apagadas, machineWaits, handovers: traspasos,
     olderAvailable: conAntiguos, recentAvailable: conRecientes, olderStatus: estadoAntiguos, recentTail: colaSuelta,
-    appendLive, appendPersisted, commitUniqueTurn, replaceTurn, reviseOptimistic, rejectOptimistic, question, replay, finishSteps, event,
+    appendLive, appendPersisted, appendOptimistic, acknowledgeOptimistic, commitUniqueTurn, replaceTurn, reviseOptimistic, rejectOptimistic, question, replay, finishSteps, event,
     read: leerTarea, acceptSession: loadResult, older: cargarAntiguos, latest,
     replaceHistory: releer, saveWorkspace, activateWorkspace, resetService, adoptDraft, dropSaved,
     flush: deltasPorCuadro.vaciar,
