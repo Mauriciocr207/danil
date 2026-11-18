@@ -212,3 +212,12 @@ test("returning focus and visibility together shares one status read", async () 
   queued.shift()!();
   assert.equal(reads, 2);
 });
+
+test("all retries when an empty machine listing gains rows, without rereading for added-only changes", async () => {
+  const { sessionSyncKey } = await import("../../src/features/shell/session-seeding.ts");
+  const group = { context_id: "a", person: "person", workspaces: "all" as const, available: [] as { id: string }[], added: new Set<string>() };
+  const empty = sessionSyncKey([group]);
+  const populated = sessionSyncKey([{ ...group, available: [{ id: "new-workspace" }] }]);
+  assert.notEqual(populated, empty, "a newly available source row must trigger added synchronization");
+  assert.equal(sessionSyncKey([{ ...group, added: new Set(["chosen"]) }]), empty, "an added update alone cannot cause another GET");
+});

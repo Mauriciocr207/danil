@@ -6,7 +6,7 @@ import { listen } from "../../lib/serviceEvents.ts";
 import { danilAvailable, readDanil } from "../machines/index.ts";
 import { type ContextGroup, createSessionContexts } from "./session-contexts.ts";
 import { coalesceSessionReturn } from "./session-return.ts";
-import { sessionSeedInputs } from "./session-seeding.ts";
+import { sessionSeedInputs, sessionSyncKey } from "./session-seeding.ts";
 import { createAddedSync } from "./workspace-added-sync.ts";
 import { ADDED_KEY, edgeAddedTransport, prefsAddedStore } from "./workspace-added-transport.ts";
 
@@ -58,7 +58,7 @@ function wire(hidden: () => ReadonlySet<string>, onSeeded: (ids: readonly string
   createEffect(() => {
     for (const g of groups() ?? []) ensure(g);
   });
-  const syncKey = createMemo(() => (rows() ?? []).map((g) => `${g.context_id}:${g.person}:${g.available ? "ready" : "waiting"}`).join("|"));
+  const syncKey = createMemo(() => sessionSyncKey(rows() ?? []));
   createEffect(on(syncKey, () => {
     for (const g of rows() ?? []) if (g.available && g.person) void records.get(g.context_id)?.sync.sync();
   }));
