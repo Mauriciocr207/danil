@@ -90,7 +90,7 @@ export function RegistroDeTrabajo(props: {
               {(tramo) => (
                 <>
                   <Show when={tramo().pasos.length > 0}>
-                    <LineaDeTiempo pasos={tramo().pasos} individual />
+                    <LineaDeTiempo pasos={tramo().pasos} active={presentation().animate} individual />
                   </Show>
                   {/* La fila de siempre y no prosa suelta: dentro del pliegue
                       una ráfaga sin su rótulo se lee como algo que el agente dijo. */}
@@ -104,7 +104,7 @@ export function RegistroDeTrabajo(props: {
               )}
             </Index>
             <Show when={props.pasos.length > 0}>
-              <LineaDeTiempo pasos={props.pasos} individual />
+              <LineaDeTiempo pasos={props.pasos} active={presentation().animate} individual />
             </Show>
             <Show when={props.razonamiento?.length ? props.razonamiento : null}>{(blocks) => <Reasoning bloques={blocks()} />}</Show>
       <Index each={todos()}>
