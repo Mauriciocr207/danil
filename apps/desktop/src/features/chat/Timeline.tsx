@@ -44,12 +44,12 @@ function claveDeFila(fila: Fila, i: number) {
  * no en `FilaDePaso`: `agrupar` fabrica filas nuevas con cada delta, el `For`
  * remonta sus componentes y una fila abierta se cerraría sola.
  */
-export default function LineaDeTiempo(props: { pasos: Paso[]; presentation?: "inline" | "disclosure" }) {
+export default function LineaDeTiempo(props: { pasos: Paso[]; presentation?: "inline" | "disclosure"; individual?: boolean }) {
   let marco: HTMLDivElement | undefined;
   const [foco, setFoco] = createSignal(0);
   const [abiertas, setAbiertas] = createRowSignal<Record<string, boolean>>("steps", {});
 
-  const filas = () => agrupar(props.pasos);
+  const filas = () => props.individual ? props.pasos.map(paso => ({ clase: paso.clase, pasos: [paso] })) : agrupar(props.pasos);
 
   const conIndice = () => {
     let n = 0;
