@@ -1,4 +1,4 @@
-import type { TurnActivity } from "../../lib/turnActivity.ts";
+import type { ObservedTurnActivity as TurnActivity } from "../../lib/activityObservation.ts";
 import type { Paso } from "../../lib/steps.ts";
 
 type LiveMessage = { nativeMessageId?: string; turno?: string; duration_ms?: number; preguntas?: unknown[] };

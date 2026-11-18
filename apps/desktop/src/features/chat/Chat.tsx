@@ -40,7 +40,7 @@ import { sharedLazy } from "../../lib/sharedLazy";
 import { taskChatPresentation } from "./TaskChatPresentation";
 import type { OlderState } from "./history";
 import { createBlockKeys, estimateBlock } from "./threadRows";
-import type { TurnActivity } from "../../lib/turnActivity";
+import type { ObservedTurnActivity as TurnActivity } from "../../lib/activityObservation";
 import type { VirtualThreadApi } from "./VirtualThread";
 import { CHUNK, chunkAt, chunkIds, chunkOf, chunkStart, headChunk, tailChunk, type Lectura } from "./threadWindow";
 import { workLabel } from "../projects/branchLabel";
@@ -162,6 +162,7 @@ import { Interrupcion, LineaDeSistema, TraspasoDeProveedor, SiguioTrasElCupo } f
 import { HoraDelTurno, LineaDeProveedor, BotonCopiar, CambioDeContexto } from "./components/thread/MessageDecorations";
 import { TextoConSiguientes, ImagenesEntregadas, type RespuestaRapida } from "./components/thread/AgentAnswer";
 import type { Msg, PermissionOrigin } from "./messageTypes";
+import { observedActivityAction } from "./activityPresentation";
 import { RegistroDeTrabajo } from "./components/activity/TurnActivity";
 
 // Chunk aparte: el bloque de razonamiento solo lo carga un turno que lo trae.
@@ -2737,11 +2738,12 @@ export default function Chat(props: ChatProps) {
                   <div class="col-start-1 min-w-0" data-turn-activity-anchor={b().activity?.key}>
                     <RegistroDeTrabajo
                       observed
+                      stopping={Boolean(b().activity?.active) && props.stopping}
+                      latestAction={observedActivityAction(b().activity?.observation?.message, b().activity?.observation?.kind)}
                       pasos={activitySteps(b().activity)}
                       razonamiento={b().activity?.messages.flatMap(message => message.razonamiento ?? []) ?? []}
                       corriendo={Boolean(b().activity?.active) && !activityBlocked()}
                       blocked={isCurrentActivity(b().activity) && activityBlocked()}
-                      label={b().activity?.active && b().activity?.startedAt === null && b().activity?.messages.length === 0 ? t("chat.activity.syncing") : undefined}
                       animando={!(b().activity?.startedAt === null && b().activity?.messages.length === 0) && !props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
                       duracion={b().activity?.durationMs == null ? null : formatearDuracion(b().activity!.durationMs!)}
                       abierto={Boolean(trabajos()[`activity:${b().activity?.key ?? ""}`])}
@@ -2771,6 +2773,7 @@ export default function Chat(props: ChatProps) {
                       msg={fromWork(b(), (t) => t.msg, SIN_MENSAJE)}
                       respuestas={(msg) => msg.turno ? respondido().get(msg.turno) ?? null : null}
                       vivo={fromWork(b(), (t) => esElVivo(t.msg), false)}
+                      stopping={props.stopping && registroCorre(b())}
                       corriendo={registroCorre(b())}
                       animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
                       abiertoElTrabajo={Boolean(trabajos()[claveFila(b())])}
@@ -2812,6 +2815,7 @@ export default function Chat(props: ChatProps) {
                     <RegistroDeTrabajo
                       pasos={pasosDe(b())?.pasos ?? []}
                       avance={pasosDe(b())?.avance}
+                      stopping={props.stopping && esLaTiraViva(b())}
                       corriendo={esLaTiraViva(b())}
                       animando={!props.permission && !props.esperando && !props.reintento && !props.enFondo && !props.machineWait}
                       abierto={trabajos()[claveFila(b())]}
@@ -3491,6 +3495,7 @@ function TrabajoDeAgente(props: {
   vivo: boolean;
   /** El estado del turno manda incluso si falta el cierre de una herramienta. */
   corriendo: boolean;
+  stopping?: boolean;
   animando: boolean;
   /** Si ESTE turno tiene su registro desplegado. Ver `trabajos` en `Chat`. */
   abiertoElTrabajo: boolean;
@@ -3536,6 +3541,7 @@ function TrabajoDeAgente(props: {
         <RegistroDeTrabajo
           pasos={props.pasos}
           avance={props.avance}
+          stopping={props.stopping}
           corriendo={props.corriendo}
           duracion={duracion()}
           abierto={props.abiertoElTrabajo}
