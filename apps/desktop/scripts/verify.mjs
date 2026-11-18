@@ -63,6 +63,7 @@ const rustSteps = [
 ];
 
 const steps = [
+  ["Received conversation paints before optional profile reads", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/thread-before-profile.test.mjs")], root],
   ["Unresolved delegated references never fabricate task dates or native actions", process.execPath, ["--test", "--test-force-exit", join(root, "tests/unit/delegated-reference.test.mjs")], root],
   ["Live activity shares one disclosure without crossing known turn boundaries", process.execPath, ["--test", "--experimental-strip-types", join(root, "tests/unit/chat-activity.test.ts")], root],
   ["Turn activity keeps lifecycle provenance and known start epochs", process.execPath, ["--conditions=browser", "--test", "--experimental-strip-types", join(root, "tests/unit/thread-activity.test.ts")], root],
