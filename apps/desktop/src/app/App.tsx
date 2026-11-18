@@ -283,7 +283,7 @@ import { TitleBarSection } from "../features/shell";
 import { createDraftsStore } from "../features/drafts";
 import { createConversationHandoff, type ConversationScope } from "../features/conversation-handoff";
 import { createTaskQueues } from "../features/task-queues";
-import { createServiceStream, type PushedBatch, type ServicePage } from "../features/service-stream";
+import { createServiceStream, type ServicePage, createBatchDelivery } from "../features/service-stream";
 
 // Lo que falla en el camino a la ventana y no en el comando: se vuelve a
 // preguntar en vez de pintarlo (`cli/service/mod.rs`, `para_la_ventana`).
@@ -2257,29 +2257,7 @@ export default function App() {
   }
 
   // Lo que reconstruye el turno en curso de una tarea que pasa a verse: lo filtrado y lo que lo acompaña.
-  const REPUESTO = new Set(["delta", "reasoning", "tool", "tool_done", "command_output", "command_running", "shell_started", "shell_output", "image", "retry", "notice", "task_launched", "segment_saved"]);
-  function applyPushed(batches: PushedBatch[]) {
-    for (const lote of batches) {
-      if (lote.resync) {
-        releerUna(lote.resync);
-        continue;
-      }
-      if (lote.catchup) {
-        const session = lote.catchup;
-        const events = (lote.events ?? []).filter((e) => {
-          const payload = e.payload as Partial<ChatEvent> | null;
-          return e.name === "chat" && payload?.session === session && REPUESTO.has(payload.kind ?? "");
-        });
-        const workspace = (events[0]?.payload as Partial<ChatEvent> | undefined)?.workspace;
-        // Reemplaza lo vivo de la tarea, salvo lo que escribió la persona: el motor no lo repite.
-        threads.replay(session, workspace);
-        deliver(events);
-        continue;
-      }
-      // Al mismo oyente y uno a uno, como llegaban de Tauri: lo que agrupa el pintado es del oyente.
-      deliver(lote.events ?? []);
-    }
-  }
+  const applyPushed = createBatchDelivery({ resync: releerUna, replay: threads.replay, deliver });
   /** `session_resync`: el turno en curso no cupo en el reenvío; se relee lo guardado y se conserva lo vivo. */
   function releerUna(session: string) {
     const generation = workspaceContext.generation();

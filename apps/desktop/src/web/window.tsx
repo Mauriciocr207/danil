@@ -78,9 +78,8 @@ export function mountWindow(base: Base, mounted: Mounted) {
         void refetchMachines();
       });
     },
-    onEvents: (_id, events, gap) => {
-      if (events.length) active.events(_id, events);
-      if (gap) window.dispatchEvent(new CustomEvent("harness:service-resync"));
+    onEvents: (_id, events, gap, context) => {
+      active.events(_id, events, { ...context, gap });
     },
     onSlice: () => bump(n => n + 1),
   });

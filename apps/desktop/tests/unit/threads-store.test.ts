@@ -390,3 +390,28 @@ test("a snapshot before the first delta can still bind its segment to the curren
   assert.equal(f.store.messages().filter(row => row.text === "valid output").length, 1);
   assert.equal(f.store.rows().s.vivo[0].tramo, "current-segment"); f.dispose();
 });
+
+test("one replay epoch can span pages without discarding earlier native deltas", () => {
+  const f = fixture();
+  f.store.replay("s", "A", "subscription-one");
+  f.store.event(event("delta", "first ", { starts_message: true, message_id: "native-one" }), metadata); f.store.flush();
+  f.store.replay("s", "A", "subscription-one");
+  f.store.event(event("delta", "second", { message_id: "native-one" }), metadata); f.store.flush();
+  assert.equal(f.store.messages().at(-1)?.text, "first second");
+  f.store.replay("s", "A", "subscription-two");
+  f.store.event(event("delta", "replacement", { starts_message: true, message_id: "native-two" }), metadata); f.store.flush();
+  assert.equal(f.store.messages().at(-1)?.text, "replacement"); f.dispose();
+});
+
+test("retained replay prefixes survive navigation and continuation reactivates its durable guard", () => {
+  const f = fixture(); f.live.add("A/s");
+  f.store.replay("s", "A", "subscription-one");
+  f.store.event(event("delta", "first ", { workspace: "A", starts_message: true, message_id: "native-one" }), metadata); f.store.flush();
+  f.move("B"); f.move("A");
+  f.store.replay("s", "A", "subscription-one");
+  f.store.event(event("delta", "second", { workspace: "A", message_id: "native-one" }), metadata); f.store.flush();
+  assert.equal(f.store.messages().at(-1)?.text, "first second");
+  f.store.acceptSession("s", session([{ id: "saved-one", role: "agent", text: "first second" }]), false, f.generation());
+  f.store.event(event("segment_saved", "", { workspace: "A", id: "saved-one" }), metadata);
+  assert.equal(f.store.messages().filter(row => row.text === "first second").length, 1); f.dispose();
+});

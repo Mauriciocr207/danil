@@ -117,3 +117,19 @@ for (const code of [4003, 4008]) test(`a ${code} on the live socket during a han
   assert.ok(app.sockets[0].sent.every(frame => JSON.parse(frame).id !== 'late'), 'a call after revocation does not go out');
   assert.equal((await late)?.code, 'app_unavailable');
 });
+
+test('initial and multipart journal pages keep replay provenance through the final page', async t => {
+  const app = setup(); t.after(() => app.session.close());
+  const pages: { replay: boolean; id?: string }[] = [];
+  app.session.onEvents(page => pages.push({ replay: page.replay === true, id: page.replayId }));
+  app.session.subscribe(null); await turn(); app.sockets[0].onopen?.({});
+  const push = (cursor: number, replay: boolean) => app.sockets[0].onmessage?.({ data: JSON.stringify({ type: 'events', cursor, replay, events: [] }) });
+  push(1, false); // A single historical page can already be caught up.
+  push(2, false);
+  app.session.subscribe(null);
+  push(3, true); push(4, true); push(5, false); push(6, false);
+  app.session.subscribe(6); push(7, false);
+  assert.deepEqual(pages.map(page => page.replay), [true, false, true, true, true, false, true]);
+  assert.ok(pages[0].id); assert.equal(pages[2].id, pages[3].id); assert.equal(pages[3].id, pages[4].id);
+  assert.notEqual(pages[0].id, pages[2].id); assert.notEqual(pages[2].id, pages[6].id);
+});

@@ -19,6 +19,7 @@ import { type AccountWorkspace, type SystemId, callWorkspace, isDeferrable, syst
 import { AttentionBook, type Envelope, type Fleet, FleetError, type MachineInfo, type Slice, classOf, registryRow, unwrap, wrap } from "@terminus/fleet";
 import { clavesConocidas, t } from "../../lib/i18n.ts";
 import { readActiveTurns } from "./active-turns-read.ts";
+import { createWebEventQueue } from "./web-event-queue.ts";
 import type { EngineWorkspace } from "./engine-workspaces.ts";
 import { markUnconfirmedOpen } from "./unconfirmedOpen.ts";
 
@@ -73,8 +74,6 @@ const REGISTRY_WAIT = 4_000;
 const FRESH_WAIT = 1_500;
 const FIRST_ANSWER_GRACE = 100;
 const PROGRESSIVE = new Set([...LISTING, "list_projects", "list_portfolios", "list_live_sessions", "list_spaces", "list_workspace_attention", "list_task_mentions"]);
-/** Lo que espera `service_poll` en la web: los eventos ya llegan solos (`events`). */
-const POLL_WAIT = 20_000;
 /** En la web no hay instalador: lo que la ventana pregunta de él se contesta aquí. */
 const NO_SETUP: Record<string, unknown> = { setup_required: false, prepare_runtime: { stages: [], running: false }, list_live_turns: [] };
 
@@ -771,21 +770,8 @@ export function createRouter(config: RouterConfig) {
     return page;
   }
 
-  /** En la web los eventos de cada máquina llegan solos (`events`); el sondeo solo marca el paso. */
-  let tick = 0;
-  const pollers = new Set<() => void>();
-  function webPoll(): Promise<unknown> {
-    return new Promise((done) => {
-      const finish = () => {
-        clearTimeout(timer);
-        pollers.delete(finish);
-        tick += 1;
-        done({ cursor: tick, gap: false, replay: false, runtime: "fleet", reset: false });
-      };
-      const timer = setTimeout(finish, POLL_WAIT);
-      pollers.add(finish);
-    });
-  }
+  const webEvents = createWebEventQueue();
+  const webPoll = () => webEvents.poll();
 
   const selfMaterializes = (_workspace: string | null) => ({ materializes: true });
 
@@ -970,7 +956,7 @@ export function createRouter(config: RouterConfig) {
   };
 
   /** Eventos de otra máquina: `attention` sale como la lista de todas. */
-  function events(machine: string, list: { name: string; payload: unknown }[]) {
+  function events(machine: string, list: { name: string; payload: unknown }[], context?: { cursor?: number | null; runtime?: string; replay?: boolean; replayId?: string; gap?: boolean }) {
     // Un cambio de tarea, carpeta, portafolio o espacio (`cli-changed`)
     // invalida el intervalo: la relectura que dispara el evento debe consultar
     // la VM aunque acabemos de leer su lista.
@@ -981,8 +967,10 @@ export function createRouter(config: RouterConfig) {
       }
     }
     // `machine-usage` no dice de qué máquina es: el panel «Máquinas» relee la suya.
-    config.deliver?.(list.map((e) => (e.name === "attention" ? { ...e, payload: attention.update(machine, e.payload) }
-      : e.name === "machine-usage" && e.payload && typeof e.payload === "object" ? { ...e, payload: { ...e.payload, machine } } : e)));
+    const mapped = list.map((e) => (e.name === "attention" ? { ...e, payload: attention.update(machine, e.payload) }
+      : e.name === "machine-usage" && e.payload && typeof e.payload === "object" ? { ...e, payload: { ...e.payload, machine } } : e));
+    if (local) config.deliver?.(mapped);
+    else webEvents.push(mapped, context);
   }
 
   /** Dónde se crea algo nuevo de `workspace` ahora y si esa máquina lo encabeza; `null` si ninguna puede. */
@@ -1036,7 +1024,7 @@ export function createRouter(config: RouterConfig) {
     close() {
       sessionReads.clear();
       clearTimeout(notifyTimer);
-      for (const finish of [...pollers]) finish();
+      webEvents.close();
       fleet.close();
     },
   };

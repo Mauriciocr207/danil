@@ -250,8 +250,8 @@ export function createThreadsStore(deps: {
         : [...before, { role: "agent", text: "", ...fields }];
     }, workspace);
   }
-  function replay(session: string, workspace = deps.scope.workspace()) {
-    if (!disposed) anexar(session, before => assistantHistory.replay(session, before, workspace), workspace);
+  function replay(session: string, workspace = deps.scope.workspace(), replayId?: string) {
+    if (!disposed) anexar(session, before => assistantHistory.replay(session, before, workspace, replayId), workspace);
   }
   function finishSteps(session: string) {
     if (!disposed) anexar(session, before => before.some(row => row.paso?.corriendo)
@@ -273,7 +273,7 @@ export function createThreadsStore(deps: {
     });
   }
   function saveWorkspace(previous: string | null) {
-    assistantHistory.clear();
+    assistantHistory.detach();
     deltasPorCuadro.vaciar();
     for (const pager of historias.values()) pager.close();
     if (previous) workspaceThreads.set(previous, Object.fromEntries(Object.entries(untrack(hilos)).filter(([id]) => deps.liveThreads().has(`${previous}/${id}`))));

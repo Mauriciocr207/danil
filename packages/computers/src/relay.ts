@@ -63,6 +63,8 @@ export type EventsPage = {
   cursor: number | null;
   gap?: boolean;
   replay?: boolean;
+  /** Local subscription identity; never sent to the relay. */
+  replayId?: string;
   runtime?: string;
   /** `workspace`: el del evento, para que el relay lo filtre por los vínculos de cada cuenta; `null` si no es de uno. */
   events?: { name: string; payload: unknown; workspace?: string | null }[];
@@ -164,6 +166,8 @@ export class RelaySession {
   private pending = new Map<string, Pending>();
   private subscribed = false;
   private after: number | null = null;
+  private replaying = false;
+  private replayId: string | undefined;
   private attempt = 0;
   private missed = 0;
   private pinger: ReturnType<typeof setInterval> | undefined;
@@ -285,7 +289,13 @@ export class RelaySession {
   subscribe(after: number | null) {
     this.subscribed = true;
     this.after = after;
-    if (this.connected()) this.send({ type: "subscribe", after });
+    if (this.connected()) this.resubscribe();
+  }
+
+  private resubscribe() {
+    this.replaying = true;
+    this.replayId = requestId();
+    this.send({ type: "subscribe", after: this.after });
   }
 
   close() {
@@ -378,7 +388,7 @@ export class RelaySession {
       }
       clearInterval(this.pinger);
       this.pinger = setInterval(() => this.ping(), PING_EVERY);
-      if (this.subscribed) this.send({ type: "subscribe", after: this.after });
+      if (this.subscribed) this.resubscribe();
       for (const call of this.pending.values()) socket.send(call.message);
       for (const listener of this.linkListeners) listener(true);
     };
@@ -572,8 +582,11 @@ export class RelaySession {
       }
       case "events": {
         const page = message as unknown as EventsPage;
+        if (!this.replaying && page.replay === true) this.replayId = requestId();
+        const replay = this.replaying || page.replay === true;
+        this.replaying = page.replay === true;
         if (typeof page.cursor === "number") this.after = page.cursor;
-        for (const listener of this.eventListeners) listener(page);
+        for (const listener of this.eventListeners) listener({ ...page, replay, replayId: replay ? this.replayId : undefined });
         return;
       }
       case "state": {
