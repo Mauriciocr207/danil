@@ -1,0 +1,25 @@
+@import "./loaders/quantum.css";
+@import "./loaders/trio.css";
+@import "./loaders/leapfrog.css";
+@import "./loaders/jellyTriangle.css";
+
+.activity-dots-slot { display: inline-flex; width: 24px; flex-shrink: 0; overflow: hidden; transition: width 250ms ease, margin-right 250ms ease; }
+.activity-label .activity-dots-slot { margin-right: 4px; }
+.activity-dots-exited, .activity-label .activity-dots-exited { width: 0; margin-right: 0; }
+.activity-motion { position: relative; display: block; width: 24px; min-width: 24px; height: 29px; color: color-mix(in srgb, var(--color-neutral-500) 75%, var(--color-surface) 25%); }
+[data-theme="dark"] .activity-motion { color: var(--color-neutral-950); }
+.activity-motion-layer { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; opacity: 0; transform: translateY(2px); transition: opacity 250ms ease, transform 250ms ease; pointer-events: none; }
+.activity-motion-selected { opacity: 1; transform: translateY(0); }
+.activity-motion *, .activity-motion *::before, .activity-motion *::after { animation-play-state: var(--activity-motion-play, running) !important; }
+.activity-motion-paused { --activity-motion-play: paused; }
+.activity-caption { color: var(--color-neutral-500); text-shadow: none; }
+@supports ((background-clip: text) or (-webkit-background-clip: text)) {
+  .activity-caption-running { background-image: linear-gradient(90deg, var(--color-neutral-500) 0%, var(--color-neutral-500) 39%, var(--color-neutral-900) 50%, var(--color-neutral-500) 61%, var(--color-neutral-500) 100%); background-size: 250% 100%; background-repeat: no-repeat; background-clip: text; -webkit-background-clip: text; color: transparent; animation: activity-text-shimmer 1.9s linear infinite; }
+  [data-theme="dark"] .activity-caption-running { background-image: linear-gradient(90deg, var(--color-neutral-500) 0%, var(--color-neutral-500) 39%, var(--color-neutral-950) 50%, var(--color-neutral-500) 61%, var(--color-neutral-500) 100%); }
+}
+@keyframes activity-text-shimmer { from { background-position: 100% 0; } to { background-position: 0% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .activity-motion *, .activity-motion *::before, .activity-motion *::after { animation-play-state: paused !important; }
+  .activity-dots-slot, .activity-motion-layer { transition: none; }
+  .activity-caption-running { animation: none; background: none; color: var(--color-neutral-500); }
+}
