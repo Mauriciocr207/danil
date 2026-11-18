@@ -48,6 +48,7 @@ for (const streaming of [false, true]) test(`public messages remain outside acti
     }
     assert.ok(await until(() => fixture.doc.querySelector("[data-chat-thread]")?.textContent.includes(FINAL)));
     publicMessages(fixture.doc);
+    assert.ok(await until(() => fixture.doc.querySelector("[data-activity-label]")?.textContent === "Trabajó durante 1s"), "settled activity uses saved duration before reopening");
     const disclosure = fixture.doc.querySelector("[data-activity-label]")?.closest("button");
     assert.ok(disclosure, "tools and reasoning retain their activity disclosure");
     if (!streaming) assert.equal(disclosure.textContent, "Trabajó durante 1s");
@@ -59,6 +60,10 @@ for (const streaming of [false, true]) test(`public messages remain outside acti
     assert.ok(panel.textContent.includes("first.ts")); assert.ok(panel.textContent.includes("second.ts"));
     for (const text of [FIRST, SECOND, FINAL]) assert.equal(panel.textContent.includes(text), false);
     publicMessages(fixture.doc);
+    disclosure.click();
+    assert.ok(await until(() => !fixture.doc.querySelector("[data-turn-activity-content]")), "completed activity closes");
+    disclosure.click();
+    assert.ok(await until(() => fixture.doc.querySelector("[data-turn-activity-content]")?.textContent.includes("first.ts")), "completed activity can reopen repeatedly");
     assert.deepEqual(fixture.app.failures, []);
   } finally { fixture.app.w.close(); }
 });
