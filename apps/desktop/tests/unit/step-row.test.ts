@@ -61,3 +61,21 @@ test("el comando real completo va en el title del renglón", () => {
   // Fuera de los comandos no hay title: el renglón ya dice todo.
   assert.equal(tituloDeFila({ clase: "leer", pasos: [pasoDe("Read", "/a/b.ts")] }), undefined);
 });
+
+test("cada llamada MCP va en su fila, con mcpApp o solo por su nombre", async () => {
+  const { agrupar } = await import("../../src/lib/steps.ts");
+  const servidores = ["github", "slack", "figma", "supabase", "linear", "acme"];
+  const conApp = servidores.map((s) => pasoDe(`mcp__${s}__call`, null, { mcpApp: { server: s, tool: "call" } }));
+  const soloNombre = servidores.map((s) => ({ ...pasoDe(`mcp__${s}__call`, null), mcpApp: undefined }));
+  assert.equal(agrupar(conApp).length, 6);
+  assert.equal(agrupar(soloNombre).length, 6);
+  // Ni la de al lado se pega a una MCP, en ningún orden.
+  assert.equal(agrupar([soloNombre[0], pasoDe("Agent", null), pasoDe("Agent", null)]).length, 2);
+});
+
+test("las lecturas y las herramientas que no son MCP se agrupan como siempre", async () => {
+  const { agrupar } = await import("../../src/lib/steps.ts");
+  const lecturas = Array.from({ length: 12 }, (_, i) => pasoDe("Read", `/repo/${i}.ts`));
+  assert.deepEqual(agrupar(lecturas).map((f) => f.pasos.length), [12]);
+  assert.deepEqual(agrupar([pasoDe("Agent", null), pasoDe("Agent", null)]).map((f) => f.pasos.length), [2]);
+});

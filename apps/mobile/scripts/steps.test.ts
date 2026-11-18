@@ -423,3 +423,28 @@ test("la línea de estado pone la marca del servicio delante del comando que nom
   assert.equal(statusCommandMark(step("git fetch --all --prune"), true), null, "si la línea no nombra el comando, no hay marca");
   assert.equal(statusCommandMark({ kind: "read" as const, name: "Read", target: "/a.ts", ok: null, running: true }, false), null);
 });
+
+test("cada llamada MCP va en su propia fila con su marca; las lecturas siguen juntas", async () => {
+  const { groupSteps } = await import("../src/lib/steps.ts");
+  const { toolSource } = await import("@terminus/chat/tools");
+  const { toolMonogram } = await import("@terminus/design");
+  const step = (name: string, kind: "read" | "other" = "other", target: string | null = null) => ({ kind, name, target, ok: true, running: false });
+  const mcp = ["mcp__github__create_issue", "mcp__claude_ai_Slack__send_message", "mcp__figma__get_file", "mcp__supabase__execute_sql", "mcp__claude_ai_Google_Drive__search", "mcp__linear__list_issues"].map((n) => step(n));
+  const rows = groupSteps(mcp);
+  assert.equal(rows.length, 6, "seis MCP seguidas no se pliegan en «Usó 6 herramientas»");
+  assert.deepEqual(rows.map((r) => toolSource(r.steps[0].name)?.mark), ["github", "slack", "figma", "supabase", "drive", "linear"]);
+
+  const reads = groupSteps([step("Read", "read", "/a.ts"), step("Read", "read", "/b.ts"), step("Read", "read", "/c.ts")]);
+  assert.deepEqual(reads.map((r) => r.steps.length), [3], "«Leyó 3 archivos» sigue en una fila");
+  const twelve = groupSteps(Array.from({ length: 12 }, (_, i) => step("Read", "read", `/r/${i}.ts`)));
+  assert.deepEqual(twelve.map((r) => r.steps.length), [12], "«Leyó 12 archivos»");
+  // Una herramienta que no es MCP se agrupa como siempre, pero no se pega a una MCP.
+  assert.deepEqual(groupSteps([step("Agent"), step("Agent")]).map((r) => r.steps.length), [2]);
+  assert.equal(groupSteps([step("mcp__github__get_me"), step("Agent"), step("Agent")]).length, 2);
+
+  const unknown = groupSteps([step("mcp__acme_analytics__query"), step("mcp__acme_analytics__query")]);
+  assert.equal(unknown.length, 2);
+  const source = toolSource(unknown[0].steps[0].name);
+  assert.equal(source?.mark, null, "un servidor desconocido no lleva marca");
+  assert.equal(toolMonogram(source!.server), "A", "conserva su baldosa con la inicial");
+});
