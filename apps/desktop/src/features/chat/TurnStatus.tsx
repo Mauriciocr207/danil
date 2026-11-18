@@ -3,10 +3,9 @@ import { t } from "../../lib/i18n";
 import { formatearDuracion, type Paso } from "../../lib/steps";
 import { createNow } from "../../lib/sharedClock";
 import { MachineIcon } from "../machines/MachineIcon";
-import type { MachineWait } from "../threads/store";
 import { ActivityDots } from "./ActivityDots";
 
-export type MachineWaitStatus = Pick<MachineWait, "phase"> & { name: string; wakes: boolean };
+export type MachineWaitStatus = { phase: "waking" | "connecting"; name: string; wakes: boolean };
 
 const MUESTRA_EL_RELOJ_DESDE_MS = 3000;
 

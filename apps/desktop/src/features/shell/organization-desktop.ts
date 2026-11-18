@@ -4,7 +4,7 @@
  * y la `Idempotency-Key` los lleva `@terminus/computers` (`organizations.ts`).
  * Al iniciar o cerrar sesión (`danil-connect`) se vuelve a leer.
  */
-import { listenDanilConnectionChange } from "../../lib/serviceEvents";
+import { listenDanilConnectionChange } from "../../lib/danilConnectionEvents";
 import { cancelEdgeWrites, edgeFetch, onEdgeProblem } from "../../lib/edge";
 import { edgeOrganizationSource } from "./organization-edge";
 import { createOrganizationSelection, isOrganizationSelectionRequired, type OrganizationSelection } from "@terminus/computers";

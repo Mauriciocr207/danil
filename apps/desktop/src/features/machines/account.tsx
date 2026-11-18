@@ -42,7 +42,8 @@ import { whenConnected } from "../../lib/engineConnection";
 import { leerPref } from "../../lib/prefs";
 import { capabilities, setCapabilities, type Capabilities } from "../../lib/platform";
 import { directoryEntries } from "../shell/workspace-directory";
-import { deliver, listen, listenDanilConnectionChange } from "../../lib/serviceEvents";
+import { deliver, listen } from "../../lib/serviceEvents";
+import { listenDanilConnectionChange } from "../../lib/danilConnectionEvents";
 import { isMac, isWindows } from "../../lib/window";
 import { Toast, ToastPortal } from "../../ui/Toast";
 import type { MachineStatus } from "../../web/SyncNote";
@@ -592,7 +593,6 @@ export function startAccountMachines(target: Target = window) {
   void whenConnected().then(() => {
     void listenDanilConnectionChange(() => { cancelEdgeWrites(); invalidateCloud(); void sync(); });
     window.addEventListener("danil:organization-changed", () => { invalidateCloud(); void sync(); });
-    // Un motor sin el aviso de los workspaces de aquí: lo que cambia la ventana (crear, renombrar, logo) se vuelve a pedir con su versión.
     window.addEventListener("harness:workspace-name", () => void engineWorkspaces.refresh());
     window.addEventListener("harness:workspace", () => void engineWorkspaces.refresh());
     // El índice de aquí y las copias de las otras máquinas: la barra relee solo el recurso que cambió.

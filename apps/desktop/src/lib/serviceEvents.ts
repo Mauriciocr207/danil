@@ -29,21 +29,6 @@ export const listen: typeof tauriListen = async (event, handler, options) => {
   }
 };
 
-/** Los avisos repetidos de la misma sesión no reinician el contexto. */
-export function listenDanilConnectionChange(handler: () => void) {
-  type Connection = { state?: string; account?: string | null; computer_id?: string | null };
-  let previous: string | null = null;
-  return listen<Connection>("danil-connect", ({ payload }) => {
-    const state = payload?.state;
-    const key = state === "connected" || state === "disconnected"
-      ? JSON.stringify([state, payload.account, payload.computer_id])
-      : null;
-    if (key !== null && key === previous) return;
-    previous = key;
-    handler();
-  });
-}
-
 /** Un manejador que lanza no corta a los demás, como con los eventos de Tauri. */
 export function deliver(events: readonly JournalEvent[]): void {
   for (const { name, payload } of events) {
