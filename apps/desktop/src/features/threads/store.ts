@@ -131,17 +131,18 @@ export function createThreadsStore(deps: {
     setEstadoAntiguos(all => (all[id] ?? "idle") === pager.older ? all : { ...all, [id]: pager.older });
   };
   const [colaSuelta, setColaSuelta] = createSignal<Readonly<Record<string, Msg[]>>>({});
-  const recoveries = new WeakMap<HistoryPager<Session["turns"][number]>, Session>();
+  const historyOperations = new WeakMap<HistoryPager<Session["turns"][number]>, { recovery?: Session }>();
   const historiaDe = (id: string) => {
     const hay = historias.get(id);
     if (hay) return hay;
     const pager: HistoryPager<Session["turns"][number]> = new HistoryPager({
       read: async (before) => {
+        const operation = historyOperations.get(pager);
         const result = await leerTarea(proyectosDeHistoria.get(id) ?? deps.project(), id, before);
         // A rewritten older page recovers at the tail; only the store may accept
         // that snapshot, with the same ACK/generation checks as any other read.
-        if (before === null && !disposed && reads.get(result)?.generation === deps.scope.generation()) {
-          recoveries.set(pager, result); pager.close();
+        if (before === null && operation && historyOperations.get(pager) === operation && !disposed && reads.get(result)?.generation === deps.scope.generation()) {
+          operation.recovery = result; pager.close();
         }
         return result;
       },
@@ -168,21 +169,21 @@ export function createThreadsStore(deps: {
   };
   async function cargarAntiguos(project: string, id: string): Promise<(() => void) | null> {
     const pager = historias.get(id);
-    if (!pager) return null;
+    if (!pager || pager.older === "loading") return null;
+    const operation: { recovery?: Session } = {};
+    historyOperations.set(pager, operation);
     proyectosDeHistoria.set(id, project);
     const generation = deps.scope.generation();
     const poner = await pager.fetchOlder();
-    if (disposed || generation !== deps.scope.generation()) return null;
-    const recovery = recoveries.get(pager);
-    if (recovery) {
-      recoveries.delete(pager);
-      loadResult(id, recovery, false, generation, true);
+    if (disposed || generation !== deps.scope.generation() || historyOperations.get(pager) !== operation) return null;
+    if (operation.recovery) {
+      loadResult(id, operation.recovery, false, generation, true);
       return null;
     }
     pintarHistoria(id, pager, false);
     if (!poner) return null;
     return () => {
-      if (disposed || generation !== deps.scope.generation()) return;
+      if (disposed || generation !== deps.scope.generation() || historyOperations.get(pager) !== operation) return;
       poner();
       pintarHistoria(id, pager, true);
     };
@@ -223,7 +224,7 @@ export function createThreadsStore(deps: {
       return { ...all, [id]: ahora };
     });
     const pager = historiaDe(id);
-    if (latest) { pager.close(); pager.loaded = undefined; }
+    if (latest) { historyOperations.delete(pager); pager.close(); pager.loaded = undefined; }
     const loaded = pager.accept(session.turns, session.history, { reading: leyendoLejos.has(id) });
     setColaSuelta((all) => {
       if (hasRecentGap(loaded)) return { ...all, [id]: transcripcion(session.turns, session.history?.start ?? 0) };

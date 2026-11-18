@@ -280,3 +280,28 @@ test("ordinary older pagination still prepends its shared page", async () => {
   const apply = await f.store.older("p", "s"); assert.ok(apply); apply();
   assert.deepEqual(f.store.messages().map(row => row.turno), ["older", "tail"]); f.dispose();
 });
+
+test("a superseded rewrite recovery cannot cancel a newer older-page request", async () => {
+  const page = (start: number, end: number, total: number) => ({ version: 1, start, end, total, limit: 2, has_more: start > 0 });
+  let recover!: (value: Session) => void, prepend!: (value: Session) => void;
+  let recoveryStarted!: () => void, prependStarted!: () => void;
+  const recoveryWaiting = new Promise<void>(yes => { recoveryStarted = yes; });
+  const prependWaiting = new Promise<void>(yes => { prependStarted = yes; });
+  let tails = 0, older = 0;
+  const f = fixture(async <T>(_command: string, args?: Record<string, unknown>) => {
+    const before = (args?.history_request as { before: number | null }).before;
+    if (before === null && ++tails === 1) { recoveryStarted(); return new Promise<Session>(yes => { recover = yes; }) as Promise<T>; }
+    if (before === null) return session([{ id: "latest", role: "user", text: "latest" }], { history: page(5, 6, 6) }) as T;
+    if (++older === 1) return session([{ id: "rewrite", role: "user", text: "rewrite" }], { history: page(0, 1, 1) }) as T;
+    prependStarted(); return new Promise<Session>(yes => { prepend = yes; }) as Promise<T>;
+  });
+  f.store.acceptSession("s", session([{ id: "old", role: "user", text: "old" }], { history: page(1, 2, 2) }), false, f.generation());
+  const stale = f.store.older("p", "s"); await recoveryWaiting;
+  await f.store.latest("s");
+  const current = f.store.older("p", "s"); await prependWaiting;
+  recover(session([{ id: "stale", role: "user", text: "stale" }], { history: page(0, 1, 1) }));
+  await stale;
+  prepend(session([{ id: "older-new", role: "user", text: "older-new" }, { id: "latest", role: "user", text: "latest" }], { history: page(4, 6, 6) }));
+  const apply = await current; assert.ok(apply); apply();
+  assert.deepEqual(f.store.messages().map(row => row.turno), ["older-new", "latest"]); f.dispose();
+});
