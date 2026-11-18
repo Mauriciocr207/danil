@@ -270,3 +270,20 @@ test("permission and question answers are not accepted input anchors", () => {
   const activity = model.project("A", "s", [user, answer, permission, decision, unanswered])[0];
   assert.equal(activity.anchor, answer); assert.equal(activity.anchorIndex, 1);
 });
+
+test("live output before recent history does not confirm a cached historical input", () => {
+  const model = createActivityProjection();
+  const oldUser = message("old input", { role: "user", turno: "old-u", clave: "old-u:0" });
+  const oldAnswer = message("old answer", { turno: "old-a", clave: "old-a:0" });
+  const user = message("external input", { role: "user", turno: "new-u", clave: "new-u:0" });
+  const answer = message("external answer", { turno: "new-a", clave: "new-a:0" });
+  const live = message("output arriving before history");
+  model.begin("A", "s", 1_000, [oldUser, oldAnswer]);
+  model.observe("A", "s", [], [live]);
+  model.reconcile("A", "s", [oldUser, oldAnswer], [oldUser, oldAnswer, user, answer], false);
+  const activity = model.project("A", "s", [oldUser, oldAnswer, user, answer, live])[0];
+  assert.equal(activity.anchor, answer); assert.equal(activity.anchorIndex, 3);
+  assert.deepEqual(activity.messages, [live]);
+  model.reconcile("A", "s", [user, answer], [oldUser, oldAnswer], false, true);
+  assert.equal(model.project("A", "s", [oldUser, oldAnswer, user, answer, live])[0].anchor, answer);
+});
