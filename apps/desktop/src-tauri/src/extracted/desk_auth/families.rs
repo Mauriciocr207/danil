@@ -42,6 +42,8 @@ struct Metadata {
     )]
     empty_reason: Option<String>,
     contexts: Vec<Context>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    retired_contexts: Vec<String>,
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Index {
@@ -336,6 +338,7 @@ impl<V: FamilyVault> Families<V> {
                 sub: profile["account"].as_str().map(str::to_owned),
                 email: profile["email"].as_str().map(str::to_owned),
                 empty_reason: None,
+                retired_contexts: Vec::new(),
                 contexts,
                 available_contexts: reply.body["available_contexts"].as_u64(),
             },
@@ -408,6 +411,7 @@ impl<V: FamilyVault> Families<V> {
                                     .filter(|c| {
                                         session::opaque_id(&c.context_id)
                                             && session::opaque_id(&c.org)
+                                            && !metadata.retired_contexts.contains(&c.context_id)
                                     })
                                     .take(20)
                                     .collect();
@@ -613,6 +617,14 @@ impl<V: FamilyVault> Families<V> {
                 .find(|c| c.context_id == context)
                 .cloned();
             family.metadata.contexts.retain(|c| c.context_id != context);
+            if !family
+                .metadata
+                .retired_contexts
+                .iter()
+                .any(|id| id == context)
+            {
+                family.metadata.retired_contexts.push(context.to_owned());
+            }
             let metadata = family.metadata.clone();
             if reason == Some("organization_access_denied") {
                 if let Some(removed) = removed {
@@ -653,6 +665,7 @@ impl<V: FamilyVault> Families<V> {
                         {
                             contexts.retain(|c| {
                                 c.context_id != context
+                                    && !metadata.retired_contexts.contains(&c.context_id)
                                     && session::opaque_id(&c.context_id)
                                     && session::opaque_id(&c.org)
                             });
