@@ -118,15 +118,13 @@ function claveDeFila(fila: Fila, i: number) {
  * no en `FilaDePaso`: `agrupar` fabrica filas nuevas con cada delta, el `For`
  * remonta sus componentes y una fila abierta se cerraría sola.
  */
-export default function LineaDeTiempo(props: { pasos: Paso[] }) {
+export default function LineaDeTiempo(props: { pasos: Paso[]; presentation?: "inline" | "disclosure" }) {
   let marco: HTMLDivElement | undefined;
   const [foco, setFoco] = createSignal(0);
   const [abiertas, setAbiertas] = createRowSignal<Record<string, boolean>>("steps", {});
 
   const filas = () => agrupar(props.pasos);
 
-  // El índice de teclado cuenta filas ABIERTAS al teclado, que no son todas:
-  // un aviso no se despliega y ahí no hay nada que enfocar.
   const conIndice = () => {
     let n = 0;
     const lista = filas().map((fila, i) => ({
@@ -181,6 +179,7 @@ export default function LineaDeTiempo(props: { pasos: Paso[] }) {
       <For each={conIndice().lista}>
         {({ fila, clave, tecla }) => (
           <FilaDePaso
+              inline={props.presentation === "inline"}
             fila={fila}
             abierta={Boolean(abiertas()[clave])}
             enfocada={tecla === activo()}
@@ -197,6 +196,7 @@ export default function LineaDeTiempo(props: { pasos: Paso[] }) {
 
 function FilaDePaso(props: {
   fila: Fila;
+  inline?: boolean;
   abierta: boolean;
   enfocada: boolean;
   onAlternar: () => void;
@@ -204,7 +204,7 @@ function FilaDePaso(props: {
 }) {
   const resumido = () => rotuloDeFila(props.fila);
   const corriendo = () => props.fila.pasos.some((p) => p.corriendo);
-  const abre = () => desplegable(props.fila);
+  const abre = () => !props.inline && desplegable(props.fila);
 
   // `min-w-0` es lo que deja que el sujeto se recorte: sin él la fila reclama
   // el ancho de su contenido y el comando se sale de la ventana.
@@ -295,7 +295,7 @@ function FilaDePaso(props: {
         </button>
       </Show>
 
-      <Show when={abre() && props.abierta}>
+      <Show when={desplegable(props.fila) && (props.inline || props.abierta)}>
         <div class="ml-5 grid gap-2 border-l border-border py-1 pl-3">
           <For each={props.fila.pasos}>{(p) => <Cuerpo paso={p} />}</For>
         </div>
